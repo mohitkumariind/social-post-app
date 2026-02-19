@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Social Post",
+    "slug": "social-post-new",
+    "version": "1.0.0",
+    "icon": "./assets/images/splash-logo.png",
+    "splash": {
+      "image": "./assets/images/splash-logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FCAC12"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/splash-logo.png",
+        "backgroundColor": "#FCAC12"
+      }
+    },
+    "web": {
+      "favicon": "./assets/images/splash-logo.png"
+    }
+  }
+}
