@@ -15,6 +15,7 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import { useUser } from '../../context/UserContext'; // Context Import Kiya
 
 const { width } = Dimensions.get('window');
 
@@ -46,6 +47,7 @@ const REELS_DATA: Category[] = [
 
 export default function DashboardScreen() {
   const router = useRouter();
+  const { userInfo } = useUser(); // User Context se data nikaala
   const [activeTab, setActiveTab] = useState('graphics'); 
   const [activeCategory, setActiveCategory] = useState<Category | null>(null);
   const [activeBanner, setActiveBanner] = useState(0);
@@ -67,7 +69,6 @@ export default function DashboardScreen() {
     return () => clearInterval(timer);
   }, [activeBanner]);
 
-  // Tab switch hone par Trending Scroll ko reset karne ke liye
   useEffect(() => {
     const itemWidth = 140 + 15;
     const initialOffset = itemWidth * CURRENT_DATA.length;
@@ -178,7 +179,7 @@ export default function DashboardScreen() {
             {cat.images.slice(0, 2).map((img, index) => (
               <TouchableOpacity 
                 key={index} style={styles.postItem} 
-                onPress={() => router.push({ pathname: '/(auth)/post-detail', params: { image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: index } })}
+                onPress={() => router.push({ pathname: '/post-detail', params: { isVideo: img.isVideo ? 'true' : 'false', image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: index } })}
               >
                 <Image source={{ uri: img.url }} style={styles.postImage} />
                 {img.isVideo && <View style={styles.playIconOverlay}><Ionicons name="play" size={24} color="#FFF" /></View>}
@@ -218,8 +219,8 @@ export default function DashboardScreen() {
                             <TouchableOpacity 
                                 key={idx} style={[styles.modernGridItem, { marginTop: idx % 2 === 0 ? 0 : 25 }]}
                                 onPress={() => router.push({ 
-                                    pathname: '/(auth)/post-detail', 
-                                    params: { image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: idx } 
+                                    pathname: '/post-detail', 
+                                    params: { isVideo: img.isVideo ? 'true' : 'false', image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: idx } 
                                 })}
                             >
                                 <Image source={{ uri: img.url }} style={styles.modernGridImg} />
@@ -239,15 +240,22 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* --- UPDATED HEADER WITH CONTEXT --- */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.push('/(auth)/profile')} style={styles.profileRow}>
-          <View style={styles.avatarPlaceholder}><Ionicons name="person" size={24} color="#8A2BE2" /></View>
+        <TouchableOpacity onPress={() => router.push('/profile')} style={styles.profileRow}>
+          <View style={styles.avatarPlaceholder}>
+            {userInfo?.profilePics?.[0] ? (
+              <Image source={{ uri: userInfo.profilePics[0] }} style={{ width: 45, height: 45, borderRadius: 22.5 }} />
+            ) : (
+              <Ionicons name="person" size={24} color="#8A2BE2" />
+            )}
+          </View>
           <View style={styles.welcomeTextGroup}>
             <Text style={styles.welcomeText}>Welcome!</Text>
-            <Text style={styles.userName}>Hi, Mohit</Text>
+            <Text style={styles.userName}>Hi, {userInfo?.name?.split(' ')[0] || 'User'}</Text>
           </View>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('/(auth)/notifications')}>
+        <TouchableOpacity onPress={() => router.push('/notifications')}>
             <Ionicons name="notifications-outline" size={28} color="#666" />
         </TouchableOpacity>
       </View>
@@ -284,7 +292,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   header: { paddingTop: Platform.OS === 'android' ? 40 : 10, paddingHorizontal: 25, paddingBottom: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   profileRow: { flexDirection: 'row', alignItems: 'center' },
-  avatarPlaceholder: { width: 45, height: 45, borderRadius: 22.5, backgroundColor: '#F0E6FF', justifyContent: 'center', alignItems: 'center' },
+  avatarPlaceholder: { width: 45, height: 45, borderRadius: 22.5, backgroundColor: '#F0E6FF', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   welcomeTextGroup: { marginLeft: 12 },
   welcomeText: { fontSize: 11, color: '#999', fontWeight: '500' },
   userName: { fontSize: 18, fontWeight: '800', color: '#1A1A1A' },
@@ -326,5 +334,4 @@ const styles = StyleSheet.create({
   modernGridImg: { width: '100%', height: '100%', resizeMode: 'contain' },
   modernShareLabel: { position: 'absolute', bottom: 12, left: 12, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4 },
   modernShareText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
-  reelsPlaceholder: { height: 250, justifyContent: 'center', alignItems: 'center' }
 });
