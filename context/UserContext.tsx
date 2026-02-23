@@ -38,7 +38,7 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
     designation4: "",
     profilePics: ["https://i.pravatar.cc/150?u=mohit"], // Default array
     activePhotoIndex: 0,
-    partyName: "BJP",
+    partyName: "bjp",
     state: "Uttar Pradesh",
     district: "Meerut",
     assembly: "Meerut Cantt",
