@@ -1,12 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { useRouter } from 'expo-router';
 import React from 'react';
 import {
-    Image, ScrollView,
-    StyleSheet, Text, TouchableOpacity, View
+  Image, ScrollView,
+  StyleSheet, Text, TouchableOpacity, View
 } from 'react-native';
 
+// Path Fixed: root/context tak pahunchne ke liye do baar piche (../../)
+import { useLang } from '../../context/LanguageContext';
+
 export default function LoginScreen() {
+  const router = useRouter(); 
+  const { t } = useLang(); 
+
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContainer}>
@@ -15,12 +21,15 @@ export default function LoginScreen() {
           {/* Logo Section */}
           <View style={styles.logoContainer}>
             <Image 
+              // Logo path bhi root assets folder ke hisab se set kiya hai
               source={require('../../assets/images/splash-logo.png')} 
               style={styles.logo}
               resizeMode="contain"
             />
             <Text style={styles.title}>SocialBot</Text>
-            <Text style={styles.subtitle}>Fast & Secure Access for Political Workers</Text>
+            <Text style={styles.subtitle}>
+              {t('login_subtitle') || 'Fast & Secure Access for Political Workers'}
+            </Text>
           </View>
 
           {/* Social Buttons Section */}
@@ -29,10 +38,12 @@ export default function LoginScreen() {
             {/* Google Login */}
             <TouchableOpacity 
               style={[styles.socialBtn, { backgroundColor: '#FFFFFF', borderColor: '#EEE', borderWidth: 1 }]}
-              onPress={() => router.replace('/dashboard')}
+              onPress={() => router.replace('/dashboard')} 
             >
               <Ionicons name="logo-google" size={24} color="#DB4437" />
-              <Text style={[styles.socialBtnText, { color: '#555' }]}>Continue with Google</Text>
+              <Text style={[styles.socialBtnText, { color: '#555' }]}>
+                {t('continue_google') || 'Continue with Google'}
+              </Text>
             </TouchableOpacity>
 
             {/* Facebook Login */}
@@ -41,7 +52,9 @@ export default function LoginScreen() {
               onPress={() => router.replace('/dashboard')}
             >
               <Ionicons name="logo-facebook" size={24} color="white" />
-              <Text style={styles.socialBtnText}>Continue with Facebook</Text>
+              <Text style={styles.socialBtnText}>
+                {t('continue_facebook') || 'Continue with Facebook'}
+              </Text>
             </TouchableOpacity>
 
             {/* Twitter (X) Login */}
@@ -50,7 +63,9 @@ export default function LoginScreen() {
               onPress={() => router.replace('/dashboard')}
             >
               <Ionicons name="logo-twitter" size={24} color="white" />
-              <Text style={styles.socialBtnText}>Continue with Twitter</Text>
+              <Text style={styles.socialBtnText}>
+                {t('continue_twitter') || 'Continue with Twitter'}
+              </Text>
             </TouchableOpacity>
 
           </View>
@@ -58,7 +73,9 @@ export default function LoginScreen() {
           {/* Footer Info */}
           <View style={styles.footer}>
             <Ionicons name="shield-checkmark-outline" size={16} color="#4CAF50" />
-            <Text style={styles.footerText}> Secure, Encrypted Login</Text>
+            <Text style={styles.footerText}> 
+              {t('secure_login') || 'Secure, Encrypted Login'}
+            </Text>
           </View>
 
         </View>

@@ -190,7 +190,7 @@ export default function PostDetailScreen() {
         </View>
 
         {/* THEMES GRID */}
-        <Text style={styles.sectionTitle}>Select Theme</Text>
+        <Text style={styles.sectionTitle}>Select Frame</Text>
         <View style={styles.framesGrid}>
           {frameStyles.map((f) => (
             <TouchableOpacity key={f.id} onPress={() => setSelectedFrame(f.id)} style={styles.frameCard}>
