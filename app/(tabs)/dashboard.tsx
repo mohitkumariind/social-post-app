@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -254,10 +254,13 @@ export default function DashboardScreen() {
         <View style={styles.headerActions}>
           <TouchableOpacity
             onPress={() => router.push({ pathname: '/language', params: { next: '/dashboard' } })}
-            style={styles.headerIconBtn}
+            style={styles.langBtn}
             activeOpacity={0.7}
           >
-            <Ionicons name="language-outline" size={26} color="#666" />
+            <View style={styles.langIconCircle}>
+              <MaterialIcons name="translate" size={18} color="#8A2BE2" />
+            </View>
+            <Text style={styles.langCode}>{(lang || 'en').toUpperCase()}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -303,6 +306,30 @@ const styles = StyleSheet.create({
   header: { paddingTop: Platform.OS === 'android' ? 40 : 10, paddingHorizontal: 25, paddingBottom: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   headerActions: { flexDirection: 'row', alignItems: 'center' },
   headerIconBtn: { paddingLeft: 14 },
+  langBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 10,
+    paddingRight: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(138, 43, 226, 0.08)',
+  },
+  langIconCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(138, 43, 226, 0.14)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  langCode: {
+    marginLeft: 8,
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#4B0082',
+    letterSpacing: 0.5,
+  },
   profileRow: { flexDirection: 'row', alignItems: 'center' },
   avatarPlaceholder: { width: 45, height: 45, borderRadius: 22.5, backgroundColor: '#F0E6FF', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   welcomeTextGroup: { marginLeft: 12 },
