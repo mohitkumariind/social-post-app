@@ -10,13 +10,23 @@
       "backgroundColor": "#FCAC12"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Save and share your posts to the photo library",
+        "NSPhotoLibraryAddUsageDescription": "Save videos and images to the photo library",
+        "NSCameraUsageDescription": "Use camera for profile and content"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/splash-logo.png",
         "backgroundColor": "#FCAC12"
-      }
+      },
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "favicon": "./assets/images/splash-logo.png"

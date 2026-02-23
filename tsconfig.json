@@ -9,7 +9,8 @@
     "allowSyntheticDefaultImports": true,
     "baseUrl": ".",
     "paths": {
-      "*": ["node_modules/*"]
+      "*": ["node_modules/*"],
+      "ffmpeg-kit-react-native-full": ["node_modules/ffmpeg-kit-react-native-full/src/index"]
     }
   }
 }

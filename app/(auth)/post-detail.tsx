@@ -1,14 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { ResizeMode, Video } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { activateKeepAwake, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Sharing from 'expo-sharing';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Dimensions,
   Image,
+  Modal,
   SafeAreaView,
   ScrollView,
   Share,
@@ -18,6 +22,7 @@ import {
   View
 } from 'react-native';
 import ViewShot from "react-native-view-shot";
+import { FFmpegKit, ReturnCode } from 'ffmpeg-kit-react-native-full';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 
@@ -29,21 +34,29 @@ const FRAME_OVERLAY_URLS_9_16: string[] = ['', '', '', '', '']; // 9:16 (1080x19
 
 const FRAME_STATIC_COLOR = '#FF9933'; // Frame 1 accent
 
+/** Path FFmpeg can read: strip file:// if present (Android/iOS). */
+function pathForFfmpeg(uriOrPath: string): string {
+  if (uriOrPath.startsWith('file://')) return uriOrPath.slice(7);
+  return uriOrPath;
+}
+
 export default function PostDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { t } = useLang();
   const { userInfo } = useUser();
   const viewShotRef = useRef<any>(null); // Reference for capturing
+  const frame1OverlayShotRef = useRef<any>(null); // Frame 1 overlay PNG for video merge
 
-  const isVideoParam = params.isVideo === 'true';
-  const initialIndex = params.currentIndex ? parseInt(params.currentIndex as string) : 0;
-  const aspectRatio = (params.aspectRatio as string) === '9:16' ? '9:16' : '4:5';
+  const isVideoParam = params?.isVideo === 'true';
+  const initialIndex = params?.currentIndex != null ? parseInt(String(params.currentIndex), 10) : 0;
+  const aspectRatio = (params?.aspectRatio as string) === '9:16' ? '9:16' : '4:5';
 
   const [selectedFrame, setSelectedFrame] = useState(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -73,38 +86,136 @@ export default function PostDetailScreen() {
     return () => clearTimeout(timer);
   }, [originalData, initialIndex]);
 
-  // --- SAVE TO GALLERY LOGIC ---
-  const handleDownload = async () => {
+  const currentMediaUrl = useMemo(() => {
+    if (originalData.length === 0) return '';
+    const idx = activeIndex % originalData.length;
+    return originalData[idx];
+  }, [originalData, activeIndex]);
+
+  const processVideoMerge = useCallback(async (saveToGallery: boolean) => {
+    const cacheDir = FileSystem.cacheDirectory;
+    if (!cacheDir || !currentMediaUrl) return;
+    const videoExt = currentMediaUrl.includes('.mp4') ? '.mp4' : '.mp4';
+    const tempVideoPath = `${cacheDir}temp_video_${Date.now()}${videoExt}`;
+    const tempFramePath = `${cacheDir}temp_frame_${Date.now()}.png`;
+    const outputPath = `${cacheDir}merged_${Date.now()}.mp4`;
+    const toDelete: string[] = [tempVideoPath, tempFramePath, outputPath];
+
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert(t('permission_required'), t('permission_message'));
         return;
       }
+      activateKeepAwake();
+      setProcessing(true);
 
-      // Snapshot lena
-      const uri = await viewShotRef.current.capture();
-      
-      // Gallery mein save karna
+      const downloadRes = await FileSystem.downloadAsync(currentMediaUrl, tempVideoPath);
+      const inputVideoPath = pathForFfmpeg(downloadRes.uri);
+
+      let inputFramePath: string;
+      const urls = aspectRatio === '9:16' ? FRAME_OVERLAY_URLS_9_16 : FRAME_OVERLAY_URLS_4_5;
+      if (selectedFrame === 1) {
+        const frameRef = frame1OverlayShotRef.current;
+        if (!frameRef) {
+          Alert.alert(t('save_error_title'), t('save_error_message'));
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+        const frameUri = await frameRef.capture();
+        await FileSystem.copyAsync({ from: frameUri, to: tempFramePath });
+        inputFramePath = pathForFfmpeg(tempFramePath);
+      } else {
+        const overlayUrl = urls[selectedFrame - 2];
+        if (!overlayUrl || typeof overlayUrl !== 'string') {
+          Alert.alert(t('save_error_title'), t('save_error_message'));
+          return;
+        }
+        const frameRes = await FileSystem.downloadAsync(overlayUrl, tempFramePath);
+        inputFramePath = pathForFfmpeg(frameRes.uri);
+      }
+
+      const cmd = `-i ${inputVideoPath} -i ${inputFramePath} -filter_complex "overlay=0:0" -c:v libx264 -preset ultrafast -crf 28 -c:a copy ${pathForFfmpeg(outputPath)}`;
+      const session = await FFmpegKit.execute(cmd);
+      if (!session) {
+        throw new Error('FFmpeg session failed to start');
+      }
+      const returnCode = await session.getReturnCode();
+      if (returnCode == null || !ReturnCode.isSuccess(returnCode)) {
+        throw new Error('FFmpeg failed');
+      }
+
+      if (saveToGallery) {
+        await MediaLibrary.saveToLibraryAsync(outputPath);
+        Alert.alert(t('save_success_title'), t('save_success_message'));
+      } else {
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(outputPath);
+        } else {
+          Share.share({ message: t('share_message') });
+        }
+      }
+    } catch (err) {
+      console.warn('Video merge error:', err);
+      const msg = t('save_error_message') || 'Something went wrong. Please try again.';
+      Alert.alert(t('save_error_title'), msg);
+    } finally {
+      setProcessing(false);
+      deactivateKeepAwake();
+      for (const p of toDelete) {
+        try {
+          const info = await FileSystem.getInfoAsync(p);
+          if (info.exists) await FileSystem.deleteAsync(p, { idempotent: true });
+        } catch (_) {
+          // ignore cleanup errors
+        }
+      }
+    }
+  }, [currentMediaUrl, selectedFrame, aspectRatio, t]);
+
+  // --- SAVE TO GALLERY LOGIC ---
+  const handleDownload = async () => {
+    if (isVideoParam) {
+      await processVideoMerge(true);
+      return;
+    }
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(t('permission_required'), t('permission_message'));
+        return;
+      }
+      const shotRef = viewShotRef.current;
+      if (!shotRef) {
+        Alert.alert(t('save_error_title'), t('save_error_message'));
+        return;
+      }
+      const uri = await shotRef.capture();
       await MediaLibrary.saveToLibraryAsync(uri);
       Alert.alert(t('save_success_title'), t('save_success_message'));
     } catch (err) {
-      console.log(err);
+      console.warn(err);
       Alert.alert(t('save_error_title'), t('save_error_message'));
     }
   };
 
   // --- DIRECT SHARE LOGIC ---
   const handleShare = async () => {
+    if (isVideoParam) {
+      await processVideoMerge(false);
+      return;
+    }
     try {
-      const uri = await viewShotRef.current.capture();
+      const shotRef = viewShotRef.current;
+      if (!shotRef) return;
+      const uri = await shotRef.capture();
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri);
       } else {
         Share.share({ message: t('share_message') });
       }
     } catch (err) {
-      console.log(err);
+      console.warn(err);
     }
   };
 
@@ -135,9 +246,10 @@ export default function PostDetailScreen() {
 
   const frameOverlayUrls = aspectRatio === '9:16' ? FRAME_OVERLAY_URLS_9_16 : FRAME_OVERLAY_URLS_4_5;
   const visibleFrameIds = useMemo(() => {
-    const ids = [1, ...([2, 3, 4, 5, 6].filter((i) => frameOverlayUrls[i - 2]))];
+    const urls = aspectRatio === '9:16' ? FRAME_OVERLAY_URLS_9_16 : FRAME_OVERLAY_URLS_4_5;
+    const ids = [1, ...([2, 3, 4, 5, 6].filter((i) => !!urls[i - 2]))];
     return ids;
-  }, [aspectRatio, frameOverlayUrls]);
+  }, [aspectRatio]);
   const visibleFrames = useMemo(() => frameStyles.filter((f) => visibleFrameIds.includes(f.id)), [visibleFrameIds]);
 
   useEffect(() => {
@@ -145,7 +257,8 @@ export default function PostDetailScreen() {
   }, [visibleFrameIds, selectedFrame]);
 
   const isStaticFrame = selectedFrame === 1;
-  const overlayUrl = selectedFrame >= 2 && selectedFrame <= 6 ? frameOverlayUrls[selectedFrame - 2] : null;
+  const overlayUrl =
+    selectedFrame >= 2 && selectedFrame <= 6 ? (frameOverlayUrls[selectedFrame - 2] ?? null) : null;
 
   const captionKeys = ['caption_1', 'caption_2', 'caption_3', 'caption_4', 'caption_5', 'caption_6'] as const;
 
@@ -292,6 +405,47 @@ export default function PostDetailScreen() {
         <View style={{ height: 50 }} />
       </ScrollView>
 
+      <Modal visible={processing} transparent animationType="fade" statusBarTranslucent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <ActivityIndicator size="large" color="#8A2BE2" />
+            <Text style={styles.modalText}>Creating your personalized video... Please wait (20-30 seconds). Do not close the app.</Text>
+          </View>
+        </View>
+      </Modal>
+
+      {isVideoParam && selectedFrame === 1 && (
+        <View style={styles.offScreenFrame1} pointerEvents="none">
+          <ViewShot
+            ref={frame1OverlayShotRef}
+            options={{ format: 'png', width: 1080, height: aspectRatio === '9:16' ? 1920 : 1350 }}
+            style={[styles.frame1ShotWrap, { aspectRatio: aspectRatio === '9:16' ? 9 / 16 : 4 / 5 }]}
+          >
+            <View style={styles.frame1OverlayExport}>
+              <View style={[styles.frameOverlay, { borderTopColor: FRAME_STATIC_COLOR }]}>
+                <View style={[styles.partyLogoCircle, { backgroundColor: FRAME_STATIC_COLOR }]}>
+                  <Ionicons name="flag" size={16} color="#FFF" />
+                </View>
+                <View style={styles.nameSection}>
+                  <Text style={styles.userName} numberOfLines={1}>
+                    {userInfo?.name?.toUpperCase() || t('default_user_name').toUpperCase()}
+                  </Text>
+                  <Text style={styles.userDesignation} numberOfLines={1}>
+                    {userInfo?.designation || t('default_designation')}
+                  </Text>
+                </View>
+                <View style={styles.photoContainer}>
+                  <Image
+                    source={{ uri: userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0] || 'https://i.pravatar.cc/150' }}
+                    style={styles.userPhotoActual}
+                  />
+                </View>
+              </View>
+            </View>
+          </ViewShot>
+        </View>
+      )}
+
       {showCopiedToast && (
         <View style={styles.toast}>
           <Ionicons name="checkmark-circle" size={20} color="#FFF" />
@@ -371,4 +525,10 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
   },
   toastText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  modalContent: { backgroundColor: '#FFF', borderRadius: 20, padding: 28, alignItems: 'center', minWidth: 280 },
+  modalText: { marginTop: 16, fontSize: 15, color: '#333', fontWeight: '600', textAlign: 'center' },
+  offScreenFrame1: { position: 'absolute', left: -9999, top: 0, width: width - 20, zIndex: -1 },
+  frame1ShotWrap: { width: width - 20, backgroundColor: 'transparent' },
+  frame1OverlayExport: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'transparent' },
 });
