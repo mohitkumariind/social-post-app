@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import React, { useEffect, useState } from 'react';
 import {
   ScrollView,
   StatusBar,
@@ -10,9 +9,9 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import { useLang } from '../context/LanguageContext';
 import '../utils/i18n';
 
-// Languages List
 const languages = [
   { id: 'en', label: 'English', sub: 'Global Language' },
   { id: 'hi', label: 'हिंदी', sub: 'राष्ट्रीय भाषा' },
@@ -23,24 +22,17 @@ const languages = [
 
 export default function LanguageScreen() {
   const router = useRouter();
-  const { t, i18n } = useTranslation(); 
-  
-  // Current language ko default state banana
-  const [selectedLang, setSelectedLang] = useState(i18n.language || 'en');
+  const { t, changeLanguage, lang } = useLang();
+  const [selectedLang, setSelectedLang] = useState(lang || 'en');
 
-  // Language Change Function
-  const handleConfirm = async () => {
+  useEffect(() => {
+    setSelectedLang(lang || 'en');
+  }, [lang]);
+
+  const handleConfirm = () => {
     if (selectedLang) {
-      try {
-        // Ye line poori app ki language trigger karti hai
-        await i18n.changeLanguage(selectedLang);
-        console.log("Language successfully changed to:", selectedLang);
-        
-        // Next screen par move karna
-        router.push('/party');
-      } catch (error) {
-        console.error("Language change failed", error);
-      }
+      changeLanguage(selectedLang);
+      router.push('/party');
     }
   };
 
@@ -54,7 +46,7 @@ export default function LanguageScreen() {
           <Text style={styles.logoLetter}>S</Text>
         </View>
         <Text style={styles.title}>{t('choose_lang')}</Text> 
-        <Text style={styles.subtitle}>{t('sub_lang') || 'Choose your preferred language'}</Text>
+        <Text style={styles.subtitle}>{t('sub_lang')}</Text>
       </View>
 
       {/* Language List */}

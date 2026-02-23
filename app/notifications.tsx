@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
-    FlatList, // Sahi Component ye hai
+    FlatList,
     Platform,
     SafeAreaView,
     StyleSheet,
@@ -10,6 +10,7 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
+import { useLang } from '../context/LanguageContext';
 
 // Dummy Data
 const NOTIFICATIONS_DATA = [
@@ -41,6 +42,7 @@ const NOTIFICATIONS_DATA = [
 
 export default function NotificationScreen() {
   const router = useRouter();
+  const { t } = useLang();
   const [notifications, setNotifications] = useState(NOTIFICATIONS_DATA);
 
   const markAllRead = () => {
@@ -76,9 +78,9 @@ export default function NotificationScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color="#333" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Notifications</Text>
+        <Text style={styles.headerTitle}>{t('notifications')}</Text>
         <TouchableOpacity onPress={markAllRead}>
-          <Text style={styles.markReadText}>Mark all read</Text>
+          <Text style={styles.markReadText}>{t('mark_all_read')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -93,8 +95,8 @@ export default function NotificationScreen() {
       ) : (
         <View style={styles.emptyState}>
           <Ionicons name="notifications-off-outline" size={80} color="#CCC" />
-          <Text style={styles.emptyTitle}>No Notifications Yet</Text>
-          <Text style={styles.emptySub}>Hum aapko updates yahan bhejenge.</Text>
+          <Text style={styles.emptyTitle}>{t('no_notifications')}</Text>
+          <Text style={styles.emptySub}>{t('no_notifications_sub')}</Text>
         </View>
       )}
     </SafeAreaView>

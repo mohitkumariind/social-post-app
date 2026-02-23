@@ -14,12 +14,14 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 
 const { width } = Dimensions.get('window');
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const { t } = useLang();
   const { userInfo } = useUser();
 
   const currentPhoto = userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0] || 'https://via.placeholder.com/150';
@@ -53,30 +55,30 @@ export default function ProfileScreen() {
             <TouchableOpacity onPress={() => router.back()} style={styles.navBtn}>
               <Ionicons name="chevron-back" size={22} color="#333" />
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>My Profile</Text>
+            <Text style={styles.headerTitle}>{t('my_profile')}</Text>
             <View style={{ width: 40 }} />
           </View>
           <View style={styles.profileInfo}>
             <View style={styles.avatarWrapper}>
               <Image source={{ uri: currentPhoto }} style={styles.mainAvatar} />
             </View>
-            <Text style={styles.userName}>{userInfo?.name || "Mohit Kumar"}</Text>
-            <Text style={styles.userRole}>{userInfo?.designation || "Social Worker"}</Text>
+            <Text style={styles.userName}>{userInfo?.name || t('default_user_name')}</Text>
+            <Text style={styles.userRole}>{userInfo?.designation || t('default_designation_profile')}</Text>
             <TouchableOpacity style={styles.editProfileBtn} onPress={() => router.push('/edit-profile')}>
-              <Text style={styles.editBtnText}>Edit Profile</Text>
+              <Text style={styles.editBtnText}>{t('edit_profile')}</Text>
             </TouchableOpacity>
           </View>
         </View>
         <View style={styles.menuContainer}>
-          {renderMenuItem('person-outline', 'Personal & Political Details', () => router.push('/edit-profile'))}
-          {renderMenuItem('trophy-outline', 'Leaderboard', () => router.push('/leaderboard'))}
-          {renderMenuItem('medal-outline', 'Rewards', () => router.push('/rewards'))}
-          {renderMenuItem('gift-outline', 'Refer & Earn', () => router.push('/refer'))}
-          {renderMenuItem('document-text-outline', 'Privacy Policy', () => router.push('/privacy-policy'))}
-          {renderMenuItem('shield-checkmark-outline', 'Terms & Conditions', () => router.push('/terms'))}
-          {renderMenuItem('star-outline', 'Rate Our App', handleRateApp)}
-          {renderMenuItem('help-circle-outline', 'Help & Support', () => router.push('/support'))}
-          {renderMenuItem('log-out-outline', 'Logout', () => router.replace('/login'), true)}
+          {renderMenuItem('person-outline', t('personal_political_details'), () => router.push('/edit-profile'))}
+          {renderMenuItem('trophy-outline', t('leaderboard'), () => router.push('/leaderboard'))}
+          {renderMenuItem('medal-outline', t('rewards'), () => router.push('/rewards'))}
+          {renderMenuItem('gift-outline', t('refer_earn'), () => router.push('/refer'))}
+          {renderMenuItem('document-text-outline', t('privacy_policy'), () => router.push('/privacy-policy'))}
+          {renderMenuItem('shield-checkmark-outline', t('terms_conditions'), () => router.push('/terms'))}
+          {renderMenuItem('star-outline', t('rate_app'), handleRateApp)}
+          {renderMenuItem('help-circle-outline', t('help_support'), () => router.push('/support'))}
+          {renderMenuItem('log-out-outline', t('logout'), () => router.replace('/login'), true)}
         </View>
         <View style={{ height: 40 }} />
       </ScrollView>

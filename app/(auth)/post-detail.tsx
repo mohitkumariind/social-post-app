@@ -16,7 +16,8 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import ViewShot from "react-native-view-shot"; // Poster capture ke liye
+import ViewShot from "react-native-view-shot";
+import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 
 const { width, height } = Dimensions.get('window');
@@ -24,6 +25,7 @@ const { width, height } = Dimensions.get('window');
 export default function PostDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  const { t } = useLang();
   const { userInfo } = useUser();
   const viewShotRef = useRef<any>(null); // Reference for capturing
 
@@ -66,7 +68,7 @@ export default function PostDetailScreen() {
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert("Permission Required", "Bhai, gallery access chahiye poster save karne ke liye!");
+        Alert.alert(t('permission_required'), t('permission_message'));
         return;
       }
 
@@ -75,10 +77,10 @@ export default function PostDetailScreen() {
       
       // Gallery mein save karna
       await MediaLibrary.saveToLibraryAsync(uri);
-      Alert.alert("Jai Hind! 🚩", "Poster aapki Gallery mein save ho gaya hai.");
+      Alert.alert(t('save_success_title'), t('save_success_message'));
     } catch (err) {
       console.log(err);
-      Alert.alert("Error", "Kuch gadbad hui poster save karne mein.");
+      Alert.alert(t('save_error_title'), t('save_error_message'));
     }
   };
 
@@ -89,7 +91,7 @@ export default function PostDetailScreen() {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri);
       } else {
-        Share.share({ message: 'Jai Hind! My Digital Poster.' });
+        Share.share({ message: t('share_message') });
       }
     } catch (err) {
       console.log(err);
@@ -124,7 +126,7 @@ export default function PostDetailScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color="#333" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Ready to Post 🚀</Text>
+        <Text style={styles.headerTitle}>{t('ready_to_post')} 🚀</Text>
         <View style={{ width: 40 }} /> 
       </View>
 
@@ -168,10 +170,10 @@ export default function PostDetailScreen() {
                       </View>
                       <View style={styles.nameSection}>
                         <Text style={styles.userName} numberOfLines={1}>
-                          {userInfo?.name?.toUpperCase() || "MOHIT KUMAR"}
+                          {userInfo?.name?.toUpperCase() || t('default_user_name').toUpperCase()}
                         </Text>
                         <Text style={styles.userDesignation} numberOfLines={1}>
-                          {userInfo?.designation || "Social Media Warrior"}
+                          {userInfo?.designation || t('default_designation')}
                         </Text>
                       </View>
                       <View style={styles.photoContainer}>
@@ -190,7 +192,7 @@ export default function PostDetailScreen() {
         </View>
 
         {/* THEMES GRID */}
-        <Text style={styles.sectionTitle}>Select Frame</Text>
+        <Text style={styles.sectionTitle}>{t('select_frame')}</Text>
         <View style={styles.framesGrid}>
           {frameStyles.map((f) => (
             <TouchableOpacity key={f.id} onPress={() => setSelectedFrame(f.id)} style={styles.frameCard}>
@@ -203,11 +205,11 @@ export default function PostDetailScreen() {
         <View style={styles.buttonContainer}>
           <TouchableOpacity style={styles.shareBtn} onPress={handleShare}>
             <Ionicons name="logo-whatsapp" size={22} color="#2ECC71" />
-            <Text style={styles.shareBtnText}>Share on WhatsApp</Text>
+            <Text style={styles.shareBtnText}>{t('share_whatsapp')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.downloadBtn} onPress={handleDownload}>
             <Ionicons name="download-outline" size={22} color="#FFF" />
-            <Text style={styles.downloadBtnText}>Save to Gallery</Text>
+            <Text style={styles.downloadBtnText}>{t('save_to_gallery')}</Text>
           </TouchableOpacity>
         </View>
         <View style={{height: 50}} />

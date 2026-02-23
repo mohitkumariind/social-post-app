@@ -142,7 +142,7 @@ export default function DashboardScreen() {
         <Text style={styles.sectionTitle}>{activeTab === 'graphics' ? `Trending ${t('graphics')}` : `Trending ${t('reels')}`}</Text>
         {activeCategory && (
           <TouchableOpacity onPress={() => setActiveCategory(null)} style={styles.backLink}>
-            <Text style={styles.backLinkText}>Explore All 🚀</Text>
+            <Text style={styles.backLinkText}>{t('explore_all')} 🚀</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -201,7 +201,7 @@ export default function DashboardScreen() {
             <LinearGradient colors={['#8A2BE2', '#4B0082']} style={styles.allTrendingGradient}>
               <Ionicons name={activeTab === 'graphics' ? "apps" : "videocam"} size={50} color="#FFF" />
               <Text style={styles.allTrendingTitle}>{activeTab === 'graphics' ? `All ${t('graphics')}` : `All ${t('reels')}`}</Text>
-              <Text style={styles.allTrendingSub}>Tap to see categories</Text>
+              <Text style={styles.allTrendingSub}>{t('tap_see_categories')}</Text>
             </LinearGradient>
           </TouchableOpacity>
         </View>
@@ -209,7 +209,7 @@ export default function DashboardScreen() {
           <View key={cat.id} style={{ width: width }}>
             <View style={styles.gridSectionHeader}>
               <Text style={styles.gridSectionTitle}>{cat.name}</Text>
-              <Text style={styles.gridSectionSub}>Swipe left to go back</Text>
+              <Text style={styles.gridSectionSub}>{t('swipe_left_back')}</Text>
             </View>
             <View style={styles.staggeredContainer}>
               {cat.images.map((img, idx) => (
@@ -248,7 +248,7 @@ export default function DashboardScreen() {
           </View>
           <View style={styles.welcomeTextGroup}>
             <Text style={styles.welcomeText}>{t('welcome')}!</Text>
-            <Text style={styles.userName}>Hi, {userInfo?.name?.split(' ')[0] || 'User'}</Text>
+            <Text style={styles.userName}>{t('hi_user')}, {userInfo?.name?.split(' ')[0] || t('user')}</Text>
           </View>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => router.push('/notifications')}>

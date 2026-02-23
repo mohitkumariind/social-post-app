@@ -26,10 +26,8 @@ export default function LoginScreen() {
               style={styles.logo}
               resizeMode="contain"
             />
-            <Text style={styles.title}>SocialBot</Text>
-            <Text style={styles.subtitle}>
-              {t('login_subtitle') || 'Fast & Secure Access for Political Workers'}
-            </Text>
+            <Text style={styles.title}>{t('login_title')}</Text>
+            <Text style={styles.subtitle}>{t('login_subtitle')}</Text>
           </View>
 
           {/* Social Buttons Section */}
@@ -42,7 +40,7 @@ export default function LoginScreen() {
             >
               <Ionicons name="logo-google" size={24} color="#DB4437" />
               <Text style={[styles.socialBtnText, { color: '#555' }]}>
-                {t('continue_google') || 'Continue with Google'}
+                {t('continue_google')}
               </Text>
             </TouchableOpacity>
 
@@ -53,7 +51,7 @@ export default function LoginScreen() {
             >
               <Ionicons name="logo-facebook" size={24} color="white" />
               <Text style={styles.socialBtnText}>
-                {t('continue_facebook') || 'Continue with Facebook'}
+                {t('continue_facebook')}
               </Text>
             </TouchableOpacity>
 
@@ -64,7 +62,7 @@ export default function LoginScreen() {
             >
               <Ionicons name="logo-twitter" size={24} color="white" />
               <Text style={styles.socialBtnText}>
-                {t('continue_twitter') || 'Continue with Twitter'}
+                {t('continue_twitter')}
               </Text>
             </TouchableOpacity>
 
@@ -74,7 +72,7 @@ export default function LoginScreen() {
           <View style={styles.footer}>
             <Ionicons name="shield-checkmark-outline" size={16} color="#4CAF50" />
             <Text style={styles.footerText}> 
-              {t('secure_login') || 'Secure, Encrypted Login'}
+              {t('secure_login')}
             </Text>
           </View>
 

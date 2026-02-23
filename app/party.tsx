@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useLang } from '../context/LanguageContext';
 
 const parties = [
   { id: 'bjp', name: 'Bharatiya Janata Party', short: 'BJP', color: '#FF9933' },
@@ -20,6 +21,7 @@ const parties = [
 
 export default function PartyScreen() {
   const router = useRouter();
+  const { t } = useLang();
   const [selectedParty, setSelectedParty] = useState('');
 
   const handleContinue = () => {
@@ -32,7 +34,7 @@ export default function PartyScreen() {
     <View style={styles.container}>
       {/* Header with White Background & Black Text */}
       <View style={styles.header}>
-        <Text style={styles.title}>Select Your Political Party</Text>
+        <Text style={styles.title}>{t('select_party_title')}</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
@@ -70,7 +72,7 @@ export default function PartyScreen() {
           onPress={handleContinue}
           disabled={!selectedParty}
         >
-          <Text style={styles.btnText}>Continue</Text>
+          <Text style={styles.btnText}>{t('continue')}</Text>
         </TouchableOpacity>
       </View>
     </View>

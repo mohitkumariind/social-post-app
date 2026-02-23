@@ -14,10 +14,12 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import { useLang } from '../context/LanguageContext';
 import { useUser } from '../context/UserContext';
 
 export default function EditProfileScreen() {
   const router = useRouter();
+  const { t } = useLang();
   const { userInfo, setUserInfo } = useUser();
   const [formData, setFormData] = useState({ ...userInfo });
 
@@ -35,7 +37,7 @@ export default function EditProfileScreen() {
 
   const handleUpdate = () => {
     setUserInfo(formData);
-    Alert.alert('Success', 'Profile Updated! ✅');
+    Alert.alert(t('profile_updated_title'), t('profile_updated_message'));
     router.back();
   };
 
@@ -63,14 +65,14 @@ export default function EditProfileScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backCircle}>
           <Ionicons name="chevron-back" size={20} color="#666" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Edit Profile</Text>
-        <TouchableOpacity onPress={handleUpdate}><Text style={styles.saveHeaderBtn}>Save</Text></TouchableOpacity>
+        <Text style={styles.headerTitle}>{t('edit_profile')}</Text>
+        <TouchableOpacity onPress={handleUpdate}><Text style={styles.saveHeaderBtn}>{t('save')}</Text></TouchableOpacity>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         
         {/* Photo Manager */}
-        <View style={styles.sectionHeader}><Text style={styles.sectionHeaderText}>PHOTO MANAGER</Text></View>
+        <View style={styles.sectionHeader}><Text style={styles.sectionHeaderText}>{t('photo_manager')}</Text></View>
         <View style={styles.imageSection}>
           <View style={styles.imageRow}>
             {[0, 1, 2].map((i) => (
@@ -80,26 +82,26 @@ export default function EditProfileScreen() {
               </TouchableOpacity>
             ))}
           </View>
-          <Text style={styles.hintText}>Tap on a photo to select for posters</Text>
+          <Text style={styles.hintText}>{t('tap_photo_hint')}</Text>
         </View>
 
         <View style={styles.form}>
-          <Text style={styles.formHead}>PERSONAL INFO</Text>
-          {renderInput('Full Name', 'name', 'person-outline')}
-          {renderInput('Mobile', 'phone', 'call-outline')}
-          {renderInput('Email', 'email', 'mail-outline')}
+          <Text style={styles.formHead}>{t('personal_info')}</Text>
+          {renderInput(t('full_name'), 'name', 'person-outline')}
+          {renderInput(t('mobile'), 'phone', 'call-outline')}
+          {renderInput(t('email'), 'email', 'mail-outline')}
 
-          <Text style={styles.formHead}>POLITICAL PROFILE</Text>
-          {renderInput('Party Name', 'partyName', 'flag-outline')}
-          {renderInput('Designation 1', 'designation', 'ribbon-outline')}
-          {renderInput('Designation 2', 'designation2', 'ribbon-outline')}
-          {renderInput('Designation 3', 'designation3', 'ribbon-outline')}
-          {renderInput('Designation 4', 'designation4', 'ribbon-outline')}
-          {renderInput('State', 'state', 'location-outline')}
-          {renderInput('District', 'district', 'business-outline')}
-          {renderInput('Assembly', 'assembly', 'map-outline')}
+          <Text style={styles.formHead}>{t('political_profile')}</Text>
+          {renderInput(t('party_name'), 'partyName', 'flag-outline')}
+          {renderInput(t('designation_1'), 'designation', 'ribbon-outline')}
+          {renderInput(t('designation_2'), 'designation2', 'ribbon-outline')}
+          {renderInput(t('designation_3'), 'designation3', 'ribbon-outline')}
+          {renderInput(t('designation_4'), 'designation4', 'ribbon-outline')}
+          {renderInput(t('state'), 'state', 'location-outline')}
+          {renderInput(t('district'), 'district', 'business-outline')}
+          {renderInput(t('assembly'), 'assembly', 'map-outline')}
 
-          <Text style={styles.formHead}>SOCIAL LINKS</Text>
+          <Text style={styles.formHead}>{t('social_links')}</Text>
           {renderInput('WhatsApp', 'whatsapp', 'logo-whatsapp')}
           {renderInput('Facebook', 'facebook', 'logo-facebook')}
           {renderInput('Instagram', 'instagram', 'logo-instagram')}
@@ -107,7 +109,7 @@ export default function EditProfileScreen() {
         </View>
 
         <TouchableOpacity style={styles.updateBtn} onPress={handleUpdate}>
-          <Text style={styles.updateBtnText}>Save All Changes</Text>
+          <Text style={styles.updateBtnText}>{t('save_all_changes')}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>

@@ -1,9 +1,11 @@
 import { useRouter } from 'expo-router';
 import React, { useEffect } from 'react';
 import { Platform, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { useLang } from '../context/LanguageContext';
 
 export default function SplashScreen() {
   const router = useRouter();
+  const { t } = useLang();
 
   useEffect(() => {
     // 3 second ka timer taaki user logo dekh sake
@@ -25,11 +27,11 @@ export default function SplashScreen() {
           <Text style={styles.logoText}>S</Text>
         </View>
         
-        <Text style={styles.brandName}>SOCIAL POST</Text>
-        <Text style={styles.tagline}>Political Advocacy Platform</Text>
+        <Text style={styles.brandName}>{t('brand_name')}</Text>
+        <Text style={styles.tagline}>{t('tagline')}</Text>
         
         <View style={styles.loaderContainer}>
-          <Text style={styles.loadingText}>Initializing...</Text>
+          <Text style={styles.loadingText}>{t('initializing')}</Text>
         </View>
       </View>
     </View>
