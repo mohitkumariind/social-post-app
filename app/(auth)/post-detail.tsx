@@ -13,6 +13,7 @@ import {
   Dimensions,
   Image,
   Modal,
+  PanResponder,
   SafeAreaView,
   ScrollView,
   Share,
@@ -22,7 +23,7 @@ import {
   View
 } from 'react-native';
 import ViewShot from "react-native-view-shot";
-import { FFmpegKit, ReturnCode } from 'ffmpeg-kit-react-native-full';
+import { FFmpegKit, FFmpegKitConfig, ReturnCode } from 'ffmpeg-kit-react-native-full';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 
@@ -33,11 +34,20 @@ const FRAME_OVERLAY_URLS_4_5: string[] = ['', '', '', '', '']; // 4:5 (1080x1350
 const FRAME_OVERLAY_URLS_9_16: string[] = ['', '', '', '', '']; // 9:16 (1080x1920) – Frames 2–6
 
 const FRAME_STATIC_COLOR = '#FF9933'; // Frame 1 accent
+const MEDIA_DRAG_SCALE = 1.1; // Slight scale to avoid black gaps when dragging
+const DRAG_HINT_DURATION_MS = 3500;
 
 /** Path FFmpeg can read: strip file:// if present (Android/iOS). */
 function pathForFfmpeg(uriOrPath: string): string {
   if (uriOrPath.startsWith('file://')) return uriOrPath.slice(7);
   return uriOrPath;
+}
+
+/** Convert logical Y offset to export pixels (1080x1350 or 1080x1920). */
+function logicalOffsetToExportY(logicalY: number, aspectRatio: '4:5' | '9:16', containerWidth: number): number {
+  const containerHeight = containerWidth * (aspectRatio === '9:16' ? 16 / 9 : 5 / 4);
+  const exportHeight = aspectRatio === '9:16' ? 1920 : 1350;
+  return Math.round(logicalY * (exportHeight / containerHeight));
 }
 
 export default function PostDetailScreen() {
@@ -57,8 +67,11 @@ export default function PostDetailScreen() {
   const [isReady, setIsReady] = useState(false);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [showDragHint, setShowDragHint] = useState(true);
+  const [mediaOffsetBySlide, setMediaOffsetBySlide] = useState<Record<number, number>>({});
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const originalData: string[] = useMemo(() => {
     try {
@@ -82,9 +95,46 @@ export default function PostDetailScreen() {
     const timer = setTimeout(() => {
       scrollRef.current?.scrollTo({ x: jumpTo * width, animated: false });
       setIsReady(true);
-    }, 400); 
+    }, 400);
     return () => clearTimeout(timer);
   }, [originalData, initialIndex]);
+
+  const containerWidth = width - 20;
+  const containerHeight = containerWidth * (aspectRatio === '9:16' ? 16 / 9 : 5 / 4);
+  const maxDragOffset = containerHeight * 0.2;
+  const logicalIndex = originalData.length > 0 ? activeIndex % originalData.length : 0;
+  const currentMediaOffsetY = mediaOffsetBySlide[logicalIndex] ?? 0;
+
+  const dragStartOffsetRef = useRef(0);
+  const currentOffsetRef = useRef(0);
+  currentOffsetRef.current = currentMediaOffsetY;
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 2,
+        onPanResponderGrant: () => {
+          dragStartOffsetRef.current = currentOffsetRef.current;
+        },
+        onPanResponderMove: (_, gestureState) => {
+          const start = dragStartOffsetRef.current;
+          const next = Math.max(-maxDragOffset, Math.min(maxDragOffset, start + gestureState.dy));
+          setMediaOffsetBySlide((prev) => {
+            if (prev[logicalIndex] === next) return prev;
+            return { ...prev, [logicalIndex]: next };
+          });
+        },
+      }),
+    [logicalIndex, maxDragOffset]
+  );
+
+  useEffect(() => {
+    if (!showDragHint) return;
+    dragHintTimerRef.current = setTimeout(() => setShowDragHint(false), DRAG_HINT_DURATION_MS);
+    return () => {
+      if (dragHintTimerRef.current) clearTimeout(dragHintTimerRef.current);
+    };
+  }, [showDragHint]);
 
   const currentMediaUrl = useMemo(() => {
     if (originalData.length === 0) return '';
@@ -135,7 +185,8 @@ export default function PostDetailScreen() {
         inputFramePath = pathForFfmpeg(frameRes.uri);
       }
 
-      const cmd = `-i ${inputVideoPath} -i ${inputFramePath} -filter_complex "overlay=0:0" -c:v libx264 -preset ultrafast -crf 28 -c:a copy ${pathForFfmpeg(outputPath)}`;
+      const offsetYExport = logicalOffsetToExportY(currentMediaOffsetY, aspectRatio, containerWidth);
+      const cmd = `-i ${inputVideoPath} -i ${inputFramePath} -filter_complex "overlay=0:${offsetYExport}" -c:v libx264 -preset ultrafast -crf 28 -c:a copy ${pathForFfmpeg(outputPath)}`;
       const session = await FFmpegKit.execute(cmd);
       if (!session) {
         throw new Error('FFmpeg session failed to start');
@@ -162,6 +213,11 @@ export default function PostDetailScreen() {
     } finally {
       setProcessing(false);
       deactivateKeepAwake();
+      try {
+        if (typeof FFmpegKitConfig.clearSessions === 'function') {
+          await FFmpegKitConfig.clearSessions();
+        }
+      } catch (_) {}
       for (const p of toDelete) {
         try {
           const info = await FileSystem.getInfoAsync(p);
@@ -171,7 +227,7 @@ export default function PostDetailScreen() {
         }
       }
     }
-  }, [currentMediaUrl, selectedFrame, aspectRatio, t]);
+  }, [currentMediaUrl, selectedFrame, aspectRatio, currentMediaOffsetY, containerWidth, t]);
 
   // --- SAVE TO GALLERY LOGIC ---
   const handleDownload = async () => {
@@ -235,22 +291,24 @@ export default function PostDetailScreen() {
     } else { setActiveIndex(index); }
   };
 
-  const frameStyles = [
-    { id: 1, color: FRAME_STATIC_COLOR },
-    { id: 2, color: '#2ECC71' },
-    { id: 3, color: '#1A73E8' },
-    { id: 4, color: '#E74C3C' },
-    { id: 5, color: '#8E44AD' },
-    { id: 6, color: '#2C3E50' },
-  ];
-
+  const FRAME_COLORS: Record<number, string> = {
+    1: FRAME_STATIC_COLOR,
+    2: '#2ECC71',
+    3: '#1A73E8',
+    4: '#E74C3C',
+    5: '#8E44AD',
+    6: '#2C3E50',
+  };
   const frameOverlayUrls = aspectRatio === '9:16' ? FRAME_OVERLAY_URLS_9_16 : FRAME_OVERLAY_URLS_4_5;
   const visibleFrameIds = useMemo(() => {
-    const urls = aspectRatio === '9:16' ? FRAME_OVERLAY_URLS_9_16 : FRAME_OVERLAY_URLS_4_5;
-    const ids = [1, ...([2, 3, 4, 5, 6].filter((i) => !!urls[i - 2]))];
+    const urls = frameOverlayUrls;
+    const ids = [1, ...Array.from({ length: urls.length }, (_, j) => j + 2).filter((i) => !!urls[i - 2])];
     return ids;
-  }, [aspectRatio]);
-  const visibleFrames = useMemo(() => frameStyles.filter((f) => visibleFrameIds.includes(f.id)), [visibleFrameIds]);
+  }, [aspectRatio, frameOverlayUrls]);
+  const visibleFrames = useMemo(
+    () => visibleFrameIds.map((id) => ({ id, color: FRAME_COLORS[id] ?? '#333' })),
+    [visibleFrameIds]
+  );
 
   useEffect(() => {
     if (!visibleFrameIds.includes(selectedFrame)) setSelectedFrame(1);
@@ -258,7 +316,9 @@ export default function PostDetailScreen() {
 
   const isStaticFrame = selectedFrame === 1;
   const overlayUrl =
-    selectedFrame >= 2 && selectedFrame <= 6 ? (frameOverlayUrls[selectedFrame - 2] ?? null) : null;
+    selectedFrame >= 2 && selectedFrame - 2 < frameOverlayUrls.length
+      ? (frameOverlayUrls[selectedFrame - 2] ?? null)
+      : null;
 
   const captionKeys = ['caption_1', 'caption_2', 'caption_3', 'caption_4', 'caption_5', 'caption_6'] as const;
 
@@ -311,21 +371,38 @@ export default function PostDetailScreen() {
                   }}
                 >
                   <View style={[styles.mediaContainer, { aspectRatio: aspectRatio === '9:16' ? 9 / 16 : 4 / 5 }]}>
-                    {isVideoParam ? (
-                      <Video
-                        style={styles.fullMedia}
-                        source={{ uri: item }}
-                        resizeMode={ResizeMode.CONTAIN}
-                        isLooping
-                        shouldPlay={isReady && index === activeIndex}
-                        useNativeControls={false}
-                        usePoster={true}
-                        posterSource={{ uri: item }}
-                      />
-                    ) : (
-                      <Image source={{ uri: item }} style={styles.fullMedia} resizeMode="contain" />
+                    <View
+                      style={[
+                        styles.mediaDragWrapper,
+                        {
+                          transform: [
+                            { scale: MEDIA_DRAG_SCALE },
+                            { translateY: index === activeIndex ? currentMediaOffsetY : (mediaOffsetBySlide[index % originalData.length] ?? 0) },
+                          ],
+                        },
+                      ]}
+                      {...(index === activeIndex ? panResponder.panHandlers : {})}
+                    >
+                      {isVideoParam ? (
+                        <Video
+                          style={styles.fullMedia}
+                          source={{ uri: item }}
+                          resizeMode={ResizeMode.CONTAIN}
+                          isLooping
+                          shouldPlay={isReady && index === activeIndex}
+                          useNativeControls={false}
+                          usePoster={true}
+                          posterSource={{ uri: item }}
+                        />
+                      ) : (
+                        <Image source={{ uri: item }} style={styles.fullMedia} resizeMode="contain" />
+                      )}
+                    </View>
+                    {showDragHint && isReady && index === activeIndex && (
+                      <View style={styles.dragHintOverlay} pointerEvents="none">
+                        <Text style={styles.dragHintText}>{t('drag_hint')}</Text>
+                      </View>
                     )}
-                    
                     {/* FRAME OVERLAY: Frame 1 = static View, Frames 2–6 = PNG from backend */}
                     {isStaticFrame && (
                       <View style={[styles.frameOverlay, { borderTopColor: FRAME_STATIC_COLOR }]}>
@@ -464,7 +541,10 @@ const styles = StyleSheet.create({
   scrollContent: { paddingVertical: 10 },
   slideWrapper: { width: width, alignItems: 'center', justifyContent: 'center' },
   mediaContainer: { width: width - 20, backgroundColor: '#000', borderRadius: 24, overflow: 'hidden', position: 'relative' },
+  mediaDragWrapper: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
   fullMedia: { width: '100%', height: '100%' },
+  dragHintOverlay: { position: 'absolute', top: 0, left: 0, right: 0, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
+  dragHintText: { fontSize: 12, color: '#FFF', fontWeight: '600' },
   frameOverlayImage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' },
   frameOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 80, backgroundColor: 'rgba(255,255,255,0.98)', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, borderTopWidth: 5 },
   partyLogoCircle: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },

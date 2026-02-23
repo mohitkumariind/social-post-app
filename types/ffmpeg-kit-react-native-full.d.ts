@@ -15,4 +15,7 @@ declare module 'ffmpeg-kit-react-native-full' {
     static isSuccess(returnCode: ReturnCode | null | undefined): boolean;
     static isCancel(returnCode: ReturnCode | null | undefined): boolean;
   }
+  export class FFmpegKitConfig {
+    static clearSessions(): Promise<void>;
+  }
 }
