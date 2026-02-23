@@ -32,10 +32,11 @@ const BANNERS = [
   { id: 'b3', image: 'https://img.freepik.com/free-vector/gradient-world-social-justice-day-illustration_23-2149231267.jpg', title: 'Powerful Social Media Tools 🚀' },
 ];
 
+/** Poster: 4:5 (1080x1350) only */
 const GRAPHICS_DATA: Category[] = [
-  { id: 'g1', name: "Today Post", images: [{ url: 'https://picsum.photos/seed/t1/1080/1080', shares: '1.5k' }, { url: 'https://picsum.photos/seed/t2/1080/1350', shares: '850' }, { url: 'https://picsum.photos/seed/t3/1080/1080', shares: '2k' }] },
-  { id: 'g2', name: "Motivational", images: [{ url: 'https://picsum.photos/seed/m1/1080/1350', shares: '3.2k' }, { url: 'https://picsum.photos/seed/m2/1080/1080', shares: '1.1k' }] },
-  { id: 'g3', name: "Party Post", images: [{ url: 'https://picsum.photos/seed/p1/1080/1080', shares: '10k' }, { url: 'https://picsum.photos/seed/p2/1200/675', shares: '5.4k' }] },
+  { id: 'g1', name: "Today Post", images: [{ url: 'https://picsum.photos/seed/t1/1080/1350', shares: '1.5k' }, { url: 'https://picsum.photos/seed/t2/1080/1350', shares: '850' }, { url: 'https://picsum.photos/seed/t3/1080/1350', shares: '2k' }] },
+  { id: 'g2', name: "Motivational", images: [{ url: 'https://picsum.photos/seed/m1/1080/1350', shares: '3.2k' }, { url: 'https://picsum.photos/seed/m2/1080/1350', shares: '1.1k' }] },
+  { id: 'g3', name: "Party Post", images: [{ url: 'https://picsum.photos/seed/p1/1080/1350', shares: '10k' }, { url: 'https://picsum.photos/seed/p2/1080/1350', shares: '5.4k' }] },
 ];
 
 const REELS_DATA: Category[] = [
@@ -152,7 +153,7 @@ export default function DashboardScreen() {
         contentContainerStyle={{ paddingLeft: 20 }}
       >
         {infiniteTrendingData.map((item, index) => (
-          <TouchableOpacity key={index} style={styles.trendingItem} onPress={() => switchCategory(item.catSource, index % allTrending.length)}>
+          <TouchableOpacity key={index} style={[styles.trendingItem, { height: activeTab === 'graphics' ? Math.round(140 * 5 / 4) : Math.round(140 * 16 / 9) }]} onPress={() => switchCategory(item.catSource, index % allTrending.length)}>
             <Image source={{ uri: item.url }} style={styles.postImage} />
             {item.isVideo && <View style={styles.playIconOverlay}><Ionicons name="play" size={24} color="#FFF" /></View>}
             <View style={styles.catLabelBadge}><Text style={styles.catLabelText}>{item.catSource.name}</Text></View>
@@ -176,8 +177,8 @@ export default function DashboardScreen() {
           <View style={styles.postGridRow}>
             {cat.images.slice(0, 2).map((img, index) => (
               <TouchableOpacity
-                key={index} style={styles.postItem}
-                onPress={() => router.push({ pathname: '/post-detail', params: { isVideo: img.isVideo ? 'true' : 'false', image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: index } })}
+                key={index} style={[styles.postItem, { height: activeTab === 'graphics' ? Math.round((width - 55) / 2 * 5 / 4) : Math.round((width - 55) / 2 * 16 / 9) }]}
+                onPress={() => router.push({ pathname: '/post-detail', params: { isVideo: img.isVideo ? 'true' : 'false', aspectRatio: activeTab === 'reels' ? '9:16' : '4:5', image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: index } })}
               >
                 <Image source={{ uri: img.url }} style={styles.postImage} />
                 {img.isVideo && <View style={styles.playIconOverlay}><Ionicons name="play" size={24} color="#FFF" /></View>}
@@ -214,10 +215,10 @@ export default function DashboardScreen() {
             <View style={styles.staggeredContainer}>
               {cat.images.map((img, idx) => (
                 <TouchableOpacity
-                  key={idx} style={[styles.modernGridItem, { marginTop: idx % 2 === 0 ? 0 : 25 }]}
+                  key={idx} style={[styles.modernGridItem, { height: activeTab === 'graphics' ? Math.round((width - 50) / 2 * 5 / 4) : Math.round((width - 50) / 2 * 16 / 9), marginTop: idx % 2 === 0 ? 0 : 25 }]}
                   onPress={() => router.push({
                     pathname: '/post-detail',
-                    params: { isVideo: img.isVideo ? 'true' : 'false', image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: idx }
+                    params: { isVideo: img.isVideo ? 'true' : 'false', aspectRatio: activeTab === 'reels' ? '9:16' : '4:5', image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: idx }
                   })}
                 >
                   <Image source={{ uri: img.url }} style={styles.modernGridImg} />
@@ -354,9 +355,9 @@ const styles = StyleSheet.create({
   viewAllText: { color: '#8A2BE2', fontWeight: '700', fontSize: 13 },
   backLink: { backgroundColor: '#F0E6FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10 },
   backLinkText: { color: '#8A2BE2', fontSize: 12, fontWeight: '800' },
-  trendingItem: { width: 140, height: 140, borderRadius: 20, overflow: 'hidden', marginRight: 15, backgroundColor: '#F9F9F9', borderWidth: 1, borderColor: '#F0F0F0' },
+  trendingItem: { width: 140, borderRadius: 20, overflow: 'hidden', marginRight: 15, backgroundColor: '#F9F9F9', borderWidth: 1, borderColor: '#F0F0F0' },
   postGridRow: { flexDirection: 'row', paddingHorizontal: 20, justifyContent: 'space-between' },
-  postItem: { width: (width - 55) / 2, height: 180, borderRadius: 20, overflow: 'hidden', backgroundColor: '#F9F9F9', borderWidth: 1, borderColor: '#F0F0F0' },
+  postItem: { width: (width - 55) / 2, borderRadius: 20, overflow: 'hidden', backgroundColor: '#F9F9F9', borderWidth: 1, borderColor: '#F0F0F0' },
   postImage: { width: '100%', height: '100%', resizeMode: 'contain', backgroundColor: '#F5F5F5' },
   playIconOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.15)' },
   catLabelBadge: { position: 'absolute', top: 10, left: 10, backgroundColor: 'rgba(138, 43, 226, 0.9)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, elevation: 3 },
@@ -369,7 +370,7 @@ const styles = StyleSheet.create({
   allTrendingTitle: { color: '#FFF', fontSize: 28, fontWeight: '900' },
   allTrendingSub: { color: '#E0E0E0', fontSize: 14 },
   staggeredContainer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: 15, paddingBottom: 50 },
-  modernGridItem: { width: (width - 50) / 2, height: 220, borderRadius: 24, overflow: 'hidden', backgroundColor: '#F9F9F9', elevation: 4 },
+  modernGridItem: { width: (width - 50) / 2, borderRadius: 24, overflow: 'hidden', backgroundColor: '#F9F9F9', elevation: 4 },
   modernGridImg: { width: '100%', height: '100%', resizeMode: 'contain' },
   modernShareLabel: { position: 'absolute', bottom: 12, left: 12, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4 },
   modernShareText: { color: '#FFF', fontSize: 11, fontWeight: '800' },

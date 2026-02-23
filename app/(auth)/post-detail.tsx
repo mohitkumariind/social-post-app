@@ -23,14 +23,9 @@ import { useUser } from '../../context/UserContext';
 
 const { width, height } = Dimensions.get('window');
 
-/** Frame 1 = static (code). Frames 2–6 = transparent PNG overlays from backend. Replace with your API. */
-const FRAME_OVERLAY_URLS: string[] = [
-  '', // Frame 2 – set from backend
-  '', // Frame 3
-  '', // Frame 4
-  '', // Frame 5
-  '', // Frame 6
-];
+/** Frame 1 = static (code). Frames 2–6 = transparent PNG overlays per aspect. Replace with your API. */
+const FRAME_OVERLAY_URLS_4_5: string[] = ['', '', '', '', '']; // 4:5 (1080x1350) – Frames 2–6
+const FRAME_OVERLAY_URLS_9_16: string[] = ['', '', '', '', '']; // 9:16 (1080x1920) – Frames 2–6
 
 const FRAME_STATIC_COLOR = '#FF9933'; // Frame 1 accent
 
@@ -43,7 +38,8 @@ export default function PostDetailScreen() {
 
   const isVideoParam = params.isVideo === 'true';
   const initialIndex = params.currentIndex ? parseInt(params.currentIndex as string) : 0;
-  
+  const aspectRatio = (params.aspectRatio as string) === '9:16' ? '9:16' : '4:5';
+
   const [selectedFrame, setSelectedFrame] = useState(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const [isReady, setIsReady] = useState(false);
@@ -137,8 +133,19 @@ export default function PostDetailScreen() {
     { id: 6, color: '#2C3E50' },
   ];
 
+  const frameOverlayUrls = aspectRatio === '9:16' ? FRAME_OVERLAY_URLS_9_16 : FRAME_OVERLAY_URLS_4_5;
+  const visibleFrameIds = useMemo(() => {
+    const ids = [1, ...([2, 3, 4, 5, 6].filter((i) => frameOverlayUrls[i - 2]))];
+    return ids;
+  }, [aspectRatio, frameOverlayUrls]);
+  const visibleFrames = useMemo(() => frameStyles.filter((f) => visibleFrameIds.includes(f.id)), [visibleFrameIds]);
+
+  useEffect(() => {
+    if (!visibleFrameIds.includes(selectedFrame)) setSelectedFrame(1);
+  }, [visibleFrameIds, selectedFrame]);
+
   const isStaticFrame = selectedFrame === 1;
-  const overlayUrl = selectedFrame >= 2 && selectedFrame <= 6 ? FRAME_OVERLAY_URLS[selectedFrame - 2] : null;
+  const overlayUrl = selectedFrame >= 2 && selectedFrame <= 6 ? frameOverlayUrls[selectedFrame - 2] : null;
 
   const captionKeys = ['caption_1', 'caption_2', 'caption_3', 'caption_4', 'caption_5', 'caption_6'] as const;
 
@@ -170,7 +177,7 @@ export default function PostDetailScreen() {
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         
-        <View style={{ opacity: isReady ? 1 : 0, height: height * 0.72 }}>
+        <View style={{ opacity: isReady ? 1 : 0 }}>
           <ScrollView 
             ref={scrollRef} horizontal pagingEnabled 
             showsHorizontalScrollIndicator={false}
@@ -183,9 +190,14 @@ export default function PostDetailScreen() {
                 {/* --- VIEWSHOT WRAPS THE POSTER --- */}
                 <ViewShot 
                   ref={index === activeIndex ? viewShotRef : null} 
-                  options={{ format: "jpg", quality: 1.0 }}
+                  options={{
+                    format: 'jpg',
+                    quality: 1.0,
+                    width: 1080,
+                    height: aspectRatio === '9:16' ? 1920 : 1350,
+                  }}
                 >
-                  <View style={styles.mediaContainer}>
+                  <View style={[styles.mediaContainer, { aspectRatio: aspectRatio === '9:16' ? 9 / 16 : 4 / 5 }]}>
                     {isVideoParam ? (
                       <Video
                         style={styles.fullMedia}
@@ -241,7 +253,7 @@ export default function PostDetailScreen() {
         {/* THEMES GRID */}
         <Text style={styles.sectionTitle}>{t('select_frame')}</Text>
         <View style={styles.framesGrid}>
-          {frameStyles.map((f) => (
+          {visibleFrames.map((f) => (
             <TouchableOpacity key={f.id} onPress={() => setSelectedFrame(f.id)} style={styles.frameCard}>
               <View style={[styles.miniFrameUI, selectedFrame === f.id && { borderColor: f.color, borderWidth: 3 }]} />
             </TouchableOpacity>
@@ -297,7 +309,7 @@ const styles = StyleSheet.create({
   backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
   scrollContent: { paddingVertical: 10 },
   slideWrapper: { width: width, alignItems: 'center', justifyContent: 'center' },
-  mediaContainer: { width: width - 20, height: height * 0.70, backgroundColor: '#000', borderRadius: 24, overflow: 'hidden', position: 'relative' },
+  mediaContainer: { width: width - 20, backgroundColor: '#000', borderRadius: 24, overflow: 'hidden', position: 'relative' },
   fullMedia: { width: '100%', height: '100%' },
   frameOverlayImage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' },
   frameOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 80, backgroundColor: 'rgba(255,255,255,0.98)', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, borderTopWidth: 5 },
