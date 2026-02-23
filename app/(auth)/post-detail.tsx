@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { ResizeMode, Video } from 'expo-av';
-import * as MediaLibrary from 'expo-media-library'; // Gallery save ke liye
+import * as Clipboard from 'expo-clipboard';
+import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import * as Sharing from 'expo-sharing'; // WhatsApp share ke liye
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import * as Sharing from 'expo-sharing';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Dimensions,
@@ -22,6 +23,17 @@ import { useUser } from '../../context/UserContext';
 
 const { width, height } = Dimensions.get('window');
 
+/** Frame 1 = static (code). Frames 2–6 = transparent PNG overlays from backend. Replace with your API. */
+const FRAME_OVERLAY_URLS: string[] = [
+  '', // Frame 2 – set from backend
+  '', // Frame 3
+  '', // Frame 4
+  '', // Frame 5
+  '', // Frame 6
+];
+
+const FRAME_STATIC_COLOR = '#FF9933'; // Frame 1 accent
+
 export default function PostDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -35,7 +47,9 @@ export default function PostDetailScreen() {
   const [selectedFrame, setSelectedFrame] = useState(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const [isReady, setIsReady] = useState(false);
+  const [showCopiedToast, setShowCopiedToast] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const originalData: string[] = useMemo(() => {
     try {
@@ -115,10 +129,34 @@ export default function PostDetailScreen() {
   };
 
   const frameStyles = [
-    { id: 1, color: '#FF9933' }, { id: 2, color: '#2ECC71' },
-    { id: 3, color: '#1A73E8' }, { id: 4, color: '#E74C3C' },
-    { id: 5, color: '#8E44AD' }, { id: 6, color: '#2C3E50' },
+    { id: 1, color: FRAME_STATIC_COLOR },
+    { id: 2, color: '#2ECC71' },
+    { id: 3, color: '#1A73E8' },
+    { id: 4, color: '#E74C3C' },
+    { id: 5, color: '#8E44AD' },
+    { id: 6, color: '#2C3E50' },
   ];
+
+  const isStaticFrame = selectedFrame === 1;
+  const overlayUrl = selectedFrame >= 2 && selectedFrame <= 6 ? FRAME_OVERLAY_URLS[selectedFrame - 2] : null;
+
+  const captionKeys = ['caption_1', 'caption_2', 'caption_3', 'caption_4', 'caption_5', 'caption_6'] as const;
+
+  const handleCopyCaption = useCallback(
+    async (key: typeof captionKeys[number]) => {
+      const text = t(key);
+      await Clipboard.setStringAsync(text);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      setShowCopiedToast(true);
+      toastTimerRef.current = setTimeout(() => {
+        setShowCopiedToast(false);
+        toastTimerRef.current = null;
+      }, 2000);
+    },
+    [t]
+  );
+
+  useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -163,26 +201,35 @@ export default function PostDetailScreen() {
                       <Image source={{ uri: item }} style={styles.fullMedia} resizeMode="contain" />
                     )}
                     
-                    {/* FRAME OVERLAY */}
-                    <View style={[styles.frameOverlay, { borderTopColor: frameStyles.find(f => f.id === selectedFrame)?.color }]}>
-                      <View style={[styles.partyLogoCircle, { backgroundColor: frameStyles.find(f => f.id === selectedFrame)?.color }]}>
-                        <Ionicons name="flag" size={16} color="#FFF" />
+                    {/* FRAME OVERLAY: Frame 1 = static View, Frames 2–6 = PNG from backend */}
+                    {isStaticFrame && (
+                      <View style={[styles.frameOverlay, { borderTopColor: FRAME_STATIC_COLOR }]}>
+                        <View style={[styles.partyLogoCircle, { backgroundColor: FRAME_STATIC_COLOR }]}>
+                          <Ionicons name="flag" size={16} color="#FFF" />
+                        </View>
+                        <View style={styles.nameSection}>
+                          <Text style={styles.userName} numberOfLines={1}>
+                            {userInfo?.name?.toUpperCase() || t('default_user_name').toUpperCase()}
+                          </Text>
+                          <Text style={styles.userDesignation} numberOfLines={1}>
+                            {userInfo?.designation || t('default_designation')}
+                          </Text>
+                        </View>
+                        <View style={styles.photoContainer}>
+                          <Image 
+                            source={{ uri: userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0] || "https://i.pravatar.cc/150" }} 
+                            style={styles.userPhotoActual} 
+                          />
+                        </View>
                       </View>
-                      <View style={styles.nameSection}>
-                        <Text style={styles.userName} numberOfLines={1}>
-                          {userInfo?.name?.toUpperCase() || t('default_user_name').toUpperCase()}
-                        </Text>
-                        <Text style={styles.userDesignation} numberOfLines={1}>
-                          {userInfo?.designation || t('default_designation')}
-                        </Text>
-                      </View>
-                      <View style={styles.photoContainer}>
-                        <Image 
-                          source={{ uri: userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0] || "https://i.pravatar.cc/150" }} 
-                          style={styles.userPhotoActual} 
-                        />
-                      </View>
-                    </View>
+                    )}
+                    {overlayUrl ? (
+                      <Image
+                        source={{ uri: overlayUrl }}
+                        style={styles.frameOverlayImage}
+                        resizeMode="contain"
+                      />
+                    ) : null}
                   </View>
                 </ViewShot>
 
@@ -201,6 +248,24 @@ export default function PostDetailScreen() {
           ))}
         </View>
 
+        {/* COPY CAPTION */}
+        <Text style={styles.sectionTitle}>{t('copy_caption')}</Text>
+        <View style={styles.captionList}>
+          {captionKeys.map((key) => (
+            <TouchableOpacity
+              key={key}
+              style={styles.captionCard}
+              onPress={() => handleCopyCaption(key)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.captionCardText} numberOfLines={2}>{t(key)}</Text>
+              <View style={styles.captionCopyBtn}>
+                <Ionicons name="copy-outline" size={20} color="#8A2BE2" />
+              </View>
+            </TouchableOpacity>
+          ))}
+        </View>
+
         {/* BUTTONS CONNECTED TO REAL FUNCTIONS */}
         <View style={styles.buttonContainer}>
           <TouchableOpacity style={styles.shareBtn} onPress={handleShare}>
@@ -212,8 +277,15 @@ export default function PostDetailScreen() {
             <Text style={styles.downloadBtnText}>{t('save_to_gallery')}</Text>
           </TouchableOpacity>
         </View>
-        <View style={{height: 50}} />
+        <View style={{ height: 50 }} />
       </ScrollView>
+
+      {showCopiedToast && (
+        <View style={styles.toast}>
+          <Ionicons name="checkmark-circle" size={20} color="#FFF" />
+          <Text style={styles.toastText}>{t('caption_copied')}</Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -227,6 +299,7 @@ const styles = StyleSheet.create({
   slideWrapper: { width: width, alignItems: 'center', justifyContent: 'center' },
   mediaContainer: { width: width - 20, height: height * 0.70, backgroundColor: '#000', borderRadius: 24, overflow: 'hidden', position: 'relative' },
   fullMedia: { width: '100%', height: '100%' },
+  frameOverlayImage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' },
   frameOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 80, backgroundColor: 'rgba(255,255,255,0.98)', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, borderTopWidth: 5 },
   partyLogoCircle: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   nameSection: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
@@ -242,5 +315,48 @@ const styles = StyleSheet.create({
   shareBtn: { height: 55, borderRadius: 15, borderWidth: 2, borderColor: '#2ECC71', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
   shareBtnText: { color: '#2ECC71', fontSize: 16, fontWeight: '800' },
   downloadBtn: { height: 55, borderRadius: 15, backgroundColor: '#2ECC71', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
-  downloadBtnText: { color: '#FFF', fontSize: 16, fontWeight: '800' }
+  downloadBtnText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+  captionList: { paddingHorizontal: 15, paddingBottom: 8 },
+  captionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#DDD',
+  },
+  captionCardText: { flex: 1, fontSize: 14, color: '#333', fontWeight: '500', lineHeight: 20, marginRight: 12 },
+  captionCopyBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#FFF',
+    borderWidth: 1,
+    borderColor: '#E8E0FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  toast: {
+    position: 'absolute',
+    bottom: 100,
+    left: 24,
+    right: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#4B0082',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    gap: 8,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  toastText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
 });
