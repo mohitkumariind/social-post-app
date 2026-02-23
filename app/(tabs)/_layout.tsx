@@ -39,14 +39,6 @@ export default function TabsLayout() {
           ),
         }}
       />
-
-      <Tabs.Screen
-        name="edit-profile"
-        options={{
-          href: null,
-          tabBarStyle: { display: 'none' },
-        }}
-      />
     </Tabs>
   );
 }
