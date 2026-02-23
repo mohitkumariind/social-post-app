@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
   ScrollView,
@@ -22,6 +22,7 @@ const languages = [
 
 export default function LanguageScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
   const { t, changeLanguage, lang } = useLang();
   const [selectedLang, setSelectedLang] = useState(lang || 'en');
 
@@ -32,7 +33,18 @@ export default function LanguageScreen() {
   const handleConfirm = () => {
     if (selectedLang) {
       changeLanguage(selectedLang);
-      router.push('/party');
+      const next =
+        typeof params.next === 'string'
+          ? params.next
+          : Array.isArray(params.next)
+            ? params.next[0]
+            : undefined;
+
+      if (next) {
+        router.replace(next);
+      } else {
+        router.push('/party');
+      }
     }
   };
 

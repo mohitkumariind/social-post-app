@@ -251,9 +251,23 @@ export default function DashboardScreen() {
             <Text style={styles.userName}>{t('hi_user')}, {userInfo?.name?.split(' ')[0] || t('user')}</Text>
           </View>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('/notifications')}>
-          <Ionicons name="notifications-outline" size={28} color="#666" />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            onPress={() => router.push({ pathname: '/language', params: { next: '/dashboard' } })}
+            style={styles.headerIconBtn}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="language-outline" size={26} color="#666" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => router.push('/notifications')}
+            style={styles.headerIconBtn}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="notifications-outline" size={28} color="#666" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
@@ -287,6 +301,8 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   header: { paddingTop: Platform.OS === 'android' ? 40 : 10, paddingHorizontal: 25, paddingBottom: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  headerActions: { flexDirection: 'row', alignItems: 'center' },
+  headerIconBtn: { paddingLeft: 14 },
   profileRow: { flexDirection: 'row', alignItems: 'center' },
   avatarPlaceholder: { width: 45, height: 45, borderRadius: 22.5, backgroundColor: '#F0E6FF', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   welcomeTextGroup: { marginLeft: 12 },
