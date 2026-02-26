@@ -4,7 +4,8 @@ import {
   Building2,
   Flag,
   Trash2,
-  Upload
+  Upload,
+  X
 } from 'lucide-react';
 import React, { useRef, useState } from 'react';
 
@@ -14,13 +15,13 @@ interface Party {
   name: string;
   abbreviation: string;
   color: string;
-  logo?: string; // Optional logo field
+  logo?: string;
 }
 
 export default function PartyManager() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
   
-  // Initial list with placeholder style logos
   const [parties, setParties] = useState<Party[]>([
     { id: 1, name: 'Bharatiya Janata Party', abbreviation: 'BJP', color: 'bg-orange-500' },
     { id: 2, name: 'Indian National Congress', abbreviation: 'INC', color: 'bg-blue-500' },
@@ -37,11 +38,18 @@ export default function PartyManager() {
   const [selectedLogo, setSelectedLogo] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState<Party | null>(null);
 
-  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // --- EDIT STATES ---
+  const [editingParty, setEditingParty] = useState<Party | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editAbbr, setEditAbbr] = useState('');
+  const [editLogo, setEditLogo] = useState<string | null>(null);
+
+  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>, isEdit: boolean) => {
     const file = e.target.files?.[0];
     if (file) {
       const url = URL.createObjectURL(file);
-      setSelectedLogo(url);
+      if (isEdit) setEditLogo(url);
+      else setSelectedLogo(url);
     }
   };
 
@@ -68,6 +76,25 @@ export default function PartyManager() {
     }
   };
 
+  // --- EDIT FUNCTIONS ---
+  const startEditing = (party: Party) => {
+    setEditingParty(party);
+    setEditName(party.name);
+    setEditAbbr(party.abbreviation);
+    setEditLogo(party.logo || null);
+  };
+
+  const saveEdit = () => {
+    if (editingParty && editName.trim() && editAbbr.trim()) {
+      setParties(parties.map(p => 
+        p.id === editingParty.id 
+          ? { ...p, name: editName, abbreviation: editAbbr.toUpperCase(), logo: editLogo || undefined }
+          : p
+      ));
+      setEditingParty(null);
+    }
+  };
+
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 text-slate-700 pb-20">
       
@@ -82,6 +109,59 @@ export default function PartyManager() {
             <div className="flex gap-4">
               <button onClick={() => setIsDeleting(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-600">Cancel</button>
               <button onClick={confirmDelete} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold shadow-lg shadow-red-200">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT MODAL */}
+      {editingParty && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-[40px] p-8 max-w-lg w-full space-y-6 shadow-2xl animate-in zoom-in-95 relative">
+            <button onClick={() => setEditingParty(null)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-900">
+              <X size={24} />
+            </button>
+            
+            <h2 className="text-2xl font-black text-slate-900">Edit Party Details</h2>
+            
+            <div className="space-y-4">
+              {/* Logo Edit */}
+              <div 
+                onClick={() => editFileInputRef.current?.click()}
+                className="w-24 h-24 mx-auto bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center cursor-pointer hover:border-blue-400 overflow-hidden relative"
+              >
+                {editLogo ? (
+                  <img src={editLogo} className="w-full h-full object-cover" alt="Edit preview" />
+                ) : (
+                  <Upload size={24} className="text-slate-400" />
+                )}
+                <input type="file" ref={editFileInputRef} onChange={(e) => handleLogoChange(e, true)} className="hidden" accept="image/*" />
+              </div>
+
+              <div className="space-y-2">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Full Name</span>
+                <input 
+                  type="text" 
+                  value={editName} 
+                  onChange={e => setEditName(e.target.value)} 
+                  className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl outline-none font-bold text-slate-800 focus:border-blue-400 transition-all"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Abbreviation</span>
+                <input 
+                  type="text" 
+                  value={editAbbr} 
+                  onChange={e => setEditAbbr(e.target.value)} 
+                  className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl outline-none font-bold text-slate-800 uppercase focus:border-blue-400 transition-all"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-4 pt-4">
+              <button onClick={() => setEditingParty(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-600">Cancel</button>
+              <button onClick={saveEdit} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-200">Save Changes</button>
             </div>
           </div>
         </div>
@@ -116,7 +196,7 @@ export default function PartyManager() {
               <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Logo</span>
             </>
           )}
-          <input type="file" ref={fileInputRef} onChange={handleLogoChange} className="hidden" accept="image/*" />
+          <input type="file" ref={fileInputRef} onChange={(e) => handleLogoChange(e, false)} className="hidden" accept="image/*" />
         </div>
 
         <div className="flex items-center gap-4 flex-[2] bg-slate-50 p-3 rounded-2xl border border-slate-100 transition-all focus-within:border-blue-300">
@@ -190,7 +270,10 @@ export default function PartyManager() {
               
               <h4 className="font-black text-slate-900 text-lg leading-tight tracking-tight mb-4">{party.name}</h4>
               
-              <button className="mt-auto w-full py-3.5 bg-slate-50 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-400 group-hover:bg-blue-50 group-hover:text-blue-600 transition-all flex items-center justify-center gap-2">
+              <button 
+                onClick={() => startEditing(party)}
+                className="mt-auto w-full py-3.5 bg-slate-50 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-400 group-hover:bg-blue-50 group-hover:text-blue-600 transition-all flex items-center justify-center gap-2"
+              >
                 Edit Details
               </button>
             </div>
