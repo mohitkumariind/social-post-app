@@ -11,9 +11,9 @@ interface UserInfo {
   profilePics: string[]; // Correct: Array of strings
   activePhotoIndex: number;
   partyName: string;
-  state: string;
-  district: string;
-  assembly: string;
+  state_id: number | null;
+  loksabha_id: number | null;
+  assembly_id: number | null;
   whatsapp: string;
   facebook: string;
   twitter: string;
@@ -23,33 +23,36 @@ interface UserInfo {
 interface UserContextType {
   userInfo: UserInfo;
   setUserInfo: React.Dispatch<React.SetStateAction<UserInfo>>;
+  isLoggedIn: boolean;
+  setIsLoggedIn: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
 
 export const UserProvider = ({ children }: { children: ReactNode }) => {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userInfo, setUserInfo] = useState<UserInfo>({
-    name: "Mohit Bhai",
-    phone: "9540477457",
-    email: "mohit@example.com",
-    designation: "Social Media Warrior",
-    designation2: "",
-    designation3: "",
-    designation4: "",
-    profilePics: ["https://i.pravatar.cc/150?u=mohit"], // Default array
+    name: '',
+    phone: '',
+    email: '',
+    designation: '',
+    designation2: '',
+    designation3: '',
+    designation4: '',
+    profilePics: [],
     activePhotoIndex: 0,
-    partyName: "bjp",
-    state: "Uttar Pradesh",
-    district: "Meerut",
-    assembly: "Meerut Cantt",
-    whatsapp: "9540477457",
-    facebook: "",
-    twitter: "",
-    instagram: ""
+    partyName: '',
+    state_id: null,
+    loksabha_id: null,
+    assembly_id: null,
+    whatsapp: '',
+    facebook: '',
+    twitter: '',
+    instagram: '',
   });
 
   return (
-    <UserContext.Provider value={{ userInfo, setUserInfo }}>
+    <UserContext.Provider value={{ userInfo, setUserInfo, isLoggedIn, setIsLoggedIn }}>
       {children}
     </UserContext.Provider>
   );

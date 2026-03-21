@@ -15,8 +15,17 @@ interface LanguageContextType {
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
 
 export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { t, i18n } = useTranslation();
+  const { t, i18n, ready } = useTranslation();
   const [lang, setLang] = useState(i18n.language);
+
+  // Safe t: returns key if i18n not ready or t throws (Expo Go fallback)
+  const safeT = (key: string) => {
+    try {
+      return ready ? t(key) : key;
+    } catch {
+      return key;
+    }
+  };
 
   // Restore saved language on app load / refresh
   useEffect(() => {
@@ -36,7 +45,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   return (
-    <LanguageContext.Provider value={{ t, changeLanguage, lang }}>
+    <LanguageContext.Provider value={{ t: safeT, changeLanguage, lang }}>
       {children}
     </LanguageContext.Provider>
   );

@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { ResizeMode, Video } from 'expo-av';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import * as Clipboard from 'expo-clipboard';
-import * as FileSystem from 'expo-file-system';
+import { FFmpegKit, ReturnCode } from 'ffmpeg-kit-react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { activateKeepAwake, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Sharing from 'expo-sharing';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -12,8 +12,7 @@ import {
   Alert,
   Dimensions,
   Image,
-  Modal,
-  PanResponder,
+  Platform,
   SafeAreaView,
   ScrollView,
   Share,
@@ -23,31 +22,69 @@ import {
   View
 } from 'react-native';
 import ViewShot from "react-native-view-shot";
-import { FFmpegKit, FFmpegKitConfig, ReturnCode } from 'ffmpeg-kit-react-native-full';
+import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
+import { supabase } from '../../lib/supabase';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
-/** Frame 1 = static (code). Frames 2–6 = transparent PNG overlays per aspect. Replace with your API. */
-const FRAME_OVERLAY_URLS_4_5: string[] = ['', '', '', '', '']; // 4:5 (1080x1350) – Frames 2–6
-const FRAME_OVERLAY_URLS_9_16: string[] = ['', '', '', '', '']; // 9:16 (1080x1920) – Frames 2–6
+const FRAME_STATIC_COLOR = Colors.primary;
 
-const FRAME_STATIC_COLOR = '#FF9933'; // Frame 1 accent
-const MEDIA_DRAG_SCALE = 1.1; // Slight scale to avoid black gaps when dragging
-const DRAG_HINT_DURATION_MS = 3500;
-
-/** Path FFmpeg can read: strip file:// if present (Android/iOS). */
-function pathForFfmpeg(uriOrPath: string): string {
-  if (uriOrPath.startsWith('file://')) return uriOrPath.slice(7);
-  return uriOrPath;
+/** Validates URL - must be non-empty string, http/https. */
+function isValidVideoUrl(url: unknown): boolean {
+  if (url == null || typeof url !== 'string') return false;
+  const s = url.trim();
+  if (s.length === 0) return false;
+  try {
+    const normalized = s.startsWith('http://') ? s.replace('http://', 'https://') : s;
+    const u = new URL(normalized);
+    return u.protocol === 'https:' || u.protocol === 'http:';
+  } catch {
+    return false;
+  }
 }
 
-/** Convert logical Y offset to export pixels (1080x1350 or 1080x1920). */
-function logicalOffsetToExportY(logicalY: number, aspectRatio: '4:5' | '9:16', containerWidth: number): number {
-  const containerHeight = containerWidth * (aspectRatio === '9:16' ? 16 / 9 : 5 / 4);
-  const exportHeight = aspectRatio === '9:16' ? 1920 : 1350;
-  return Math.round(logicalY * (exportHeight / containerHeight));
+/** Placeholder when video URL invalid. */
+function VideoPlaceholder({ uri }: { uri: string }) {
+  return (
+    <View style={[styles.fullMedia, { backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' }]}>
+      <Ionicons name="videocam-outline" size={64} color="#666" />
+      <Text style={{ color: '#FFF', marginTop: 12, fontSize: 14 }}>Video placeholder</Text>
+    </View>
+  );
+}
+
+/** Safe Mode video player: autoPlay false, preload none, native controls. Only mounts when URL validated. */
+function ReelVideoSlide({ uri }: { uri: string }) {
+  const player = useVideoPlayer(uri, () => {
+    // autoPlay: false - do not call player.play()
+    // preload: 'none' - expo-video loads on mount; user taps play via native controls
+  });
+  return (
+    <View style={styles.fullMedia}>
+      <VideoView
+        player={player}
+        style={StyleSheet.absoluteFillObject}
+        contentFit="contain"
+        nativeControls={true}
+      />
+    </View>
+  );
+}
+
+/** Renders video only when URL is validated; else placeholder. */
+function VideoSlideOrPlaceholder({ uri }: { uri: string }) {
+  if (!isValidVideoUrl(uri)) {
+    return <VideoPlaceholder uri={uri} />;
+  }
+  return <ReelVideoSlide uri={uri} />;
+}
+
+/** Normalizes video URL to https. */
+function normalizeVideoUrl(url: string): string {
+  const s = url.trim();
+  return s.startsWith('http://') ? s.replace('http://', 'https://') : s;
 }
 
 export default function PostDetailScreen() {
@@ -55,33 +92,40 @@ export default function PostDetailScreen() {
   const params = useLocalSearchParams();
   const { t } = useLang();
   const { userInfo } = useUser();
-  const viewShotRef = useRef<any>(null); // Reference for capturing
-  const frame1OverlayShotRef = useRef<any>(null); // Frame 1 overlay PNG for video merge
+  const viewShotRef = useRef<any>(null);
 
   const isVideoParam = params?.isVideo === 'true';
   const initialIndex = params?.currentIndex != null ? parseInt(String(params.currentIndex), 10) : 0;
   const aspectRatio = (params?.aspectRatio as string) === '9:16' ? '9:16' : '4:5';
 
+  const [frames, setFrames] = useState<any[]>([]);
   const [selectedFrame, setSelectedFrame] = useState(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const [showDragHint, setShowDragHint] = useState(true);
-  const [mediaOffsetBySlide, setMediaOffsetBySlide] = useState<Record<number, number>>({});
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dragHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const originalData: string[] = useMemo(() => {
     try {
-      if (params.images) {
-        const parsed = JSON.parse(params.images as string);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      const filterUrl = (u: unknown): u is string =>
+        u != null && typeof u === 'string' && String(u).trim().length > 0;
+      if (params?.images && typeof params.images === 'string') {
+        const parsed = JSON.parse(params.images);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.filter(filterUrl);
+        }
       }
-    } catch (e) { console.log("Data Parse Error", e); }
-    return params.image ? [params.image as string] : [];
-  }, [params.images, params.image]);
+      if (params?.image != null && typeof params.image === 'string') {
+        const img = String(params.image).trim();
+        if (img.length > 0) return [img];
+      }
+    } catch (e) {
+      if (__DEV__) console.warn('PostDetail originalData parse error');
+    }
+    return [];
+  }, [params?.images, params?.image]);
 
   const infiniteData = useMemo(() => {
     if (originalData.length <= 1) return originalData;
@@ -89,150 +133,170 @@ export default function PostDetailScreen() {
   }, [originalData]);
 
   useEffect(() => {
-    const total = originalData.length;
-    const jumpTo = total > 1 ? total + initialIndex : 0;
-    setActiveIndex(jumpTo);
-    const timer = setTimeout(() => {
-      scrollRef.current?.scrollTo({ x: jumpTo * width, animated: false });
+    try {
+      const total = originalData.length;
+      const jumpTo = total > 1 ? total + initialIndex : 0;
+      setActiveIndex(jumpTo);
+      const timer = setTimeout(() => {
+        try {
+          scrollRef.current?.scrollTo({ x: jumpTo * width, animated: false });
+          setIsReady(true);
+        } catch (e) {
+          setIsReady(true);
+        }
+      }, 400);
+      return () => clearTimeout(timer);
+    } catch (e) {
       setIsReady(true);
-    }, 400);
-    return () => clearTimeout(timer);
+    }
   }, [originalData, initialIndex]);
 
-  const containerWidth = width - 20;
-  const containerHeight = containerWidth * (aspectRatio === '9:16' ? 16 / 9 : 5 / 4);
-  const maxDragOffset = containerHeight * 0.2;
-  const logicalIndex = originalData.length > 0 ? activeIndex % originalData.length : 0;
-  const currentMediaOffsetY = mediaOffsetBySlide[logicalIndex] ?? 0;
-
-  const dragStartOffsetRef = useRef(0);
-  const currentOffsetRef = useRef(0);
-  currentOffsetRef.current = currentMediaOffsetY;
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 2,
-        onPanResponderGrant: () => {
-          dragStartOffsetRef.current = currentOffsetRef.current;
-        },
-        onPanResponderMove: (_, gestureState) => {
-          const start = dragStartOffsetRef.current;
-          const next = Math.max(-maxDragOffset, Math.min(maxDragOffset, start + gestureState.dy));
-          setMediaOffsetBySlide((prev) => {
-            if (prev[logicalIndex] === next) return prev;
-            return { ...prev, [logicalIndex]: next };
-          });
-        },
-      }),
-    [logicalIndex, maxDragOffset]
-  );
-
   useEffect(() => {
-    if (!showDragHint) return;
-    dragHintTimerRef.current = setTimeout(() => setShowDragHint(false), DRAG_HINT_DURATION_MS);
-    return () => {
-      if (dragHintTimerRef.current) clearTimeout(dragHintTimerRef.current);
+    let cancelled = false;
+    const fetchFrames = async () => {
+      try {
+        const { data, error } = await supabase.from('user_frames').select('*');
+        if (cancelled) return;
+        if (!error && data) setFrames(data);
+      } catch (e) {
+        if (!cancelled && __DEV__) console.warn('fetchFrames exception');
+      }
     };
-  }, [showDragHint]);
+    fetchFrames();
+    return () => { cancelled = true; };
+  }, []);
 
-  const currentMediaUrl = useMemo(() => {
-    if (originalData.length === 0) return '';
-    const idx = activeIndex % originalData.length;
-    return originalData[idx];
-  }, [originalData, activeIndex]);
+  const isStaticFrame = selectedFrame === 1;
+  const overlayUrl =
+    selectedFrame >= 2 && selectedFrame - 2 < frames.length
+      ? (frames[selectedFrame - 2]?.url || frames[selectedFrame - 2]?.frame_url || null)
+      : null;
 
-  const processVideoMerge = useCallback(async (saveToGallery: boolean) => {
-    const cacheDir = FileSystem.cacheDirectory;
-    if (!cacheDir || !currentMediaUrl) return;
-    const videoExt = currentMediaUrl.includes('.mp4') ? '.mp4' : '.mp4';
-    const tempVideoPath = `${cacheDir}temp_video_${Date.now()}${videoExt}`;
-    const tempFramePath = `${cacheDir}temp_frame_${Date.now()}.png`;
-    const outputPath = `${cacheDir}merged_${Date.now()}.mp4`;
-    const toDelete: string[] = [tempVideoPath, tempFramePath, outputPath];
+  const processVideoMerge = useCallback(async (): Promise<string | null> => {
+    const total = originalData.length;
+    if (total === 0) return null;
+    const realIndex = total > 1 ? activeIndex % total : 0;
+    const videoUrl = originalData[realIndex];
+    if (!videoUrl || !isValidVideoUrl(videoUrl)) return null;
+
+    const cacheDir = (FileSystem.cacheDirectory || '').replace(/\/?$/, '/');
+    if (!cacheDir) return null;
+
+    const normalizedUrl = normalizeVideoUrl(videoUrl);
+    const timestamp = Date.now();
+    const inputPath = `${cacheDir}video_${timestamp}.mp4`;
+    const outputPath = `${cacheDir}video_out_${timestamp}.mp4`;
 
     try {
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert(t('permission_required'), t('permission_message'));
-        return;
+      const downloadResult = await FileSystem.downloadAsync(normalizedUrl, inputPath);
+      if (downloadResult.status < 200 || downloadResult.status >= 300) {
+        if (__DEV__) console.warn('Video download failed');
+        return null;
       }
-      activateKeepAwake();
-      setProcessing(true);
+      const localInput = downloadResult.uri;
 
-      const downloadRes = await FileSystem.downloadAsync(currentMediaUrl, tempVideoPath);
-      const inputVideoPath = pathForFfmpeg(downloadRes.uri);
-
-      let inputFramePath: string;
-      const urls = aspectRatio === '9:16' ? FRAME_OVERLAY_URLS_9_16 : FRAME_OVERLAY_URLS_4_5;
-      if (selectedFrame === 1) {
-        const frameRef = frame1OverlayShotRef.current;
-        if (!frameRef) {
-          Alert.alert(t('save_error_title'), t('save_error_message'));
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 200));
-        const frameUri = await frameRef.capture();
-        await FileSystem.copyAsync({ from: frameUri, to: tempFramePath });
-        inputFramePath = pathForFfmpeg(tempFramePath);
-      } else {
-        const overlayUrl = urls[selectedFrame - 2];
-        if (!overlayUrl || typeof overlayUrl !== 'string') {
-          Alert.alert(t('save_error_title'), t('save_error_message'));
-          return;
-        }
-        const frameRes = await FileSystem.downloadAsync(overlayUrl, tempFramePath);
-        inputFramePath = pathForFfmpeg(frameRes.uri);
+      const fileInfo = await FileSystem.getInfoAsync(localInput);
+      if (!fileInfo.exists) {
+        if (__DEV__) console.warn('Video file missing after download');
+        return null;
       }
 
-      const offsetYExport = logicalOffsetToExportY(currentMediaOffsetY, aspectRatio, containerWidth);
-      const cmd = `-i ${inputVideoPath} -i ${inputFramePath} -filter_complex "overlay=0:${offsetYExport}" -c:v libx264 -preset ultrafast -crf 28 -c:a copy ${pathForFfmpeg(outputPath)}`;
-      const session = await FFmpegKit.execute(cmd);
-      if (!session) {
-        throw new Error('FFmpeg session failed to start');
-      }
-      const returnCode = await session.getReturnCode();
-      if (returnCode == null || !ReturnCode.isSuccess(returnCode)) {
-        throw new Error('FFmpeg failed');
-      }
-
-      if (saveToGallery) {
-        await MediaLibrary.saveToLibraryAsync(outputPath);
-        Alert.alert(t('save_success_title'), t('save_success_message'));
-      } else {
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(outputPath);
-        } else {
-          Share.share({ message: t('share_message') });
-        }
-      }
-    } catch (err) {
-      console.warn('Video merge error:', err);
-      const msg = t('save_error_message') || 'Something went wrong. Please try again.';
-      Alert.alert(t('save_error_title'), msg);
-    } finally {
-      setProcessing(false);
-      deactivateKeepAwake();
-      try {
-        if (typeof FFmpegKitConfig.clearSessions === 'function') {
-          await FFmpegKitConfig.clearSessions();
-        }
-      } catch (_) {}
-      for (const p of toDelete) {
+      let finalUri = localInput;
+      if (overlayUrl && overlayUrl.trim().length > 0) {
         try {
-          const info = await FileSystem.getInfoAsync(p);
-          if (info.exists) await FileSystem.deleteAsync(p, { idempotent: true });
-        } catch (_) {
-          // ignore cleanup errors
+          const overlayPath = `${cacheDir}overlay_${timestamp}.png`;
+          const overlayResult = await FileSystem.downloadAsync(overlayUrl, overlayPath);
+          if (overlayResult.status >= 200 && overlayResult.status < 300) {
+            const toPath = (u: string) => (u || '').replace(/^file:\/\//, '');
+            const overlayLocal = toPath(overlayResult.uri);
+            const inputLocal = toPath(localInput);
+            const outputLocal = toPath(outputPath);
+
+            const session = await FFmpegKit.execute(
+              `-i "${inputLocal}" -i "${overlayLocal}" -filter_complex "[0:v]scale=1080:1920,setsar=1[v0];[1:v]scale=1080:1920,setsar=1[v1];[v0][v1]overlay=0:0[outv]" -map "[outv]" -map 0:a? -c:a copy -b:v 4M "${outputLocal}"`
+            );
+            const returnCode = await session.getReturnCode();
+            if (ReturnCode.isSuccess(returnCode)) {
+              const outInfo = await FileSystem.getInfoAsync(outputPath);
+              if (outInfo.exists) {
+                finalUri = outputPath.startsWith('file://') ? outputPath : `file://${outputPath}`;
+                try {
+                  await FileSystem.deleteAsync(inputPath, { idempotent: true });
+                } catch (_) {}
+              }
+            }
+            try {
+              await FileSystem.deleteAsync(overlayPath, { idempotent: true });
+            } catch (_) {}
+          }
+        } catch (overlayErr) {
+          if (__DEV__) console.warn('Overlay merge failed, using raw video');
+        }
+      } else {
+        try {
+          const toPath = (u: string) => (u || '').replace(/^file:\/\//, '');
+          const inputLocal = toPath(localInput);
+          const outputLocal = toPath(outputPath);
+          const session = await FFmpegKit.execute(
+            `-i "${inputLocal}" -filter_complex "[0:v]scale=1080:1920,setsar=1[outv]" -map "[outv]" -map 0:a? -c:a copy -b:v 4M "${outputLocal}"`
+          );
+          const returnCode = await session.getReturnCode();
+          if (ReturnCode.isSuccess(returnCode)) {
+            const outInfo = await FileSystem.getInfoAsync(outputPath);
+            if (outInfo.exists) {
+              finalUri = outputPath.startsWith('file://') ? outputPath : `file://${outputPath}`;
+              try {
+                await FileSystem.deleteAsync(inputPath, { idempotent: true });
+              } catch (_) {}
+            }
+          }
+        } catch (scaleErr) {
+          if (__DEV__) console.warn('Video scale failed, using raw');
         }
       }
-    }
-  }, [currentMediaUrl, selectedFrame, aspectRatio, currentMediaOffsetY, containerWidth, t]);
 
-  // --- SAVE TO GALLERY LOGIC ---
+      return finalUri;
+    } catch (err) {
+      if (__DEV__) console.warn('processVideoMerge error');
+      return null;
+    }
+  }, [originalData, activeIndex, overlayUrl]);
+
   const handleDownload = async () => {
     if (isVideoParam) {
-      await processVideoMerge(true);
+      try {
+        setProcessing(true);
+        const { status } = await MediaLibrary.requestPermissionsAsync(
+          true,
+          Platform.OS === 'android' ? ['photo', 'video'] : undefined
+        );
+        if (status !== 'granted') {
+          Alert.alert(t('permission_required'), t('permission_message'));
+          return;
+        }
+        const videoUri = await processVideoMerge();
+        if (!videoUri) {
+          Alert.alert(t('save_error_title'), t('save_error_message'));
+          return;
+        }
+        const uriToSave = videoUri.startsWith('file://') ? videoUri : `file://${videoUri}`;
+        try {
+          await MediaLibrary.createAssetAsync(uriToSave);
+        } catch (createErr) {
+          try {
+            await MediaLibrary.saveToLibraryAsync(uriToSave);
+          } catch (saveErr) {
+            if (__DEV__) console.warn('createAssetAsync / saveToLibraryAsync failed');
+            throw createErr;
+          }
+        }
+        Alert.alert(t('save_success_title'), t('save_success_message'));
+      } catch (err) {
+        if (__DEV__) console.warn('Video save error');
+        Alert.alert(t('save_error_title'), t('save_error_message'));
+      } finally {
+        setProcessing(false);
+      }
       return;
     }
     try {
@@ -250,15 +314,32 @@ export default function PostDetailScreen() {
       await MediaLibrary.saveToLibraryAsync(uri);
       Alert.alert(t('save_success_title'), t('save_success_message'));
     } catch (err) {
-      console.warn(err);
+      if (__DEV__) console.warn('save poster failed');
       Alert.alert(t('save_error_title'), t('save_error_message'));
     }
   };
 
-  // --- DIRECT SHARE LOGIC ---
   const handleShare = async () => {
     if (isVideoParam) {
-      await processVideoMerge(false);
+      try {
+        setProcessing(true);
+        const videoUri = await processVideoMerge();
+        if (!videoUri) {
+          Alert.alert(t('save_error_title'), t('save_error_message'));
+          return;
+        }
+        const shareUri = videoUri.startsWith('file://') ? videoUri : `file://${videoUri}`;
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(shareUri);
+        } else {
+          Share.share({ message: t('share_message') });
+        }
+      } catch (err) {
+        if (__DEV__) console.warn('share video failed');
+        Alert.alert(t('save_error_title'), t('save_error_message'));
+      } finally {
+        setProcessing(false);
+      }
       return;
     }
     try {
@@ -271,7 +352,7 @@ export default function PostDetailScreen() {
         Share.share({ message: t('share_message') });
       }
     } catch (err) {
-      console.warn(err);
+      if (__DEV__) console.warn('share failed');
     }
   };
 
@@ -288,7 +369,9 @@ export default function PostDetailScreen() {
       const newIdx = index - total;
       scrollRef.current?.scrollTo({ x: newIdx * width, animated: false });
       setActiveIndex(newIdx);
-    } else { setActiveIndex(index); }
+    } else {
+      setActiveIndex(index);
+    }
   };
 
   const FRAME_COLORS: Record<number, string> = {
@@ -299,26 +382,22 @@ export default function PostDetailScreen() {
     5: '#8E44AD',
     6: '#2C3E50',
   };
-  const frameOverlayUrls = aspectRatio === '9:16' ? FRAME_OVERLAY_URLS_9_16 : FRAME_OVERLAY_URLS_4_5;
-  const visibleFrameIds = useMemo(() => {
-    const urls = frameOverlayUrls;
-    const ids = [1, ...Array.from({ length: urls.length }, (_, j) => j + 2).filter((i) => !!urls[i - 2])];
-    return ids;
-  }, [aspectRatio, frameOverlayUrls]);
+  const visibleFrameIds = useMemo(() => [1, ...frames.map((_, i) => i + 2)], [frames]);
   const visibleFrames = useMemo(
-    () => visibleFrameIds.map((id) => ({ id, color: FRAME_COLORS[id] ?? '#333' })),
-    [visibleFrameIds]
+    () => [
+      { id: 1, color: FRAME_STATIC_COLOR, url: null as string | null },
+      ...frames.map((f, i) => ({
+        id: i + 2,
+        color: FRAME_COLORS[i + 2] ?? '#333',
+        url: (f.url || f.frame_url || '') as string,
+      })),
+    ],
+    [frames]
   );
 
   useEffect(() => {
     if (!visibleFrameIds.includes(selectedFrame)) setSelectedFrame(1);
   }, [visibleFrameIds, selectedFrame]);
-
-  const isStaticFrame = selectedFrame === 1;
-  const overlayUrl =
-    selectedFrame >= 2 && selectedFrame - 2 < frameOverlayUrls.length
-      ? (frameOverlayUrls[selectedFrame - 2] ?? null)
-      : null;
 
   const captionKeys = ['caption_1', 'caption_2', 'caption_3', 'caption_4', 'caption_5', 'caption_6'] as const;
 
@@ -336,7 +415,31 @@ export default function PostDetailScreen() {
     [t]
   );
 
-  useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+  }, []);
+
+  if (originalData.length === 0) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>{t('ready_to_post')} 🚀</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <Text style={{ color: '#666', textAlign: 'center', marginBottom: 16 }}>
+            {t('save_error_message') || 'No media found. Please go back and try again.'}
+          </Text>
+          <TouchableOpacity onPress={() => router.back()} style={[styles.downloadBtn, { paddingHorizontal: 24 }]}>
+            <Text style={styles.downloadBtnText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -345,24 +448,23 @@ export default function PostDetailScreen() {
           <Ionicons name="chevron-back" size={24} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{t('ready_to_post')} 🚀</Text>
-        <View style={{ width: 40 }} /> 
+        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        
         <View style={{ opacity: isReady ? 1 : 0 }}>
-          <ScrollView 
-            ref={scrollRef} horizontal pagingEnabled 
+          <ScrollView
+            ref={scrollRef}
+            horizontal
+            pagingEnabled
             showsHorizontalScrollIndicator={false}
             onMomentumScrollEnd={handleScrollEnd}
             scrollEventThrottle={16}
           >
             {infiniteData.map((item, index) => (
               <View key={`${item}-${index}`} style={styles.slideWrapper}>
-                
-                {/* --- VIEWSHOT WRAPS THE POSTER --- */}
-                <ViewShot 
-                  ref={index === activeIndex ? viewShotRef : null} 
+                <ViewShot
+                  ref={index === activeIndex ? viewShotRef : null}
                   options={{
                     format: 'jpg',
                     quality: 1.0,
@@ -371,39 +473,19 @@ export default function PostDetailScreen() {
                   }}
                 >
                   <View style={[styles.mediaContainer, { aspectRatio: aspectRatio === '9:16' ? 9 / 16 : 4 / 5 }]}>
-                    <View
-                      style={[
-                        styles.mediaDragWrapper,
-                        {
-                          transform: [
-                            { scale: MEDIA_DRAG_SCALE },
-                            { translateY: index === activeIndex ? currentMediaOffsetY : (mediaOffsetBySlide[index % originalData.length] ?? 0) },
-                          ],
-                        },
-                      ]}
-                      {...(index === activeIndex ? panResponder.panHandlers : {})}
-                    >
+                    <View style={styles.mediaDragWrapper}>
                       {isVideoParam ? (
-                        <Video
-                          style={styles.fullMedia}
-                          source={{ uri: item }}
-                          resizeMode={ResizeMode.CONTAIN}
-                          isLooping
-                          shouldPlay={isReady && index === activeIndex}
-                          useNativeControls={false}
-                          usePoster={true}
-                          posterSource={{ uri: item }}
-                        />
+                        <VideoSlideOrPlaceholder uri={item} />
                       ) : (
-                        <Image source={{ uri: item }} style={styles.fullMedia} resizeMode="contain" />
+                        item && typeof item === 'string' ? (
+                          <Image source={{ uri: item }} style={styles.fullMedia} resizeMode="contain" />
+                        ) : (
+                          <View style={[styles.fullMedia, { backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }]}>
+                            <ActivityIndicator size="small" color="#FFF" />
+                          </View>
+                        )
                       )}
                     </View>
-                    {showDragHint && isReady && index === activeIndex && (
-                      <View style={styles.dragHintOverlay} pointerEvents="none">
-                        <Text style={styles.dragHintText}>{t('drag_hint')}</Text>
-                      </View>
-                    )}
-                    {/* FRAME OVERLAY: Frame 1 = static View, Frames 2–6 = PNG from backend */}
                     {isStaticFrame && (
                       <View style={[styles.frameOverlay, { borderTopColor: FRAME_STATIC_COLOR }]}>
                         <View style={[styles.partyLogoCircle, { backgroundColor: FRAME_STATIC_COLOR }]}>
@@ -418,39 +500,48 @@ export default function PostDetailScreen() {
                           </Text>
                         </View>
                         <View style={styles.photoContainer}>
-                          <Image 
-                            source={{ uri: userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0] || "https://i.pravatar.cc/150" }} 
-                            style={styles.userPhotoActual} 
-                          />
+                          {userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0]?.trim() ? (
+                            <Image
+                              source={{ uri: userInfo.profilePics[userInfo.activePhotoIndex || 0] }}
+                              style={styles.userPhotoActual}
+                            />
+                          ) : (
+                            <View style={[styles.userPhotoActual, styles.userPhotoPlaceholder]}>
+                              <Ionicons name="person" size={28} color="#FFF" />
+                            </View>
+                          )}
                         </View>
                       </View>
                     )}
                     {overlayUrl ? (
-                      <Image
-                        source={{ uri: overlayUrl }}
-                        style={styles.frameOverlayImage}
-                        resizeMode="contain"
-                      />
+                      <View style={styles.frameOverlayImageWrap}>
+                        <Image source={{ uri: overlayUrl }} style={styles.frameOverlayImage} resizeMode="contain" />
+                      </View>
                     ) : null}
                   </View>
                 </ViewShot>
-
               </View>
             ))}
           </ScrollView>
         </View>
 
-        {/* THEMES GRID */}
         <Text style={styles.sectionTitle}>{t('select_frame')}</Text>
         <View style={styles.framesGrid}>
           {visibleFrames.map((f) => (
             <TouchableOpacity key={f.id} onPress={() => setSelectedFrame(f.id)} style={styles.frameCard}>
-              <View style={[styles.miniFrameUI, selectedFrame === f.id && { borderColor: f.color, borderWidth: 3 }]} />
+              {f.id === 1 ? (
+                <View style={[styles.miniFrameUI, selectedFrame === f.id && { borderColor: f.color, borderWidth: 3 }]} />
+              ) : (
+                <View style={[styles.miniFrameUI, selectedFrame === f.id && { borderColor: f.color, borderWidth: 3 }, { overflow: 'hidden' }]}>
+                  {f.url ? (
+                    <Image source={{ uri: f.url }} style={StyleSheet.absoluteFillObject} resizeMode="contain" />
+                  ) : null}
+                </View>
+              )}
             </TouchableOpacity>
           ))}
         </View>
 
-        {/* COPY CAPTION */}
         <Text style={styles.sectionTitle}>{t('copy_caption')}</Text>
         <View style={styles.captionList}>
           {captionKeys.map((key) => (
@@ -462,66 +553,28 @@ export default function PostDetailScreen() {
             >
               <Text style={styles.captionCardText} numberOfLines={2}>{t(key)}</Text>
               <View style={styles.captionCopyBtn}>
-                <Ionicons name="copy-outline" size={20} color="#8A2BE2" />
+                <Ionicons name="copy-outline" size={20} color={Colors.accent} />
               </View>
             </TouchableOpacity>
           ))}
         </View>
 
-        {/* BUTTONS CONNECTED TO REAL FUNCTIONS */}
         <View style={styles.buttonContainer}>
-          <TouchableOpacity style={styles.shareBtn} onPress={handleShare}>
-            <Ionicons name="logo-whatsapp" size={22} color="#2ECC71" />
-            <Text style={styles.shareBtnText}>{t('share_whatsapp')}</Text>
+          <TouchableOpacity style={styles.shareBtn} onPress={handleShare} disabled={processing}>
+            <Ionicons name="logo-whatsapp" size={22} color={Colors.textOnPrimary} />
+            <Text style={styles.shareBtnText}>{processing ? '...' : t('share_whatsapp')}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.downloadBtn} onPress={handleDownload}>
-            <Ionicons name="download-outline" size={22} color="#FFF" />
-            <Text style={styles.downloadBtnText}>{t('save_to_gallery')}</Text>
+          <TouchableOpacity style={[styles.downloadBtn, processing && { opacity: 0.7 }]} onPress={handleDownload} disabled={processing}>
+            {processing ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <Ionicons name="download-outline" size={22} color="#FFF" />
+            )}
+            <Text style={styles.downloadBtnText}>{processing ? '...' : t('save_to_gallery')}</Text>
           </TouchableOpacity>
         </View>
         <View style={{ height: 50 }} />
       </ScrollView>
-
-      <Modal visible={processing} transparent animationType="fade" statusBarTranslucent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <ActivityIndicator size="large" color="#8A2BE2" />
-            <Text style={styles.modalText}>Creating your personalized video... Please wait (20-30 seconds). Do not close the app.</Text>
-          </View>
-        </View>
-      </Modal>
-
-      {isVideoParam && selectedFrame === 1 && (
-        <View style={styles.offScreenFrame1} pointerEvents="none">
-          <ViewShot
-            ref={frame1OverlayShotRef}
-            options={{ format: 'png', width: 1080, height: aspectRatio === '9:16' ? 1920 : 1350 }}
-            style={[styles.frame1ShotWrap, { aspectRatio: aspectRatio === '9:16' ? 9 / 16 : 4 / 5 }]}
-          >
-            <View style={styles.frame1OverlayExport}>
-              <View style={[styles.frameOverlay, { borderTopColor: FRAME_STATIC_COLOR }]}>
-                <View style={[styles.partyLogoCircle, { backgroundColor: FRAME_STATIC_COLOR }]}>
-                  <Ionicons name="flag" size={16} color="#FFF" />
-                </View>
-                <View style={styles.nameSection}>
-                  <Text style={styles.userName} numberOfLines={1}>
-                    {userInfo?.name?.toUpperCase() || t('default_user_name').toUpperCase()}
-                  </Text>
-                  <Text style={styles.userDesignation} numberOfLines={1}>
-                    {userInfo?.designation || t('default_designation')}
-                  </Text>
-                </View>
-                <View style={styles.photoContainer}>
-                  <Image
-                    source={{ uri: userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0] || 'https://i.pravatar.cc/150' }}
-                    style={styles.userPhotoActual}
-                  />
-                </View>
-              </View>
-            </View>
-          </ViewShot>
-        </View>
-      )}
 
       {showCopiedToast && (
         <View style={styles.toast}>
@@ -540,75 +593,32 @@ const styles = StyleSheet.create({
   backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
   scrollContent: { paddingVertical: 10 },
   slideWrapper: { width: width, alignItems: 'center', justifyContent: 'center' },
-  mediaContainer: { width: width - 20, backgroundColor: '#000', borderRadius: 24, overflow: 'hidden', position: 'relative' },
+  mediaContainer: { width: width - 20, backgroundColor: '#000', borderRadius: 0, overflow: 'hidden', position: 'relative' },
   mediaDragWrapper: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
   fullMedia: { width: '100%', height: '100%' },
-  dragHintOverlay: { position: 'absolute', top: 0, left: 0, right: 0, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
-  dragHintText: { fontSize: 12, color: '#FFF', fontWeight: '600' },
-  frameOverlayImage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' },
+  frameOverlayImageWrap: { position: 'absolute', bottom: 0, left: 0, right: 0, top: 0, justifyContent: 'flex-end', backgroundColor: 'transparent' },
+  frameOverlayImage: { width: '100%', aspectRatio: 4 / 5 },
   frameOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 80, backgroundColor: 'rgba(255,255,255,0.98)', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, borderTopWidth: 5 },
   partyLogoCircle: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   nameSection: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
-  userName: { fontSize: 18, fontWeight: '900', color: '#000' },
+  userName: { fontSize: 18, fontWeight: '900', color: '#1A1A1A' },
   userDesignation: { fontSize: 11, color: '#666', fontWeight: '600' },
   photoContainer: { width: 60, alignItems: 'flex-end' },
   userPhotoActual: { width: 65, height: 65, borderRadius: 8, marginTop: -40, borderWidth: 3, borderColor: '#FFF' },
+  userPhotoPlaceholder: { backgroundColor: 'rgba(0,0,0,0.2)', justifyContent: 'center', alignItems: 'center' },
   sectionTitle: { fontSize: 16, fontWeight: '700', margin: 20 },
   framesGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 15 },
-  frameCard: { width: '33.33%', height: 60, padding: 5 },
-  miniFrameUI: { flex: 1, borderRadius: 8, backgroundColor: '#F5F5F5', borderWidth: 1, borderColor: '#DDD' },
+  frameCard: { width: '33.33%', height: 80, padding: 6 },
+  miniFrameUI: { flex: 1, borderRadius: 10, backgroundColor: '#F5F5F5', borderWidth: 2, borderColor: '#E8E8E8', overflow: 'hidden' as const },
   buttonContainer: { padding: 25, gap: 12 },
-  shareBtn: { height: 55, borderRadius: 15, borderWidth: 2, borderColor: '#2ECC71', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
-  shareBtnText: { color: '#2ECC71', fontSize: 16, fontWeight: '800' },
-  downloadBtn: { height: 55, borderRadius: 15, backgroundColor: '#2ECC71', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
-  downloadBtnText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+  shareBtn: { height: 55, borderRadius: 15, backgroundColor: Colors.secondary, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
+  shareBtnText: { color: Colors.textOnPrimary, fontSize: 16, fontWeight: '800' },
+  downloadBtn: { height: 55, borderRadius: 15, backgroundColor: Colors.secondary, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
+  downloadBtnText: { color: Colors.textOnPrimary, fontSize: 16, fontWeight: '800' },
   captionList: { paddingHorizontal: 15, paddingBottom: 8 },
-  captionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#F5F5F5',
-    borderRadius: 8,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#DDD',
-  },
+  captionCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F5F5F5', borderRadius: 8, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#DDD' },
   captionCardText: { flex: 1, fontSize: 14, color: '#333', fontWeight: '500', lineHeight: 20, marginRight: 12 },
-  captionCopyBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-    backgroundColor: '#FFF',
-    borderWidth: 1,
-    borderColor: '#E8E0FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  toast: {
-    position: 'absolute',
-    bottom: 100,
-    left: 24,
-    right: 24,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#4B0082',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    gap: 8,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-  },
+  captionCopyBtn: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E8E0FF', justifyContent: 'center', alignItems: 'center' },
+  toast: { position: 'absolute', bottom: 100, left: 24, right: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.accent, paddingVertical: 12, paddingHorizontal: 20, borderRadius: 12, gap: 8, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4 },
   toastText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  modalContent: { backgroundColor: '#FFF', borderRadius: 20, padding: 28, alignItems: 'center', minWidth: 280 },
-  modalText: { marginTop: 16, fontSize: 15, color: '#333', fontWeight: '600', textAlign: 'center' },
-  offScreenFrame1: { position: 'absolute', left: -9999, top: 0, width: width - 20, zIndex: -1 },
-  frame1ShotWrap: { width: width - 20, backgroundColor: 'transparent' },
-  frame1OverlayExport: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'transparent' },
 });

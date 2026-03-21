@@ -21,16 +21,18 @@ import {
   X
 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
+import { supabase } from '@/lib/supabase';
+import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 
 // --- TYPES ---
 interface UserFrame {
-  id: number;
+  id: string | number;
   url: string;
   uploadDate: string;
 }
 
 interface AppUser {
-  id: number;
+  id: string | number;
   name: string;
   phone: string;
   email: string;
@@ -43,7 +45,7 @@ interface AppUser {
   dob: string;
   gender: string;
   address: string;
-  personalFrames: UserFrame[]; 
+  personalFrames: UserFrame[];
 }
 
 export default function UserManagement() {
@@ -51,57 +53,57 @@ export default function UserManagement() {
   const ITEMS_PER_PAGE = 10;
   const [currentPage, setCurrentPage] = useState(1);
 
-  // --- MOCK DATA ---
-  const [users, setUsers] = useState<AppUser[]>([
-    { 
-      id: 1, 
-      name: 'Mohit Sharma', 
-      phone: '+91 9540477457', 
-      email: 'mohit.meerut@gmail.com',
-      party: 'BJP', 
-      designation: 'District President', 
-      state: 'Uttar Pradesh', 
-      district: 'Meerut',
-      constituency: 'Meerut Cantt',
-      joinDate: '27 Feb 2026',
-      dob: '12-05-1988',
-      gender: 'Male',
-      address: 'House No. 45, Civil Lines, Near Stadium',
-      personalFrames: [{ id: 1001, url: 'https://placehold.co/400x500/png?text=Frame+A', uploadDate: '27 Feb 2026' }]
-    },
-    { 
-        id: 2, 
-        name: 'Rahul Verma', 
-        phone: '+91 8888877777', 
-        email: 'rahul.v@outlook.com',
-        party: 'INC', 
-        designation: 'Youth Leader', 
-        state: 'Maharashtra', 
-        district: 'Mumbai',
-        constituency: 'South Mumbai',
-        joinDate: '26 Feb 2026',
-        dob: '05-11-1992',
-        gender: 'Male',
-        address: 'Flat 202, Marine Drive Residency',
-        personalFrames: []
-    },
-    ...Array.from({ length: 25 }, (_, i) => ({
-      id: i + 3,
-      name: `Karyakarta ${i + 3}`,
-      phone: `+91 90000100${i < 10 ? '0'+i : i}`,
-      email: `user${i+3}@socialbot.in`,
-      party: i % 2 === 0 ? 'BJP' : 'INC',
-      designation: 'Active Member',
-      state: i % 2 === 0 ? 'Uttar Pradesh' : 'Maharashtra',
-      district: i % 2 === 0 ? 'Meerut' : 'Mumbai',
-      constituency: i % 2 === 0 ? 'Meerut South' : 'South Mumbai',
-      joinDate: '27 Feb 2026',
-      dob: '15-08-1990',
-      gender: 'Male',
-      address: 'Prahlad Nagar, City Center',
-      personalFrames: []
-    }))
-  ]);
+  const [users, setUsers] = useState<AppUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+
+  const mapProfileToAppUser = (row: Record<string, unknown>): AppUser => ({
+    id: typeof row.id === 'string' || typeof row.id === 'number' ? row.id : String(row.id ?? row.user_id ?? ''),
+    name: String(row.name ?? row.full_name ?? ''),
+    phone: String(row.phone ?? row.phone_number ?? ''),
+    email: String(row.email ?? ''),
+    party: normalizePartyId(String(row.party ?? row.party_name ?? '')),
+    designation: String(row.designation ?? ''),
+    state: String(row.state ?? ''),
+    district: String(row.district ?? ''),
+    constituency: String(row.constituency ?? row.assembly ?? ''),
+    joinDate: (row.join_date ?? row.created_at) ? new Date(String(row.join_date ?? row.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
+    dob: row.dob ? new Date(String(row.dob)).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '',
+    gender: String(row.gender ?? ''),
+    address: String(row.address ?? ''),
+    personalFrames: [],
+  });
+
+  useEffect(() => {
+    const fetchProfiles = async () => {
+      try {
+        const { data, error } = await supabase.from('profiles').select('*').order('join_date', { ascending: false });
+        if (error) {
+          console.error('Full Error:', error.message, error.details, error.hint);
+          setUsers([]);
+          return;
+        }
+        const mapped = (data || []).map((row) => mapProfileToAppUser(row as Record<string, unknown>));
+        setUsers(mapped);
+      } catch (err) {
+        console.error('fetchProfiles exception:', err);
+        setUsers([]);
+      } finally {
+        setUsersLoading(false);
+      }
+    };
+    fetchProfiles();
+
+    const channel = supabase
+      .channel('profiles-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+        fetchProfiles();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterParty, setFilterParty] = useState('All');
@@ -126,10 +128,10 @@ export default function UserManagement() {
       const matchesState = filterState === 'All' || u.state === filterState;
       const matchesDistrict = filterDistrict === 'All' || u.district === filterDistrict;
       const matchesConstituency = filterConstituency === 'All' || u.constituency === filterConstituency;
-      const matchesNewUsers = filterNewUsers === 'All' || u.joinDate === '27 Feb 2026';
+      const todayStr = new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+      const matchesNewUsers = filterNewUsers === 'All' || u.joinDate === todayStr;
       return matchesSearch && matchesParty && matchesState && matchesDistrict && matchesConstituency && matchesNewUsers;
-    })
-    .sort((a, b) => b.id - a.id);
+    });
 
   const totalPages = Math.ceil(filteredUsers.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
@@ -137,25 +139,78 @@ export default function UserManagement() {
 
   useEffect(() => { setCurrentPage(1); }, [searchQuery, filterParty, filterState, filterDistrict, filterConstituency, filterNewUsers]);
 
-  const handleBulkUploadFrames = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && selectedUser) {
-      const newFrames: UserFrame[] = Array.from(files).map((file, index) => ({
-        id: Date.now() + index,
-        url: URL.createObjectURL(file),
-        uploadDate: '27 Feb 2026'
-      }));
-      const updatedUsers = users.map(u => u.id === selectedUser.id ? { ...u, personalFrames: [...newFrames, ...u.personalFrames] } : u);
-      setUsers(updatedUsers);
-      setSelectedUser({ ...selectedUser, personalFrames: [...newFrames, ...selectedUser.personalFrames] });
-    }
+  const openUserProfile = async (user: AppUser) => {
+    setSelectedUser(user);
+    const { data } = await supabase.from('user_frames').select('id, url, created_at').eq('user_id', user.id).order('created_at', { ascending: false });
+    const frames: UserFrame[] = (data || []).map((row: { id: string; url: string; created_at: string }) => ({
+      id: row.id,
+      url: row.url,
+      uploadDate: row.created_at ? new Date(row.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
+    }));
+    setSelectedUser((prev) => (prev ? { ...prev, personalFrames: frames } : null));
+    setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, personalFrames: frames } : u)));
   };
 
-  const removePersonalFrame = (frameId: number) => {
+  const handleBulkUploadFrames = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || !selectedUser) return;
+
+    const pngFiles = Array.from(files).filter((f) => f.type === 'image/png' || f.name.toLowerCase().endsWith('.png'));
+    if (pngFiles.length === 0) return;
+
+    const newFrames: UserFrame[] = [];
+    for (const file of pngFiles) {
+      const storagePath = `public/${selectedUser.id}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+      const { error: uploadErr } = await supabase.storage.from('user-frames').upload(storagePath, file, { upsert: true });
+      if (uploadErr) {
+        console.error('Frame upload error:', uploadErr);
+        continue;
+      }
+      const { data: urlData } = supabase.storage.from('user-frames').getPublicUrl(storagePath);
+      const imageUrl = urlData.publicUrl;
+
+      const { data: insertData, error: insertErr } = await supabase
+        .from('user_frames')
+        .insert({ user_id: selectedUser.id, url: imageUrl })
+        .select('id, url, created_at')
+        .single();
+
+      if (insertErr) {
+        console.error('user_frames insert error:', insertErr);
+        continue;
+      }
+
+      const frame: UserFrame = {
+        id: insertData.id,
+        url: insertData.url,
+        uploadDate: insertData.created_at ? new Date(insertData.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
+      };
+      newFrames.push(frame);
+    }
+
+    if (newFrames.length > 0) {
+      const updatedFrames = [...newFrames, ...selectedUser.personalFrames];
+      setUsers((prev) => prev.map((u) => (u.id === selectedUser.id ? { ...u, personalFrames: updatedFrames } : u)));
+      setSelectedUser({ ...selectedUser, personalFrames: updatedFrames });
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const getStoragePathFromFrameUrl = (url: string): string | null => {
+    const match = url.match(/\/user-frames\/(.+)$/);
+    return match ? decodeURIComponent(match[1]) : null;
+  };
+
+  const removePersonalFrame = async (frameId: string | number) => {
     if (!selectedUser) return;
-    const updatedFrames = selectedUser.personalFrames.filter(f => f.id !== frameId);
-    const updatedUsers = users.map(u => u.id === selectedUser.id ? { ...u, personalFrames: updatedFrames } : u);
-    setUsers(updatedUsers);
+    const frame = selectedUser.personalFrames.find((f) => f.id === frameId);
+    if (frame) {
+      const filePath = getStoragePathFromFrameUrl(frame.url);
+      if (filePath) await supabase.storage.from('user-frames').remove([filePath]);
+      await supabase.from('user_frames').delete().eq('id', frameId);
+    }
+    const updatedFrames = selectedUser.personalFrames.filter((f) => f.id !== frameId);
+    setUsers((prev) => prev.map((u) => (u.id === selectedUser.id ? { ...u, personalFrames: updatedFrames } : u)));
     setSelectedUser({ ...selectedUser, personalFrames: updatedFrames });
   };
 
@@ -172,7 +227,12 @@ export default function UserManagement() {
             <p className="font-black text-xl text-slate-900">Delete User?</p>
             <div className="flex gap-4">
               <button onClick={() => setIsDeleting(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold">Cancel</button>
-              <button onClick={() => {setUsers(users.filter(u => u.id !== isDeleting.id)); setIsDeleting(null);}} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold shadow-lg shadow-red-200 transition-all active:scale-95">Delete</button>
+              <button onClick={async () => {
+                await supabase.from('profiles').delete().eq('id', isDeleting.id);
+                setUsers((prev) => prev.filter((u) => u.id !== isDeleting.id));
+                if (selectedUser?.id === isDeleting.id) setSelectedUser(null);
+                setIsDeleting(null);
+              }} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold shadow-lg shadow-red-200 transition-all active:scale-95">Delete</button>
             </div>
           </div>
         </div>
@@ -188,7 +248,7 @@ export default function UserManagement() {
                 <div>
                     <h2 className="text-4xl font-black tracking-tight leading-none">{selectedUser.name}</h2>
                     <div className="flex items-center gap-4 mt-3">
-                        <span className="bg-blue-600 text-[11px] font-black uppercase px-3 py-1 rounded-lg tracking-widest">{selectedUser.party} Member</span>
+                        <span className="bg-blue-600 text-[11px] font-black uppercase px-3 py-1 rounded-lg tracking-widest">{getPartyLabel(selectedUser.party)} Member</span>
                         <span className="text-slate-500 font-bold text-xs uppercase tracking-widest italic">Since {selectedUser.joinDate}</span>
                     </div>
                 </div>
@@ -275,8 +335,9 @@ export default function UserManagement() {
               <span className="text-[9px] font-black text-slate-400 uppercase block">Political Party</span>
               <select value={filterParty} onChange={e => setFilterParty(e.target.value)} className="w-full bg-transparent outline-none font-bold text-slate-800">
                 <option value="All">All Parties</option>
-                <option value="BJP">BJP</option>
-                <option value="INC">INC</option>
+                {PARTIES_DATA.map((p) => (
+                  <option key={p.id} value={p.id}>{p.shortName}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -314,6 +375,9 @@ export default function UserManagement() {
       </div>
 
       {/* USER LIST GRID */}
+      {usersLoading ? (
+        <div className="py-20 text-center text-slate-400 font-bold text-sm">Loading users…</div>
+      ) : (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
         {paginatedUsers.map((user) => (
           <div key={user.id} className="bg-white p-7 rounded-[45px] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group flex flex-col relative overflow-hidden border-b-4 border-b-transparent hover:border-b-blue-600">
@@ -324,17 +388,18 @@ export default function UserManagement() {
               <div className="w-14 h-14 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-400 group-hover:bg-blue-600 group-hover:text-white transition-all shadow-inner"><User size={24} /></div>
               <div>
                 <h4 className="font-black text-slate-900 text-base leading-tight tracking-tight">{user.name}</h4>
-                <p className="text-[9px] font-black text-blue-600 uppercase tracking-widest mt-1">{user.party}</p>
+                <p className="text-[9px] font-black text-blue-600 uppercase tracking-widest mt-1">{getPartyLabel(user.party)}</p>
               </div>
             </div>
             <div className="space-y-2 mb-6 text-xs font-bold text-slate-500">
               <div className="flex items-center gap-3"><Phone size={14} className="text-slate-300" /> {user.phone}</div>
               <div className="flex items-center gap-3"><MapPin size={14} className="text-slate-300" /> {user.district}</div>
             </div>
-            <button onClick={() => setSelectedUser(user)} className="mt-auto w-full py-4 bg-slate-50 rounded-2xl text-[9px] font-black uppercase tracking-widest text-blue-600 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center gap-2 active:scale-95 shadow-inner">Profile & Frames <ExternalLink size={14} /></button>
+            <button onClick={() => openUserProfile(user)} className="mt-auto w-full py-4 bg-slate-50 rounded-2xl text-[9px] font-black uppercase tracking-widest text-blue-600 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center gap-2 active:scale-95 shadow-inner">Profile & Frames <ExternalLink size={14} /></button>
           </div>
         ))}
       </div>
+      )}
 
       {/* PAGINATION UI */}
       {totalPages > 1 && (
@@ -349,7 +414,7 @@ export default function UserManagement() {
 
       {filteredUsers.length === 0 && (
         <div className="py-20 text-center bg-slate-50 rounded-[40px] border-2 border-dashed border-slate-100">
-          <p className="text-slate-400 font-black uppercase tracking-widest text-sm italic">Bhai, is criteria mein koi user nahi mila.</p>
+          <p className="text-slate-400 font-black uppercase tracking-widest text-sm italic">No users match the selected criteria.</p>
         </div>
       )}
     </div>

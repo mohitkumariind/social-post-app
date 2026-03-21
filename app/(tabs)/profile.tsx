@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
@@ -14,6 +13,7 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 
@@ -24,10 +24,10 @@ export default function ProfileScreen() {
   const { t } = useLang();
   const { userInfo } = useUser();
 
-  const currentPhoto = userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0] || 'https://via.placeholder.com/150';
+  const currentPhoto = userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0]?.trim() ?? '';
 
   const handleRateApp = () => {
-    const GOOGLE_PACKAGE_NAME = 'com.mohit.socialpost';
+    const GOOGLE_PACKAGE_NAME = 'com.mohit.socialpost.app';
     const url = Platform.OS === 'android'
       ? `market://details?id=${GOOGLE_PACKAGE_NAME}`
       : `https://play.google.com/store/apps/details?id=${GOOGLE_PACKAGE_NAME}`;
@@ -38,9 +38,9 @@ export default function ProfileScreen() {
     <TouchableOpacity style={styles.menuItem} onPress={onPress} activeOpacity={0.7}>
       <View style={styles.menuLeft}>
         <View style={[styles.iconCircle, isLogout && { backgroundColor: '#FFF0F0' }]}>
-          <Ionicons name={icon as any} size={22} color={isLogout ? "#FF4D4D" : "#333"} />
+          <Ionicons name={icon as any} size={22} color={isLogout ? Colors.error : Colors.text} />
         </View>
-        <Text style={[styles.menuLabel, isLogout && { color: "#FF4D4D" }]}>{label}</Text>
+        <Text style={[styles.menuLabel, isLogout && { color: Colors.error }]}>{label}</Text>
       </View>
       <Ionicons name="chevron-forward" size={18} color="#CCC" />
     </TouchableOpacity>
@@ -50,17 +50,23 @@ export default function ProfileScreen() {
     <SafeAreaView style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.topSection}>
-          <LinearGradient colors={['#D4FC79', '#96E6A1']} style={styles.gradientBg} />
+          <View style={[styles.gradientBg, { backgroundColor: Colors.primary }]} />
           <View style={styles.headerNav}>
             <TouchableOpacity onPress={() => router.back()} style={styles.navBtn}>
-              <Ionicons name="chevron-back" size={22} color="#333" />
+              <Ionicons name="chevron-back" size={22} color={Colors.text} />
             </TouchableOpacity>
             <Text style={styles.headerTitle}>{t('my_profile')}</Text>
             <View style={{ width: 40 }} />
           </View>
           <View style={styles.profileInfo}>
             <View style={styles.avatarWrapper}>
-              <Image source={{ uri: currentPhoto }} style={styles.mainAvatar} />
+              {currentPhoto ? (
+                <Image source={{ uri: currentPhoto }} style={styles.mainAvatar} />
+              ) : (
+                <View style={[styles.mainAvatar, styles.avatarPlaceholderInner]}>
+                  <Ionicons name="person" size={48} color={Colors.textMuted} />
+                </View>
+              )}
             </View>
             <Text style={styles.userName}>{userInfo?.name || t('default_user_name')}</Text>
             <Text style={styles.userRole}>{userInfo?.designation || t('default_designation_profile')}</Text>
@@ -87,22 +93,23 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
+  container: { flex: 1, backgroundColor: Colors.background },
   topSection: { height: 400, alignItems: 'center' },
   gradientBg: { position: 'absolute', top: 0, width: width, height: 220, borderBottomLeftRadius: 60, borderBottomRightRadius: 60 },
   headerNav: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: Platform.OS === 'android' ? 40 : 10 },
-  navBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center', elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
-  headerTitle: { fontSize: 18, fontWeight: '800', color: '#333' },
+  navBtn: { width: 40, height: 40, borderRadius: Colors.borderRadiusSm, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  headerTitle: { fontSize: 18, fontWeight: '800', color: Colors.headerColor, fontFamily: Colors.fontFamilyBold },
   profileInfo: { alignItems: 'center', marginTop: 35, zIndex: 10 },
   avatarWrapper: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#FFF', padding: 4, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.2, shadowRadius: 8 },
   mainAvatar: { width: '100%', height: '100%', borderRadius: 60 },
-  userName: { fontSize: 24, fontWeight: '800', marginTop: 20, color: '#1A1A1A' },
-  userRole: { fontSize: 14, color: '#666', marginTop: 5, fontWeight: '500' },
-  editProfileBtn: { marginTop: 20, backgroundColor: '#333', paddingHorizontal: 30, paddingVertical: 12, borderRadius: 25 },
+  avatarPlaceholderInner: { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
+  userName: { fontSize: 24, fontWeight: '800', marginTop: 20, color: Colors.headerColor, fontFamily: Colors.fontFamilyBold },
+  userRole: { fontSize: 14, color: Colors.textMuted, marginTop: 5, fontWeight: '500' },
+  editProfileBtn: { marginTop: 20, backgroundColor: Colors.primary, paddingHorizontal: 30, paddingVertical: 12, borderRadius: Colors.borderRadius },
   editBtnText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
   menuContainer: { paddingHorizontal: 25, marginTop: 10 },
   menuItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#F8F8F8' },
   menuLeft: { flexDirection: 'row', alignItems: 'center', gap: 15 },
-  iconCircle: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#F9FAFB', justifyContent: 'center', alignItems: 'center' },
-  menuLabel: { fontSize: 15, fontWeight: '600', color: '#333' }
+  iconCircle: { width: 42, height: 42, borderRadius: Colors.borderRadiusSm, backgroundColor: Colors.cardBg, justifyContent: 'center', alignItems: 'center', ...Colors.cardShadow, elevation: Colors.cardElevation },
+  menuLabel: { fontSize: 15, fontWeight: '600', color: Colors.text }
 });

@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
+import { Colors } from '../../constants/Colors';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
@@ -22,7 +22,7 @@ export default function ReferEarnScreen() {
   const router = useRouter();
 
   // Yahan apna Play Store ka link daalein
-  const playStoreLink = "https://play.google.com/store/apps/details?id=com.socialpost.app"; 
+  const playStoreLink = 'https://play.google.com/store/apps/details?id=com.mohit.socialpost.app'; 
 
   const onShare = async () => {
     try {
@@ -43,7 +43,7 @@ export default function ReferEarnScreen() {
       {/* --- HEADER --- */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={24} color="#333" />
+          <Ionicons name="chevron-back" size={24} color={Colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Sena Vistar (Invite)</Text>
         <View style={{ width: 40 }} /> 
@@ -53,16 +53,13 @@ export default function ReferEarnScreen() {
         
         {/* --- HERO BANNER --- */}
         <View style={styles.heroSection}>
-          <LinearGradient 
-            colors={['#182848', '#4B6CB7']} 
-            style={styles.heroCard}
-          >
+          <View style={[styles.heroCard, { backgroundColor: Colors.primary }]}>
             <View style={styles.heroIconWrap}>
-               <Ionicons name="megaphone-outline" size={50} color="#FFD700" />
+               <Ionicons name="megaphone-outline" size={50} color={Colors.textOnPrimary} />
             </View>
-            <Text style={styles.heroTitle}>Sena Badhayein!</Text>
-            <Text style={styles.heroSub}>Naye saathiyon ko jodein aur Party ki awaaz ko buland karein.</Text>
-          </LinearGradient>
+            <Text style={[styles.heroTitle, { color: Colors.textOnPrimary }]}>Sena Badhayein!</Text>
+            <Text style={[styles.heroSub, { color: 'rgba(255,255,255,0.9)' }]}>Naye saathiyon ko jodein aur Party ki awaaz ko buland karein.</Text>
+          </View>
         </View>
 
         {/* --- INVITE ACTION CARD --- */}
@@ -74,17 +71,17 @@ export default function ReferEarnScreen() {
           </Text>
 
           <TouchableOpacity style={styles.shareBtn} onPress={onShare} activeOpacity={0.8}>
-            <LinearGradient colors={['#25D366', '#128C7E']} style={styles.btnGradient}>
+            <View style={[styles.btnGradient, { backgroundColor: Colors.primary }]}>
                <Ionicons name="share-social" size={20} color="#FFF" />
-               <Text style={styles.shareBtnText}>Invite Now</Text>
-            </LinearGradient>
+               <Text style={[styles.shareBtnText, { color: '#FFF' }]}>Invite Now</Text>
+            </View>
           </TouchableOpacity>
         </View>
 
         {/* --- STATS (Optional - Keeping it simple) --- */}
         <View style={styles.infoSection}>
            <View style={styles.infoRow}>
-              <Ionicons name="flash-outline" size={20} color="#4B6CB7" />
+              <Ionicons name="flash-outline" size={20} color={Colors.primary} />
               <Text style={styles.infoText}>Link share karte hi aapki Digital Army badhne lagegi.</Text>
            </View>
         </View>
@@ -95,7 +92,7 @@ export default function ReferEarnScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
+  container: { flex: 1, backgroundColor: Colors.background },
   header: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
@@ -107,23 +104,23 @@ const styles = StyleSheet.create({
     marginTop: Platform.OS === 'android' ? 0 : 0, 
   },
   backBtn: { width: 40, height: 40, justifyContent: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '800', color: '#182848' },
+  headerTitle: { fontSize: 18, fontWeight: '800', color: Colors.text },
   
   heroSection: { padding: 20 },
-  heroCard: { padding: 30, borderRadius: 30, alignItems: 'center', elevation: 8 },
+  heroCard: { padding: 30, borderRadius: 12, alignItems: 'center', elevation: 2 },
   heroIconWrap: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
   heroTitle: { fontSize: 24, fontWeight: '900', color: '#FFF', marginTop: 15 },
   heroSub: { fontSize: 14, color: 'rgba(255,255,255,0.8)', textAlign: 'center', marginTop: 8, lineHeight: 20 },
 
-  inviteCard: { marginHorizontal: 20, backgroundColor: '#FFF', padding: 30, borderRadius: 30, elevation: 5, alignItems: 'center', marginTop: 10 },
+  inviteCard: { marginHorizontal: 20, backgroundColor: Colors.cardBg, padding: 30, borderRadius: Colors.borderRadius, ...Colors.cardShadow, elevation: Colors.cardElevation, alignItems: 'center', marginTop: 10 },
   inviteTitle: { fontSize: 20, fontWeight: '800', color: '#333', marginTop: 15 },
   inviteDesc: { fontSize: 13, color: '#666', textAlign: 'center', marginTop: 10, lineHeight: 20, paddingHorizontal: 10 },
   
   shareBtn: { width: '100%', marginTop: 25, elevation: 5 },
-  btnGradient: { flexDirection: 'row', paddingVertical: 16, borderRadius: 20, justifyContent: 'center', alignItems: 'center', gap: 10 },
+  btnGradient: { flexDirection: 'row', paddingVertical: 16, borderRadius: 12, justifyContent: 'center', alignItems: 'center', gap: 10 },
   shareBtnText: { color: '#FFF', fontWeight: '800', fontSize: 18 },
 
   infoSection: { padding: 30 },
-  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#F0F4FF', padding: 15, borderRadius: 15 },
-  infoText: { fontSize: 12, color: '#4B6CB7', fontWeight: '600', flex: 1 }
+  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: Colors.cardBg, padding: 16, borderRadius: Colors.borderRadius, ...Colors.cardShadow, elevation: Colors.cardElevation },
+  infoText: { fontSize: 12, color: Colors.primary, fontWeight: '600', flex: 1 }
 });

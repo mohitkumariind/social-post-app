@@ -1,37 +1,51 @@
+import { Colors } from '../constants/Colors';
 import { useRouter } from 'expo-router';
-import React, { useEffect } from 'react';
-import { Platform, StatusBar, StyleSheet, Text, View } from 'react-native';
-import { useLang } from '../context/LanguageContext';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, Image, StatusBar, StyleSheet, Text, View } from 'react-native';
 
 export default function SplashScreen() {
   const router = useRouter();
-  const { t } = useLang();
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [dots, setDots] = useState('.');
 
   useEffect(() => {
-    // 3 second ka timer taaki user logo dekh sake
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 800,
+      useNativeDriver: true,
+    }).start();
+  }, [fadeAnim]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDots((prev) => (prev === '.' ? '..' : prev === '..' ? '...' : '.'));
+    }, 400);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     const timer = setTimeout(() => {
-      // Ab hum login ke bajaye seedha language selection par bhej rahe hain
       router.replace('/language');
     }, 3000);
-    
     return () => clearTimeout(timer);
   }, []);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: '#FFFFFF' }]}>
       <StatusBar hidden={true} />
-      
       <View style={styles.content}>
-        {/* Logo Placeholder */}
-        <View style={styles.logoPlaceholder}>
-          <Text style={styles.logoText}>S</Text>
-        </View>
-        
-        <Text style={styles.brandName}>{t('brand_name')}</Text>
-        <Text style={styles.tagline}>{t('tagline')}</Text>
-        
-        <View style={styles.loaderContainer}>
-          <Text style={styles.loadingText}>{t('initializing')}</Text>
+        <Animated.View style={[styles.logoWrapper, { opacity: fadeAnim }]}>
+          <Image
+            source={require('../assets/logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+        </Animated.View>
+        <Animated.Text style={[styles.tagline, { opacity: fadeAnim }]} numberOfLines={1}>
+          Connecting Leaders  {'\u2022'}  Connecting People
+        </Animated.Text>
+        <View style={styles.initializingRow}>
+          <Text style={styles.initializingText}>Initializing{dots}</Text>
         </View>
       </View>
     </View>
@@ -41,49 +55,43 @@ export default function SplashScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FCAC12', // Aapka Brand Color
     justifyContent: 'center',
     alignItems: 'center',
   },
   content: {
     alignItems: 'center',
+    paddingVertical: 48,
   },
-  logoPlaceholder: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#FFFFFF',
+  logoWrapper: {
+    width: 360,
+    height: 360,
+    marginBottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
-    ...Platform.select({
-      web: { boxShadow: '0px 4px 10px rgba(0,0,0,0.1)' },
-      android: { elevation: 5 }
-    })
+    zIndex: 1,
   },
-  logoText: {
-    fontSize: 50,
-    fontWeight: 'bold',
-    color: '#FCAC12',
-  },
-  brandName: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    letterSpacing: 1,
+  logo: {
+    width: 360,
+    height: 360,
   },
   tagline: {
+    color: '#262626',
     fontSize: 14,
-    color: 'rgba(255,255,255,0.9)',
-    marginTop: 5,
+    fontWeight: 'bold',
+    fontFamily: Colors.fontFamilyBold,
+    letterSpacing: 0.3,
+    textAlign: 'center',
+    marginTop: -50,
+    marginBottom: 32,
+    zIndex: 10,
+  },
+  initializingRow: {
+    paddingTop: 16,
+  },
+  initializingText: {
+    color: Colors.textMuted,
+    fontSize: 14,
     fontWeight: '500',
+    fontFamily: Colors.fontFamily,
   },
-  loaderContainer: {
-    marginTop: 40,
-  },
-  loadingText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    opacity: 0.7,
-  }
 });

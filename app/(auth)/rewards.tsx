@@ -1,5 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
+import { Colors } from '../../constants/Colors';
+import { useLang } from '../../context/LanguageContext';
+import { useUser } from '../../context/UserContext';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import React, { useRef } from 'react';
@@ -22,8 +24,8 @@ const ALL_RANKS = [
   { lv: 1, name: 'Volunteer', icon: 'person', color: '#95A5A6' },
   { lv: 2, name: 'Guard', icon: 'shield', color: '#7F8C8D' },
   { lv: 3, name: 'Soldier', icon: 'shield-half', color: '#27AE60' },
-  { lv: 4, name: 'Commando', icon: 'shield-checkmark', color: '#2980B9' },
-  { lv: 5, name: 'Captain', icon: 'star', color: '#8E44AD' },
+  { lv: 4, name: 'Commando', icon: 'shield-checkmark', color: Colors.primary },
+  { lv: 5, name: 'Captain', icon: 'star', color: Colors.accent },
   { lv: 6, name: 'Commander', icon: 'star-half', color: '#D35400' },
   { lv: 7, name: 'Chief', icon: 'star-sharp', color: '#C0392B' },
   { lv: 8, name: 'Marshal', icon: 'ribbon', color: '#16A085' },
@@ -33,14 +35,17 @@ const ALL_RANKS = [
 
 export default function RewardsScreen() {
   const router = useRouter();
+  const { t } = useLang();
+  const { userInfo } = useUser();
   const viewShotRef = useRef<any>(null);
 
-  const currentLevel = 4; // User Level
-  const currentPoints = 2450;
+  const displayName = (userInfo?.name ?? '').trim() || t('default_user_name');
+  const currentLevel = 1;
+  const currentPoints = 0;
   const nextLevelPoints = 5000;
-  const progress = (currentPoints / nextLevelPoints) * 100;
-  
-  const earnedBadges = ALL_RANKS.filter(rank => rank.lv <= currentLevel);
+  const progress = nextLevelPoints > 0 ? Math.min(100, (currentPoints / nextLevelPoints) * 100) : 0;
+
+  const earnedBadges = ALL_RANKS.filter((rank) => rank.lv <= currentLevel);
 
   const captureAndShare = async () => {
     if (Platform.OS === 'web') {
@@ -61,7 +66,7 @@ export default function RewardsScreen() {
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()}><Ionicons name="chevron-back" size={24} color="#333" /></TouchableOpacity>
         <Text style={styles.headerTitle}>Army Rewards</Text>
-        <TouchableOpacity onPress={captureAndShare}><Ionicons name="share-social-outline" size={24} color="#333" /></TouchableOpacity>
+        <TouchableOpacity onPress={captureAndShare}><Ionicons name="share-social-outline" size={24} color={Colors.text} /></TouchableOpacity>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 60 }}>
@@ -69,22 +74,22 @@ export default function RewardsScreen() {
         {/* --- TOP: CERTIFICATE --- */}
         <View style={styles.certContainer}>
           <ViewShot ref={viewShotRef} options={{ format: "png", quality: 1.0 }}>
-            <LinearGradient colors={['#1e3c72', '#2a5298']} style={styles.certCard}>
-              <View style={styles.certWatermark}><Ionicons name="medal" size={180} color="rgba(255,255,255,0.05)" /></View>
+            <View style={[styles.certCard, { backgroundColor: Colors.cardBg }]}>
+              <View style={styles.certWatermark}><Ionicons name="medal" size={180} color="rgba(0,0,0,0.05)" /></View>
               <View style={styles.certHeader}>
-                <Ionicons name="ribbon" size={40} color="#FFD700" />
+                <Ionicons name="ribbon" size={40} color={Colors.primary} />
                 <Text style={styles.certRankTitle}>CURRENT ACHIEVEMENT</Text>
               </View>
               <View style={styles.certBody}>
-                <Text style={styles.userName}>Mohit Kumar</Text>
+                <Text style={styles.userName}>{displayName}</Text>
                 <Text style={styles.userRankText}>{ALL_RANKS[currentLevel-1].name} - Social Media</Text>
                 <View style={styles.divider} />
                 <Text style={styles.certQuote}>"Serving on the Digital Frontline"</Text>
               </View>
-            </LinearGradient>
+            </View>
           </ViewShot>
           <TouchableOpacity style={styles.actionBtn} onPress={captureAndShare}>
-            <Ionicons name="logo-whatsapp" size={18} color="#182848" />
+            <Ionicons name="logo-whatsapp" size={18} color="#FFF" />
             <Text style={styles.actionBtnText}>Share Status</Text>
           </TouchableOpacity>
         </View>
@@ -92,7 +97,7 @@ export default function RewardsScreen() {
         {/* --- MIDDLE: TRACKER --- */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Promotion Tracker</Text>
-          <LinearGradient colors={['#182848', '#4B6CB7']} style={styles.progressCard}>
+          <View style={[styles.progressCard, { backgroundColor: Colors.cardBg }]}>
              <View style={styles.levelRow}>
                 <View style={styles.levelCircle}><Text style={styles.levelText}>{currentLevel}</Text></View>
                 <View style={{marginLeft: 15}}>
@@ -102,7 +107,7 @@ export default function RewardsScreen() {
              </View>
              <View style={styles.barBg}><View style={[styles.barFill, {width: `${progress}%`}]} /></View>
              <Text style={styles.pointsHint}>{nextLevelPoints - currentPoints} points left for promotion</Text>
-          </LinearGradient>
+          </View>
         </View>
 
         {/* --- REDESIGNED: EARNED RANK BADGES (Premium Medallion Cards) --- */}
@@ -162,45 +167,45 @@ export default function RewardsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FB' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, height: 60, backgroundColor: '#FFF', marginTop: Platform.OS === 'android' ? 35 : 0 },
+  container: { flex: 1, backgroundColor: Colors.background },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, height: 60, backgroundColor: Colors.background, marginTop: Platform.OS === 'android' ? 35 : 0 },
   headerTitle: { fontSize: 17, fontWeight: '800' },
   
   certContainer: { padding: 20, alignItems: 'center' },
-  certCard: { height: 280, width: width - 40, borderRadius: 25, padding: 20, alignItems: 'center', justifyContent: 'center' },
+  certCard: { height: 280, width: width - 40, borderRadius: Colors.borderRadius, padding: 24, alignItems: 'center', justifyContent: 'center', ...Colors.cardShadow, elevation: Colors.cardElevation },
   certWatermark: { position: 'absolute' },
   certHeader: { alignItems: 'center', marginBottom: 10 },
-  certRankTitle: { color: '#FFD700', fontSize: 14, fontWeight: '900', letterSpacing: 2 },
+  certRankTitle: { color: Colors.primary, fontSize: 14, fontWeight: '900', letterSpacing: 2 },
   certBody: { alignItems: 'center' },
-  userName: { color: '#FFF', fontSize: 26, fontWeight: '800' },
-  userRankText: { color: '#FFD700', fontSize: 16, fontWeight: '700', marginTop: 5 },
-  divider: { height: 2, width: 80, backgroundColor: 'rgba(255,215,0,0.5)', marginVertical: 15 },
-  certQuote: { color: '#FFF', fontSize: 12, opacity: 0.8, fontStyle: 'italic' },
-  actionBtn: { flexDirection: 'row', backgroundColor: '#FFD700', paddingHorizontal: 25, paddingVertical: 12, borderRadius: 25, gap: 10, marginTop: -25, elevation: 5 },
-  actionBtnText: { fontWeight: '800', color: '#182848' },
+  userName: { color: Colors.text, fontSize: 26, fontWeight: '800' },
+  userRankText: { color: Colors.textMuted, fontSize: 16, fontWeight: '700', marginTop: 5 },
+  divider: { height: 2, width: 80, backgroundColor: Colors.borderLight, marginVertical: 16 },
+  certQuote: { color: Colors.textMuted, fontSize: 12, fontWeight: '500', fontStyle: 'italic' },
+  actionBtn: { flexDirection: 'row', backgroundColor: Colors.primary, paddingHorizontal: 25, paddingVertical: 12, borderRadius: 12, gap: 10, marginTop: -25, elevation: 4 },
+  actionBtnText: { fontWeight: '800', color: '#FFF' },
 
   section: { marginTop: 30, paddingHorizontal: 20 },
-  sectionLabel: { fontSize: 18, fontWeight: '900', color: '#182848', marginBottom: 15 },
+  sectionLabel: { fontSize: 18, fontWeight: '900', color: Colors.text, marginBottom: 15 },
   
-  progressCard: { padding: 20, borderRadius: 20, elevation: 3 },
+  progressCard: { padding: 20, borderRadius: Colors.borderRadius, ...Colors.cardShadow, elevation: Colors.cardElevation },
   levelRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
-  levelCircle: { width: 50, height: 50, borderRadius: 25, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#FFD700' },
-  levelText: { color: '#FFD700', fontSize: 22, fontWeight: '900' },
-  lvLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 10 },
-  lvName: { color: '#FFF', fontSize: 18, fontWeight: '800' },
-  barBg: { height: 8, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 4 },
-  barFill: { height: '100%', backgroundColor: '#FFD700', borderRadius: 4 },
-  pointsHint: { color: 'rgba(255,255,255,0.6)', fontSize: 11, marginTop: 10 },
+  levelCircle: { width: 50, height: 50, borderRadius: 25, backgroundColor: 'rgba(67, 160, 71, 0.15)', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: Colors.primary },
+  levelText: { color: Colors.primary, fontSize: 22, fontWeight: '900' },
+  lvLabel: { color: Colors.textMuted, fontSize: 10 },
+  lvName: { color: Colors.text, fontSize: 18, fontWeight: '800' },
+  barBg: { height: 8, backgroundColor: Colors.borderLight, borderRadius: 4 },
+  barFill: { height: '100%', backgroundColor: Colors.primary, borderRadius: 4 },
+  pointsHint: { color: Colors.textMuted, fontSize: 11, marginTop: 10 },
 
   /* --- BADGES REDESIGN --- */
   badgesHorizontalScroll: { paddingRight: 20, paddingBottom: 10 },
-  badgeVerticalCard: { width: 110, backgroundColor: '#FFF', borderRadius: 20, padding: 15, alignItems: 'center', marginRight: 15, elevation: 4, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 5 },
+  badgeVerticalCard: { width: 110, backgroundColor: Colors.white, borderRadius: 12, padding: 16, alignItems: 'center', marginRight: 16, elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4 },
   badgeIconCircle: { width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', marginBottom: 12, elevation: 2 },
   badgeNameLabel: { fontSize: 11, fontWeight: '800', color: '#333', textAlign: 'center' },
   badgeLvlSub: { fontSize: 9, color: '#999', marginTop: 4, fontWeight: 'bold' },
 
   /* --- PODIUM --- */
-  podiumContainer: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', backgroundColor: '#FFF', paddingVertical: 25, borderRadius: 25, elevation: 2 },
+  podiumContainer: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', backgroundColor: Colors.cardBg, paddingVertical: 24, borderRadius: Colors.borderRadius, ...Colors.cardShadow, elevation: Colors.cardElevation },
   podiumSlot: { alignItems: 'center', width: (width - 100) / 3 },
   podiumName: { fontSize: 12, fontWeight: '800', marginVertical: 8 },
   podiumBar: { width: '85%', borderTopLeftRadius: 10, borderTopRightRadius: 10, justifyContent: 'center', alignItems: 'center' },

@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Colors } from '../../constants/Colors';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
@@ -32,7 +33,7 @@ export default function PrivacyPolicyScreen() {
       {/* --- HEADER --- */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="close" size={26} color="#333" />
+          <Ionicons name="close" size={26} color={Colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Privacy Policy</Text>
         <View style={{ width: 40 }} />
@@ -42,7 +43,7 @@ export default function PrivacyPolicyScreen() {
         
         {/* --- BRANDING SECTION --- */}
         <View style={styles.introBox}>
-          <Ionicons name="shield-checkmark-sharp" size={50} color="#182848" />
+          <Ionicons name="shield-checkmark-sharp" size={50} color={Colors.primary} />
           <Text style={styles.appName}>{APP_NAME}</Text>
           <Text style={styles.lastUpdated}>Last Updated: Feb 20, 2026</Text>
         </View>
@@ -108,28 +109,27 @@ const styles = StyleSheet.create({
     shadowRadius: 5
   },
   backBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '800', color: '#333' },
+  headerTitle: { fontSize: 18, fontWeight: '800', color: Colors.text },
   
   scrollContent: { padding: 20 },
   introBox: { alignItems: 'center', marginBottom: 30 },
-  appName: { fontSize: 24, fontWeight: '900', color: '#182848', marginTop: 10 },
+  appName: { fontSize: 24, fontWeight: '900', color: Colors.text, marginTop: 10 },
   lastUpdated: { fontSize: 12, color: '#999', marginTop: 5 },
 
   contentCard: { 
-    backgroundColor: '#FFF', 
-    borderRadius: 20, 
+    backgroundColor: Colors.cardBg, 
+    borderRadius: Colors.borderRadius, 
     padding: 20, 
-    elevation: 1, 
-    borderWidth: 1, 
-    borderColor: '#EEE' 
+    ...Colors.cardShadow,
+    elevation: Colors.cardElevation,
   },
   section: { marginBottom: 25 },
-  sectionTitle: { fontSize: 16, fontWeight: '800', color: '#182848', marginBottom: 8 },
+  sectionTitle: { fontSize: 16, fontWeight: '800', color: Colors.text, marginBottom: 8 },
   sectionContent: { fontSize: 14, color: '#555', lineHeight: 22 },
 
   contactBox: { marginTop: 10, padding: 15, backgroundColor: '#F0F4FF', borderRadius: 12, alignItems: 'center' },
-  contactTitle: { fontSize: 15, fontWeight: '800', color: '#182848' },
-  contactText: { fontSize: 13, color: '#4B6CB7', marginTop: 5 },
+  contactTitle: { fontSize: 15, fontWeight: '800', color: Colors.text },
+  contactText: { fontSize: 13, color: Colors.primary, marginTop: 5 },
 
   footerNote: { textAlign: 'center', fontSize: 11, color: '#BBB', marginTop: 30, marginBottom: 20 }
 });

@@ -1,8 +1,8 @@
 'use client';
 
-import { usePathname } from 'next/navigation';
 import Navbar from '@/components/admin/Navbar';
 import Sidebar from '@/components/admin/Sidebar';
+import { usePathname } from 'next/navigation';
 
 const PAGE_TITLES: Record<string, string> = {
   '/admin': 'Dashboard',
@@ -10,7 +10,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/admin/posts/new': 'New Post',
   '/admin/parties': 'Parties',
   '/admin/geography': 'Geography',
-  '/admin/frames': 'Frames',
+  '/admin/reels': 'Upload Reel',
   '/admin/users': 'Users',
 };
 
@@ -18,6 +18,7 @@ function getTitle(pathname: string): string {
   if (PAGE_TITLES[pathname]) return PAGE_TITLES[pathname];
   if (pathname.startsWith('/admin/posts/new')) return 'New Post';
   if (pathname.startsWith('/admin/posts')) return 'Posts';
+  if (pathname.startsWith('/admin/reels')) return 'Upload Reel';
   return 'Admin';
 }
 

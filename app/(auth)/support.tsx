@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Colors } from '../../constants/Colors';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import { Linking, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -24,7 +25,7 @@ export default function SupportScreen() {
         <Text style={styles.title}>Humein kaise sampark karein?</Text>
         
         <TouchableOpacity style={styles.card} onPress={openWhatsApp}>
-          <Ionicons name="logo-whatsapp" size={30} color="#25D366" />
+          <Ionicons name="logo-whatsapp" size={30} color={Colors.secondary} />
           <View style={styles.cardText}>
             <Text style={styles.cardTitle}>WhatsApp Support</Text>
             <Text style={styles.cardDesc}>Turant sahayata ke liye message karein</Text>
@@ -44,13 +45,13 @@ export default function SupportScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
+  container: { flex: 1, backgroundColor: Colors.background },
   header: { flexDirection: 'row', justifyContent: 'space-between', padding: 20, alignItems: 'center' },
   headerTitle: { fontSize: 18, fontWeight: '800' },
   content: { padding: 20 },
   title: { fontSize: 20, fontWeight: '900', marginBottom: 20 },
-  card: { flexDirection: 'row', alignItems: 'center', padding: 20, backgroundColor: '#F9F9F9', borderRadius: 15, marginBottom: 15 },
+  card: { flexDirection: 'row', alignItems: 'center', padding: 20, backgroundColor: Colors.cardBg, borderRadius: Colors.borderRadius, marginBottom: 15, ...Colors.cardShadow, elevation: Colors.cardElevation },
   cardText: { marginLeft: 15 },
   cardTitle: { fontSize: 16, fontWeight: '700' },
-  cardDesc: { fontSize: 12, color: '#666' }
+  cardDesc: { fontSize: 12, color: Colors.textMuted }
 });

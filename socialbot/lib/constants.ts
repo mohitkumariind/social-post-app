@@ -1,14 +1,15 @@
 /**
- * Single source of truth for political parties.
- * Order and list as specified.
+ * Shared constants - synced with mobile app constants/Parties.ts
+ * Keep in sync with root constants/Parties.ts
  */
-export interface Party {
+
+export interface PartyItem {
   id: string;
   shortName: string;
   fullName: string;
 }
 
-export const PARTIES_DATA: Party[] = [
+export const PARTIES_DATA: PartyItem[] = [
   { id: 'bjp', shortName: 'BJP', fullName: 'Bharatiya Janata Party' },
   { id: 'inc', shortName: 'INC', fullName: 'Indian National Congress' },
   { id: 'aap', shortName: 'AAP', fullName: 'Aam Aadmi Party' },
@@ -44,13 +45,7 @@ export const PARTIES_DATA: Party[] = [
   { id: 'other', shortName: 'Other', fullName: 'Other' },
 ];
 
-/** Canonical id for the catch-all / unspecified party option */
-export const PARTY_OTHER_ID = 'other';
-
-export const PARTIES_FIRST_8 = PARTIES_DATA.slice(0, 8);
-export const PARTIES_MORE = PARTIES_DATA.slice(8);
-
-/** Canonical party id for DB / filters (handles legacy shortName / fullName / casing). */
+/** Keep in sync with root constants/Parties.ts */
 export function normalizePartyId(raw: string): string {
   const s = (raw ?? '').trim();
   if (!s) return '';
@@ -65,7 +60,6 @@ export function normalizePartyId(raw: string): string {
   return p ? p.id : s;
 }
 
-/** Short label for UI (e.g. "Other", "BJP"). Unknown ids returned as-is. */
 export function getPartyLabel(partyId: string): string {
   const id = normalizePartyId(partyId);
   if (!id) return '';
@@ -73,6 +67,25 @@ export function getPartyLabel(partyId: string): string {
   return p ? p.shortName : partyId.trim();
 }
 
+/** Keep in sync with root constants/Parties.ts */
+export const PARTY_OTHER_ID = 'other';
+
 export function isPartyOtherId(partyId: string): boolean {
   return normalizePartyId(partyId) === PARTY_OTHER_ID;
 }
+
+/** Language options for Event form - Language-First logic */
+export const LANGUAGE_OPTIONS = [
+  { id: 'hindi', label: 'Hindi' },
+  { id: 'punjabi', label: 'Punjabi' },
+  { id: 'marathi', label: 'Marathi' },
+  { id: 'gujarati', label: 'Gujarati' },
+] as const;
+
+/** Auto-select states when language is chosen. Uses full state names (matches states.name from Supabase). */
+export const LANGUAGE_TO_STATES: Record<string, string[]> = {
+  hindi: ['Uttar Pradesh', 'Bihar', 'Madhya Pradesh', 'Rajasthan', 'Haryana', 'Himachal Pradesh', 'Delhi', 'Uttarakhand', 'Jharkhand', 'Chhattisgarh', 'Jammu and Kashmir'],
+  punjabi: ['Punjab'],
+  marathi: ['Maharashtra'],
+  gujarati: ['Gujarat'],
+};

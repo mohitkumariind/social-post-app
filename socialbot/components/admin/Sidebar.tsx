@@ -16,7 +16,7 @@ const navItems = [
   { href: '/admin/posts', label: 'Posts', icon: FileText },
   { href: '/admin/parties', label: 'Parties', icon: Building2 },
   { href: '/admin/geography', label: 'Geography', icon: MapPin },
-  { href: '/admin/frames', label: 'Frames', icon: Frame },
+  { href: '/admin/reels', label: 'Upload Reel', icon: Frame },
   { href: '/admin/users', label: 'Users', icon: Users },
 ];
 

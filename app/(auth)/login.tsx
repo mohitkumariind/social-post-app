@@ -6,12 +6,19 @@ import {
   StyleSheet, Text, TouchableOpacity, View
 } from 'react-native';
 
-// Path Fixed: root/context tak pahunchne ke liye do baar piche (../../)
+import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
+import { useUser } from '../../context/UserContext';
+
+const handleLoginSuccess = (router: ReturnType<typeof useRouter>, setIsLoggedIn: (v: boolean) => void) => {
+  setIsLoggedIn(true);
+  router.replace('/party');
+};
 
 export default function LoginScreen() {
-  const router = useRouter(); 
-  const { t } = useLang(); 
+  const router = useRouter();
+  const { t } = useLang();
+  const { setIsLoggedIn } = useUser();
 
   return (
     <View style={styles.container}>
@@ -35,8 +42,8 @@ export default function LoginScreen() {
             
             {/* Google Login */}
             <TouchableOpacity 
-              style={[styles.socialBtn, { backgroundColor: '#FFFFFF', borderColor: '#EEE', borderWidth: 1 }]}
-              onPress={() => router.replace('/dashboard')} 
+              style={[styles.socialBtn, { backgroundColor: Colors.cardBg, ...Colors.cardShadow, elevation: Colors.cardElevation }]}
+              onPress={() => handleLoginSuccess(router, setIsLoggedIn)} 
             >
               <Ionicons name="logo-google" size={24} color="#DB4437" />
               <Text style={[styles.socialBtnText, { color: '#555' }]}>
@@ -47,7 +54,7 @@ export default function LoginScreen() {
             {/* Facebook Login */}
             <TouchableOpacity 
               style={[styles.socialBtn, { backgroundColor: '#1877F2' }]}
-              onPress={() => router.replace('/dashboard')}
+              onPress={() => handleLoginSuccess(router, setIsLoggedIn)}
             >
               <Ionicons name="logo-facebook" size={24} color="white" />
               <Text style={styles.socialBtnText}>
@@ -58,7 +65,7 @@ export default function LoginScreen() {
             {/* Twitter (X) Login */}
             <TouchableOpacity 
               style={[styles.socialBtn, { backgroundColor: '#000000' }]}
-              onPress={() => router.replace('/dashboard')}
+              onPress={() => handleLoginSuccess(router, setIsLoggedIn)}
             >
               <Ionicons name="logo-twitter" size={24} color="white" />
               <Text style={styles.socialBtnText}>
@@ -70,7 +77,7 @@ export default function LoginScreen() {
 
           {/* Footer Info */}
           <View style={styles.footer}>
-            <Ionicons name="shield-checkmark-outline" size={16} color="#4CAF50" />
+            <Ionicons name="shield-checkmark-outline" size={16} color={Colors.secondary} />
             <Text style={styles.footerText}> 
               {t('secure_login')}
             </Text>
@@ -83,18 +90,18 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  container: { flex: 1, backgroundColor: Colors.background },
   scrollContainer: { flexGrow: 1, justifyContent: 'center' },
   inner: { padding: 30, alignItems: 'center' },
   logoContainer: { alignItems: 'center', marginBottom: 50 },
   logo: { width: 120, height: 120 },
-  title: { fontSize: 32, fontWeight: 'bold', color: '#1A1A1A', marginTop: 10 },
+  title: { fontSize: 32, fontWeight: 'bold', color: Colors.headerColor, fontFamily: Colors.fontFamilyBold, marginTop: 10 },
   subtitle: { fontSize: 16, color: '#666', textAlign: 'center', marginTop: 8, paddingHorizontal: 20 },
   buttonWrapper: { width: '100%', gap: 15 },
   socialBtn: { 
     flexDirection: 'row',
     height: 60, 
-    borderRadius: 15, 
+    borderRadius: Colors.borderRadius, 
     justifyContent: 'center', 
     alignItems: 'center', 
     width: '100%',
@@ -114,10 +121,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row', 
     alignItems: 'center', 
     marginTop: 50,
-    backgroundColor: '#F0F9F0',
+    backgroundColor: Colors.successBg,
     paddingHorizontal: 15,
     paddingVertical: 8,
     borderRadius: 20
   },
-  footerText: { color: '#4CAF50', fontSize: 13, fontWeight: '500' }
+  footerText: { color: Colors.secondary, fontSize: 13, fontWeight: '500' }
 });

@@ -13,6 +13,7 @@ import {
   Users
 } from 'lucide-react';
 import React, { useState } from 'react';
+import { supabase } from '@/lib/supabase';
 
 // --- TYPES FOR TS ---
 interface PostPerformance {

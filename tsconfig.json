@@ -1,16 +1,11 @@
 {
-  "extends": "expo/tsconfig.base",
+  "extends": "expo/tsconfig.base.json",
   "compilerOptions": {
     "strict": true,
     "jsx": "react-native",
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "moduleResolution": "node",
-    "allowSyntheticDefaultImports": true,
-    "baseUrl": ".",
-    "paths": {
-      "*": ["node_modules/*"],
-      "ffmpeg-kit-react-native-full": ["node_modules/ffmpeg-kit-react-native-full/src/index"]
-    }
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true
   }
 }

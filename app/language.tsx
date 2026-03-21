@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import { Colors } from '../constants/Colors';
 import { useLang } from '../context/LanguageContext';
 import '../utils/i18n';
 
@@ -43,7 +44,7 @@ export default function LanguageScreen() {
       if (next) {
         router.replace(next);
       } else {
-        router.push('/party');
+        router.push('/(auth)/login');
       }
     }
   };
@@ -84,7 +85,7 @@ export default function LanguageScreen() {
                 <Ionicons 
                     name="language-outline" 
                     size={24} 
-                    color={selectedLang === item.id ? '#FFF' : '#FCAC12'} 
+                    color={selectedLang === item.id ? '#FFF' : Colors.primary} 
                 />
               </View>
               <View style={styles.textGroup}>
@@ -99,7 +100,7 @@ export default function LanguageScreen() {
             </View>
             
             {selectedLang === item.id ? (
-              <Ionicons name="checkmark-circle" size={28} color="#FCAC12" />
+              <Ionicons name="checkmark-circle" size={28} color={Colors.primary} />
             ) : (
               <View style={styles.emptyCircle} />
             )}
@@ -124,10 +125,10 @@ export default function LanguageScreen() {
 const styles = StyleSheet.create({
   container: { 
     flex: 1, 
-    backgroundColor: '#F5F7FA' 
+    backgroundColor: Colors.background 
   },
   header: { 
-    backgroundColor: '#FCAC12', 
+    backgroundColor: Colors.primary, 
     paddingTop: 60, 
     paddingBottom: 30, 
     alignItems: 'center', 
@@ -146,7 +147,7 @@ const styles = StyleSheet.create({
   logoLetter: { 
     fontSize: 28, 
     fontWeight: 'bold', 
-    color: '#FCAC12' 
+    color: Colors.primary 
   },
   title: { 
     fontSize: 26, 
@@ -163,23 +164,18 @@ const styles = StyleSheet.create({
     paddingBottom: 110 
   },
   card: { 
-    backgroundColor: '#FFF', 
-    padding: 18, 
-    borderRadius: 22, 
+    backgroundColor: Colors.cardBg, 
+    padding: 20, 
+    borderRadius: Colors.borderRadius, 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     alignItems: 'center', 
     marginBottom: 15, 
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    ...Colors.cardShadow,
+    elevation: Colors.cardElevation,
   },
   selectedCard: { 
-    borderColor: '#FCAC12', 
-    borderWidth: 1.5, 
-    backgroundColor: '#FFFBEF' 
+    backgroundColor: 'rgba(142, 36, 170, 0.06)',
   },
   cardContent: { 
     flexDirection: 'row', 
@@ -195,7 +191,7 @@ const styles = StyleSheet.create({
     marginRight: 15 
   },
   selectedIconCircle: { 
-    backgroundColor: '#FCAC12' 
+    backgroundColor: Colors.primary 
   },
   textGroup: { 
     justifyContent: 'center' 
@@ -206,7 +202,7 @@ const styles = StyleSheet.create({
     color: '#333' 
   },
   selectedLabel: { 
-    color: '#FCAC12' 
+    color: Colors.primary 
   },
   subLabel: { 
     fontSize: 12, 
@@ -218,7 +214,7 @@ const styles = StyleSheet.create({
     height: 24, 
     borderRadius: 12, 
     borderWidth: 2, 
-    borderColor: '#E0E0E0' 
+    borderColor: Colors.border 
   },
   footer: { 
     position: 'absolute', 
@@ -228,16 +224,17 @@ const styles = StyleSheet.create({
     padding: 20, 
     backgroundColor: '#FFF', 
     borderTopWidth: 1, 
-    borderTopColor: '#F0F0F0' 
+    borderTopColor: Colors.borderLight 
   },
   chooseBtn: { 
-    backgroundColor: '#FCAC12', 
+    backgroundColor: Colors.primary,
+    borderRadius: 12, 
     paddingVertical: 18, 
     borderRadius: 18, 
     alignItems: 'center' 
   },
   disabledBtn: { 
-    backgroundColor: '#E0E0E0' 
+    backgroundColor: Colors.border 
   },
   chooseBtnText: { 
     color: '#FFF', 

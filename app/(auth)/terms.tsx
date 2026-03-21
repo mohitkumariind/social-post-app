@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { Colors } from '../../constants/Colors';
 import React from 'react';
 import {
     SafeAreaView,
@@ -39,7 +40,7 @@ export default function TermsConditionsScreen() {
         
         <View style={styles.introBox}>
           <View style={styles.iconCircle}>
-            <Ionicons name="document-text-sharp" size={40} color="#182848" />
+            <Ionicons name="document-text-sharp" size={40} color={Colors.primary} />
           </View>
           <Text style={styles.appName}>{APP_NAME} User Agreement</Text>
           <Text style={styles.lastUpdated}>Version 1.0 - Feb 20, 2026</Text>
@@ -95,7 +96,7 @@ export default function TermsConditionsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F4F7FA' },
+  container: { flex: 1, backgroundColor: Colors.background },
   header: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
@@ -106,17 +107,17 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   backBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '800', color: '#182848' },
+  headerTitle: { fontSize: 18, fontWeight: '800', color: Colors.text },
   
   scrollContent: { padding: 20 },
   introBox: { alignItems: 'center', marginBottom: 25 },
   iconCircle: { width: 70, height: 70, borderRadius: 35, backgroundColor: '#E0E7FF', justifyContent: 'center', alignItems: 'center' },
-  appName: { fontSize: 22, fontWeight: '900', color: '#182848', marginTop: 15 },
+  appName: { fontSize: 22, fontWeight: '900', color: Colors.text, marginTop: 15 },
   lastUpdated: { fontSize: 12, color: '#999', marginTop: 5 },
 
-  contentCard: { backgroundColor: '#FFF', borderRadius: 25, padding: 20, elevation: 2, borderWidth: 1, borderColor: '#EEE' },
+  contentCard: { backgroundColor: Colors.cardBg, borderRadius: Colors.borderRadius, padding: 20, ...Colors.cardShadow, elevation: Colors.cardElevation },
   section: { marginBottom: 22 },
-  sectionTitle: { fontSize: 15, fontWeight: '800', color: '#182848', marginBottom: 6 },
+  sectionTitle: { fontSize: 15, fontWeight: '800', color: Colors.text, marginBottom: 6 },
   sectionContent: { fontSize: 13, color: '#444', lineHeight: 20 },
 
   noticeBox: { marginTop: 10, padding: 15, backgroundColor: '#FFFBEB', borderRadius: 12, borderLeftWidth: 4, borderLeftColor: '#F59E0B' },

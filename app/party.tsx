@@ -1,10 +1,12 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { PARTIES_DATA, PARTIES_FIRST_8, PARTIES_MORE } from '../constants/Parties';
+import { ActivityIndicator, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Colors } from '../constants/Colors';
+import { isPartyOtherId, PARTIES_DATA, PARTIES_FIRST_8, PARTIES_MORE } from '../constants/Parties';
 import { useLang } from '../context/LanguageContext';
 import { useUser } from '../context/UserContext';
+import { supabase } from '../lib/supabase';
 
 const PARTY_INDICATOR_COLOR = '#8A2BE2';
 
@@ -14,16 +16,27 @@ export default function PartyScreen() {
   const { userInfo, setUserInfo } = useUser();
   const [selectedParty, setSelectedParty] = useState(userInfo?.partyName || '');
   const [showMore, setShowMore] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const handleSelect = (partyId: string) => {
     setSelectedParty(partyId);
     if (showMore) setShowMore(false);
   };
 
-  const handleContinue = () => {
-    if (selectedParty) {
+  const handleContinue = async () => {
+    if (!selectedParty) return;
+    setSaving(true);
+    try {
       setUserInfo((prev) => ({ ...prev, partyName: selectedParty }));
-      router.push('/(auth)/login');
+      const { data: authUser } = await supabase.auth.getUser();
+      if (authUser?.user?.id) {
+        await supabase.from('profiles').update({ party: selectedParty, party_name: selectedParty }).eq('id', authUser.user.id);
+      }
+    } catch (e) {
+      if (__DEV__) console.warn('Party backend update failed');
+    } finally {
+      setSaving(false);
+      router.replace('/dashboard');
     }
   };
 
@@ -36,7 +49,13 @@ export default function PartyScreen() {
         onPress={() => handleSelect(party.id)}
         activeOpacity={0.7}
       >
-        <View style={[styles.colorIndicator, { backgroundColor: PARTY_INDICATOR_COLOR }]} />
+        {isPartyOtherId(party.id) ? (
+          <View style={styles.partyIconLead} accessibilityLabel="Other">
+            <MaterialCommunityIcons name="account-group" size={26} color="#64748B" />
+          </View>
+        ) : (
+          <View style={[styles.colorIndicator, { backgroundColor: PARTY_INDICATOR_COLOR }]} />
+        )}
         <View style={styles.partyInfo}>
           <Text style={styles.partyName}>{party.fullName}</Text>
           <Text style={styles.partyShort}>{party.shortName}</Text>
@@ -91,11 +110,15 @@ export default function PartyScreen() {
 
       <View style={styles.footer}>
         <TouchableOpacity
-          style={[styles.btn, !selectedParty && styles.btnDisabled]}
+          style={[styles.btn, (!selectedParty || saving) && styles.btnDisabled]}
           onPress={handleContinue}
-          disabled={!selectedParty}
+          disabled={!selectedParty || saving}
         >
-          <Text style={styles.btnText}>{t('continue')}</Text>
+          {saving ? (
+            <ActivityIndicator color="#FFF" size="small" />
+          ) : (
+            <Text style={styles.btnText}>{t('continue')}</Text>
+          )}
         </TouchableOpacity>
       </View>
     </View>
@@ -103,7 +126,7 @@ export default function PartyScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  container: { flex: 1, backgroundColor: Colors.background },
   header: {
     paddingHorizontal: 20,
     paddingTop: 80,
@@ -118,25 +141,35 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 28,
     textAlign: 'center',
-    color: '#1F1F1F',
+    color: Colors.text,
     letterSpacing: 0,
   },
   list: { padding: 20, paddingBottom: 120 },
   partyCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 18,
-    borderRadius: 15,
+    backgroundColor: Colors.cardBg,
+    padding: 20,
+    borderRadius: Colors.borderRadius,
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#F0F0F0',
+    ...Colors.cardShadow,
+    elevation: Colors.cardElevation,
     ...Platform.select({
       web: { boxShadow: '0px 2px 8px rgba(0,0,0,0.05)' },
       android: { elevation: 2 },
     }),
   },
-  partyCardSelected: { borderColor: '#000', borderWidth: 1.5, backgroundColor: '#F9F9F9' },
+  partyCardSelected: { backgroundColor: 'rgba(142, 36, 170, 0.06)' },
+  /** Neutral lead for &quot;Other&quot; (account-group) — width aligns with color bar column */
+  partyIconLead: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    marginRight: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   colorIndicator: { width: 5, height: 35, borderRadius: 3, marginRight: 15 },
   partyInfo: { flex: 1 },
   partyName: {
@@ -187,7 +220,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    borderBottomColor: Colors.borderLight,
   },
   modalTitle: { fontSize: 18, fontWeight: '700', color: '#1F1F1F' },
   modalCloseBtn: { padding: 4 },
@@ -200,14 +233,14 @@ const styles = StyleSheet.create({
     padding: 20,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
+    borderTopColor: Colors.borderLight,
   },
   btn: {
-    backgroundColor: '#1F1F1F',
+    backgroundColor: Colors.primary,
     padding: 18,
-    borderRadius: 15,
+    borderRadius: 12,
     alignItems: 'center',
   },
-  btnDisabled: { backgroundColor: '#E0E0E0' },
+  btnDisabled: { backgroundColor: Colors.border },
   btnText: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
 });
