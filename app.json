@@ -19,11 +19,13 @@
       }
     },
     "android": {
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#FFFFFF"
       },
       "permissions": [
+        "android.permission.INTERNET",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.CAMERA",
@@ -37,6 +39,8 @@
       "favicon": "./assets/images/icon.png"
     },
     "plugins": [
+      "@react-native-firebase/app",
+      "expo-dev-client",
       "expo-font",
       "expo-router",
       "expo-video",
@@ -50,13 +54,15 @@
             "video"
           ]
         }
-      ]
+      ],
+      "@react-native-google-signin/google-signin"
     ],
     "extra": {
       "router": {},
       "eas": {
         "projectId": "32dd35fb-bdfc-4cf8-a71a-fadab7018be0"
-      }
+      },
+      "googleWebClientId": "309496298521-recmd3pe2d6g2cqhkmc86g9ha7dffntn.apps.googleusercontent.com"
     }
   }
 }

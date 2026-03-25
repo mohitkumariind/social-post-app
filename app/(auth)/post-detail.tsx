@@ -10,10 +10,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Dimensions,
   Image,
   Platform,
-  SafeAreaView,
   ScrollView,
   Share,
   StyleSheet,
@@ -21,6 +21,7 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import ViewShot from "react-native-view-shot";
 import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
@@ -104,8 +105,39 @@ export default function PostDetailScreen() {
   const [isReady, setIsReady] = useState(false);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [dynamicCaptions, setDynamicCaptions] = useState<string[]>([]);
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backNavLockRef = useRef(false);
+
+  const goBackToExpandedCategory = useCallback(() => {
+    if (backNavLockRef.current) return true;
+    backNavLockRef.current = true;
+    const categoryRaw = params?.category;
+    const category =
+      typeof categoryRaw === 'string'
+        ? categoryRaw
+        : Array.isArray(categoryRaw)
+          ? categoryRaw[0]
+          : undefined;
+    const tabRaw = params?.fromTab;
+    const tabParam =
+      typeof tabRaw === 'string'
+        ? tabRaw
+        : Array.isArray(tabRaw)
+          ? tabRaw[0]
+          : (isVideoParam ? 'reels' : 'graphics');
+
+    if (category && category.trim().length > 0) {
+      router.replace({
+        pathname: '/(tabs)/dashboard',
+        params: { expandCategory: category, expandTab: tabParam },
+      });
+    } else {
+      router.back();
+    }
+    return true;
+  }, [isVideoParam, params?.category, params?.fromTab, router]);
 
   const originalData: string[] = useMemo(() => {
     try {
@@ -400,10 +432,34 @@ export default function PostDetailScreen() {
   }, [visibleFrameIds, selectedFrame]);
 
   const captionKeys = ['caption_1', 'caption_2', 'caption_3', 'caption_4', 'caption_5', 'caption_6'] as const;
+  const staticCaptions = useMemo(() => captionKeys.map((key) => t(key)), [t]);
+  const captionsToRender = dynamicCaptions.length > 0 ? dynamicCaptions : staticCaptions;
+
+  useEffect(() => {
+    const raw = params?.captions;
+    const value = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw[0] : undefined;
+    if (!value) {
+      setDynamicCaptions([]);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        const list = parsed
+          .map((x) => (typeof x === 'string' ? x.trim() : ''))
+          .filter((x) => x.length > 0);
+        setDynamicCaptions(list);
+      } else {
+        setDynamicCaptions([]);
+      }
+    } catch {
+      setDynamicCaptions([]);
+    }
+  }, [params?.captions]);
 
   const handleCopyCaption = useCallback(
-    async (key: typeof captionKeys[number]) => {
-      const text = t(key);
+    async (text: string) => {
+      if (!text?.trim()) return;
       await Clipboard.setStringAsync(text);
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       setShowCopiedToast(true);
@@ -412,18 +468,23 @@ export default function PostDetailScreen() {
         toastTimerRef.current = null;
       }, 2000);
     },
-    [t]
+    []
   );
 
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
   }, []);
 
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', goBackToExpandedCategory);
+    return () => sub.remove();
+  }, [goBackToExpandedCategory]);
+
   if (originalData.length === 0) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <TouchableOpacity onPress={goBackToExpandedCategory} style={styles.backBtn}>
             <Ionicons name="chevron-back" size={24} color="#333" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>{t('ready_to_post')} 🚀</Text>
@@ -433,7 +494,7 @@ export default function PostDetailScreen() {
           <Text style={{ color: '#666', textAlign: 'center', marginBottom: 16 }}>
             {t('save_error_message') || 'No media found. Please go back and try again.'}
           </Text>
-          <TouchableOpacity onPress={() => router.back()} style={[styles.downloadBtn, { paddingHorizontal: 24 }]}>
+          <TouchableOpacity onPress={goBackToExpandedCategory} style={[styles.downloadBtn, { paddingHorizontal: 24 }]}>
             <Text style={styles.downloadBtnText}>Go Back</Text>
           </TouchableOpacity>
         </View>
@@ -444,7 +505,7 @@ export default function PostDetailScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+        <TouchableOpacity onPress={goBackToExpandedCategory} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{t('ready_to_post')} 🚀</Text>
@@ -500,9 +561,9 @@ export default function PostDetailScreen() {
                           </Text>
                         </View>
                         <View style={styles.photoContainer}>
-                          {userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0]?.trim() ? (
+                          {userInfo?.avatar_url?.trim() ? (
                             <Image
-                              source={{ uri: userInfo.profilePics[userInfo.activePhotoIndex || 0] }}
+                              source={{ uri: userInfo.avatar_url }}
                               style={styles.userPhotoActual}
                             />
                           ) : (
@@ -544,14 +605,14 @@ export default function PostDetailScreen() {
 
         <Text style={styles.sectionTitle}>{t('copy_caption')}</Text>
         <View style={styles.captionList}>
-          {captionKeys.map((key) => (
+          {captionsToRender.map((caption, idx) => (
             <TouchableOpacity
-              key={key}
+              key={`${idx}-${caption.slice(0, 24)}`}
               style={styles.captionCard}
-              onPress={() => handleCopyCaption(key)}
+              onPress={() => handleCopyCaption(caption)}
               activeOpacity={0.8}
             >
-              <Text style={styles.captionCardText} numberOfLines={2}>{t(key)}</Text>
+              <Text style={styles.captionCardText} numberOfLines={2}>{caption}</Text>
               <View style={styles.captionCopyBtn}>
                 <Ionicons name="copy-outline" size={20} color={Colors.accent} />
               </View>

@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Colors } from '../constants/Colors';
 import { useLang } from '../context/LanguageContext';
+import { supabase } from '../lib/supabase';
 import '../utils/i18n';
 
 const languages = [
@@ -31,21 +32,28 @@ export default function LanguageScreen() {
     setSelectedLang(lang || 'en');
   }, [lang]);
 
-  const handleConfirm = () => {
-    if (selectedLang) {
-      changeLanguage(selectedLang);
-      const next =
-        typeof params.next === 'string'
-          ? params.next
-          : Array.isArray(params.next)
-            ? params.next[0]
-            : undefined;
+  const handleConfirm = async () => {
+    if (!selectedLang) return;
+    changeLanguage(selectedLang);
+    const next =
+      typeof params.next === 'string'
+        ? params.next
+        : Array.isArray(params.next)
+          ? params.next[0]
+          : undefined;
 
-      if (next) {
-        router.replace(next);
-      } else {
-        router.push('/(auth)/login');
-      }
+    if (next) {
+      router.replace(next);
+      return;
+    }
+    // Bina `next` ke (purana flow): logged-in user ko login par mat bhejo — loop fix
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (session?.user) {
+      router.replace('/party');
+    } else {
+      router.replace('/(auth)/login');
     }
   };
 

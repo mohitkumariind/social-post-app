@@ -30,7 +30,7 @@ export default function PartyScreen() {
       setUserInfo((prev) => ({ ...prev, partyName: selectedParty }));
       const { data: authUser } = await supabase.auth.getUser();
       if (authUser?.user?.id) {
-        await supabase.from('profiles').update({ party: selectedParty, party_name: selectedParty }).eq('id', authUser.user.id);
+        await supabase.from('profiles').update({ party: selectedParty }).eq('id', authUser.user.id);
       }
     } catch (e) {
       if (__DEV__) console.warn('Party backend update failed');

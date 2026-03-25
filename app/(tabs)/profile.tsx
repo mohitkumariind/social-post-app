@@ -6,13 +6,13 @@ import {
   Image,
   Linking,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
@@ -24,7 +24,7 @@ export default function ProfileScreen() {
   const { t } = useLang();
   const { userInfo } = useUser();
 
-  const currentPhoto = userInfo?.profilePics?.[userInfo?.activePhotoIndex || 0]?.trim() ?? '';
+  const currentPhoto = userInfo?.avatar_url?.trim() ?? '';
 
   const handleRateApp = () => {
     const GOOGLE_PACKAGE_NAME = 'com.mohit.socialpost.app';

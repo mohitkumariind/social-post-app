@@ -1,17 +1,20 @@
 import React, { createContext, ReactNode, useContext, useState } from 'react';
 
-interface UserInfo {
+export interface UserInfo {
   name: string;
   phone: string;
   email: string;
-  designation: string; 
+  designation: string;
   designation2: string;
   designation3: string;
   designation4: string;
-  profilePics: string[]; // Correct: Array of strings
-  activePhotoIndex: number;
+  avatar_url: string;
+  /** Maps to `profiles.party` */
   partyName: string;
-  state_id: number | null;
+  /** Maps to `profiles.state` (e.g. state name) — not `state_id` */
+  state: string;
+  district: string;
+  constituency: string;
   loksabha_id: number | null;
   assembly_id: number | null;
   whatsapp: string;
@@ -39,10 +42,11 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
     designation2: '',
     designation3: '',
     designation4: '',
-    profilePics: [],
-    activePhotoIndex: 0,
+    avatar_url: '',
     partyName: '',
-    state_id: null,
+    state: '',
+    district: '',
+    constituency: '',
     loksabha_id: null,
     assembly_id: null,
     whatsapp: '',

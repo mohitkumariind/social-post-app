@@ -58,10 +58,10 @@ export default function UserManagement() {
 
   const mapProfileToAppUser = (row: Record<string, unknown>): AppUser => ({
     id: typeof row.id === 'string' || typeof row.id === 'number' ? row.id : String(row.id ?? row.user_id ?? ''),
-    name: String(row.name ?? row.full_name ?? ''),
+    name: String(row.name ?? ''),
     phone: String(row.phone ?? row.phone_number ?? ''),
     email: String(row.email ?? ''),
-    party: normalizePartyId(String(row.party ?? row.party_name ?? '')),
+    party: normalizePartyId(String(row.party ?? '')),
     designation: String(row.designation ?? ''),
     state: String(row.state ?? ''),
     district: String(row.district ?? ''),

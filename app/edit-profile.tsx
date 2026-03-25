@@ -1,14 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Modal,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -19,12 +20,93 @@ import {
 import { Colors } from '../constants/Colors';
 import { isPartyOtherId, normalizePartyId, PARTIES_DATA } from '../constants/Parties';
 import { useLang } from '../context/LanguageContext';
-import { useUser } from '../context/UserContext';
-import { supabase } from '../lib/supabase';
+import { type UserInfo, useUser } from '../context/UserContext';
+import { supabase, supabaseUrl } from '../lib/supabase';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const PROFILE_REDIRECT_DONE_KEY = '@profile_redirect_done';
 
+/** Supabase Storage — must match bucket created in SQL / dashboard */
+const AVATARS_BUCKET = 'avatars';
+
 type GeoItem = { id: number; name: string };
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const clean = base64.replace(/\s/g, '');
+  if (typeof globalThis.atob !== 'function') {
+    throw new Error('Base64 decoder not available on this device');
+  }
+  const binary = globalThis.atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+async function uploadViaStorageRest(localUri: string, objectPath: string, accessToken: string): Promise<void> {
+  const uploadUrl = `${supabaseUrl}/storage/v1/object/${AVATARS_BUCKET}/${objectPath}`;
+  const result = await FileSystem.uploadAsync(uploadUrl, localUri, {
+    httpMethod: 'POST',
+    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'x-upsert': 'true',
+      'Content-Type': 'image/jpeg',
+    },
+  });
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(`Storage REST upload failed (${result.status})`);
+  }
+}
+
+async function uploadImage(localUri: string, userId: string): Promise<string> {
+  let uploadBody: Blob | ArrayBuffer;
+  try {
+    const response = await fetch(localUri);
+    if (!response.ok) {
+      throw new Error(`Could not read image URI (${response.status})`);
+    }
+    uploadBody = await response.blob();
+  } catch (fetchErr) {
+    if (__DEV__) console.warn('[EditProfile] fetch(uri) failed, using FileSystem fallback:', fetchErr);
+    const base64 = await FileSystem.readAsStringAsync(localUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    uploadBody = base64ToArrayBuffer(base64);
+  }
+  const fileName = `${userId}_${Date.now()}.jpg`;
+  const path = `profiles/${fileName}`;
+
+  try {
+    const { error } = await supabase.storage.from(AVATARS_BUCKET).upload(path, uploadBody, {
+      upsert: true,
+      contentType: 'image/jpeg',
+    });
+    if (error) throw error;
+  } catch (uploadErr) {
+    if (__DEV__) console.warn('[EditProfile] supabase-js upload failed, trying REST fallback:', uploadErr);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) throw uploadErr;
+    await uploadViaStorageRest(localUri, path, accessToken);
+  }
+  const { data } = supabase.storage.from(AVATARS_BUCKET).getPublicUrl(path);
+  return data.publicUrl;
+}
+
+/** Local form: DB fields + `stateId` for `states` / `loksabha` joins only (not persisted). */
+type ProfileFormData = UserInfo & { stateId: number | null };
+
+/** Map Supabase `states` / `loksabha` / `assembly` rows — column names vary (see admin posts page). */
+function mapGeoRow(r: Record<string, unknown>): GeoItem | null {
+  const rawId = r.id;
+  const idNum = typeof rawId === 'number' && !Number.isNaN(rawId) ? rawId : Number(rawId);
+  if (rawId == null || Number.isNaN(idNum)) return null;
+  const name = String(r.name ?? r.state_name ?? r.loksabha_name ?? r.assembly_name ?? r.state ?? '').trim();
+  if (!name) return null;
+  return { id: idNum, name };
+}
 
 function getPartyByIdOrShort(value: string) {
   if (!value) return null;
@@ -36,16 +118,27 @@ function getPartyByIdOrShort(value: string) {
   );
 }
 
-export default function EditProfileScreen() {
+export type EditProfileScreenProps = {
+  /** Dashboard gate: no back button / stack pop; parent Modal unmounts when profile is complete. */
+  embedMode?: boolean;
+  /** Parent callback (Dashboard) to force refetch/cache-bust after successful save. */
+  onSaved?: () => void;
+  /** When embedded in modal, reload profile each time modal opens. */
+  isVisible?: boolean;
+};
+
+export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true }: EditProfileScreenProps = {}) {
   const router = useRouter();
   const { t } = useLang();
   const { userInfo, setUserInfo } = useUser();
-  const [formData, setFormData] = useState(() => ({
+  const [formData, setFormData] = useState<ProfileFormData>(() => ({
     ...userInfo,
-    state_id: userInfo.state_id ?? null,
+    avatar_url: userInfo.avatar_url ?? '',
+    stateId: null,
     loksabha_id: userInfo.loksabha_id ?? null,
     assembly_id: userInfo.assembly_id ?? null,
   }));
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [partyPickerOpen, setPartyPickerOpen] = useState(false);
   const [partySearch, setPartySearch] = useState('');
 
@@ -56,6 +149,7 @@ export default function EditProfileScreen() {
   const [loksabhaPickerOpen, setLoksabhaPickerOpen] = useState(false);
   const [assemblyPickerOpen, setAssemblyPickerOpen] = useState(false);
   const [geoSearch, setGeoSearch] = useState('');
+  const [statesLoading, setStatesLoading] = useState(true);
 
   const selectedParty = useMemo(
     () => getPartyByIdOrShort(formData.partyName),
@@ -75,16 +169,46 @@ export default function EditProfileScreen() {
 
   useEffect(() => {
     const fetchStates = async () => {
-      const { data, error } = await supabase.from('states').select('*');
-      if (!error && data) {
-        setAvailableStates(data.map((r: { id: number; name: string }) => ({ id: r.id, name: r.name })));
+      setStatesLoading(true);
+      try {
+        const { data, error } = await supabase.from('states').select('*');
+        if (error) {
+          if (__DEV__) console.warn('[EditProfile] fetchStates Supabase error:', error.message, error);
+          setAvailableStates([]);
+          return;
+        }
+        const raw = data ?? [];
+        if (__DEV__) console.log('[EditProfile] fetchStates: API row count =', raw.length);
+
+        const mapped: GeoItem[] = [];
+        for (const row of raw) {
+          const item = mapGeoRow(row as Record<string, unknown>);
+          if (item) mapped.push(item);
+        }
+        mapped.sort((a, b) => a.name.localeCompare(b.name));
+
+        if (__DEV__) console.log('[EditProfile] fetchStates: mapped items (valid id+name) =', mapped.length);
+        setAvailableStates(mapped);
+      } finally {
+        setStatesLoading(false);
       }
     };
     fetchStates();
   }, []);
 
+  /** Match `profiles.state` string to `states.id` for loksabha queries */
+  useEffect(() => {
+    const st = (formData.state ?? '').trim();
+    if (!st || availableStates.length === 0) return;
+    const m = availableStates.find((s) => s.name === st);
+    if (m && formData.stateId !== m.id) {
+      setFormData((prev) => ({ ...prev, stateId: m.id }));
+    }
+  }, [formData.state, availableStates, formData.stateId]);
+
   /** Load real profile from Supabase (no dummy defaults in fields). */
   useEffect(() => {
+    if (!isVisible) return;
     let cancelled = false;
     (async () => {
       const { data: auth } = await supabase.auth.getUser();
@@ -92,31 +216,38 @@ export default function EditProfileScreen() {
       if (!uid || cancelled) return;
 
       const { data: row, error } = await supabase.from('profiles').select('*').eq('id', uid).single();
-      if (cancelled || error || !row) return;
+      if (cancelled) return;
+      if (error) {
+        if (__DEV__) {
+          console.warn('[EditProfile] profile load error:', error.message, {
+            code: error.code,
+            details: error.details,
+            hint: error.hint,
+          });
+        }
+        return;
+      }
+      if (!row) return;
 
       const p = row as Record<string, unknown>;
-      const rawParty = String(p.party ?? p.party_name ?? '').trim();
+      const rawParty = String(p.party ?? '').trim();
       const partyCanon = normalizePartyId(rawParty) || rawParty;
-      const picsRaw = p.profile_pics ?? p.profilePics;
-      let profilePics: string[] = [];
-      if (Array.isArray(picsRaw)) {
-        profilePics = picsRaw.filter((x): x is string => typeof x === 'string' && x.length > 0);
-      } else if (typeof p.avatar_url === 'string' && p.avatar_url) {
-        profilePics = [p.avatar_url];
-      }
+      const avatarUrl = String(p.avatar_url ?? '').trim();
 
-      const next = {
-        name: String(p.full_name ?? p.name ?? '').trim(),
+      const next: ProfileFormData = {
+        name: String(p.name ?? '').trim(),
         phone: String(p.phone ?? p.phone_number ?? '').trim(),
         email: String(p.email ?? '').trim(),
         designation: String(p.designation ?? '').trim(),
         designation2: String(p.designation2 ?? p.designation_2 ?? '').trim(),
         designation3: String(p.designation3 ?? p.designation_3 ?? '').trim(),
         designation4: String(p.designation4 ?? p.designation_4 ?? '').trim(),
-        profilePics,
-        activePhotoIndex: 0,
+        avatar_url: avatarUrl,
         partyName: partyCanon,
-        state_id: typeof p.state_id === 'number' ? p.state_id : p.state_id != null ? Number(p.state_id) : null,
+        state: String(p.state ?? '').trim(),
+        district: String(p.district ?? '').trim(),
+        constituency: String(p.constituency ?? '').trim(),
+        stateId: null,
         loksabha_id: typeof p.loksabha_id === 'number' ? p.loksabha_id : p.loksabha_id != null ? Number(p.loksabha_id) : null,
         assembly_id: typeof p.assembly_id === 'number' ? p.assembly_id : p.assembly_id != null ? Number(p.assembly_id) : null,
         whatsapp: String(p.whatsapp ?? '').trim(),
@@ -125,33 +256,40 @@ export default function EditProfileScreen() {
         instagram: String(p.instagram ?? '').trim(),
       };
 
-      if (Number.isNaN(next.state_id as number)) next.state_id = null;
       if (Number.isNaN(next.loksabha_id as number)) next.loksabha_id = null;
       if (Number.isNaN(next.assembly_id as number)) next.assembly_id = null;
 
+      const { stateId: _omitStateId, ...userPayload } = next;
       setFormData((prev) => ({ ...prev, ...next }));
-      setUserInfo((prev) => ({ ...prev, ...next }));
+      setUserInfo((prev) => ({ ...prev, ...userPayload }));
     })();
     return () => {
       cancelled = true;
     };
-  }, [setUserInfo]);
+  }, [isVisible, setUserInfo]);
 
   useEffect(() => {
-    if (formData.state_id == null) {
+    if (formData.stateId == null) {
       setAvailableLoksabhas([]);
       return;
     }
     const fetchLoksabhas = async () => {
-      const { data, error } = await supabase.from('loksabha').select('*').eq('state_id', formData.state_id!);
-      if (!error && data) {
-        setAvailableLoksabhas(data.map((r: { id: number; name: string }) => ({ id: r.id, name: r.name })));
-      } else {
+      const { data, error } = await supabase.from('loksabha').select('*').eq('state_id', formData.stateId!);
+      if (error) {
+        if (__DEV__) console.warn('[EditProfile] fetchLoksabhas error:', error.message);
         setAvailableLoksabhas([]);
+        return;
       }
+      const mapped: GeoItem[] = [];
+      for (const row of data ?? []) {
+        const item = mapGeoRow(row as Record<string, unknown>);
+        if (item) mapped.push(item);
+      }
+      mapped.sort((a, b) => a.name.localeCompare(b.name));
+      setAvailableLoksabhas(mapped);
     };
     fetchLoksabhas();
-  }, [formData.state_id]);
+  }, [formData.stateId]);
 
   useEffect(() => {
     if (formData.loksabha_id == null) {
@@ -160,18 +298,34 @@ export default function EditProfileScreen() {
     }
     const fetchAssemblies = async () => {
       const { data, error } = await supabase.from('assembly').select('*').eq('loksabha_id', formData.loksabha_id!);
-      if (!error && data) {
-        setAvailableAssemblies(data.map((r: { id: number; name: string }) => ({ id: r.id, name: r.name })));
-      } else {
+      if (error) {
+        if (__DEV__) console.warn('[EditProfile] fetchAssemblies error:', error.message);
         setAvailableAssemblies([]);
+        return;
       }
+      const mapped: GeoItem[] = [];
+      for (const row of data ?? []) {
+        const item = mapGeoRow(row as Record<string, unknown>);
+        if (item) mapped.push(item);
+      }
+      mapped.sort((a, b) => a.name.localeCompare(b.name));
+      setAvailableAssemblies(mapped);
     };
     fetchAssemblies();
   }, [formData.loksabha_id]);
 
-  const selectedState = useMemo(() => availableStates.find((s) => s.id === formData.state_id), [availableStates, formData.state_id]);
-  const selectedLoksabha = useMemo(() => availableLoksabhas.find((l) => l.id === formData.loksabha_id), [availableLoksabhas, formData.loksabha_id]);
-  const selectedAssembly = useMemo(() => availableAssemblies.find((a) => a.id === formData.assembly_id), [availableAssemblies, formData.assembly_id]);
+  const selectedState = useMemo(
+    () => availableStates.find((s) => Number(s.id) === Number(formData.stateId)),
+    [availableStates, formData.stateId]
+  );
+  const selectedLoksabha = useMemo(
+    () => availableLoksabhas.find((l) => Number(l.id) === Number(formData.loksabha_id)),
+    [availableLoksabhas, formData.loksabha_id]
+  );
+  const selectedAssembly = useMemo(
+    () => availableAssemblies.find((a) => Number(a.id) === Number(formData.assembly_id)),
+    [availableAssemblies, formData.assembly_id]
+  );
 
   const filterGeo = (items: GeoItem[]) => {
     if (!geoSearch.trim()) return items;
@@ -179,22 +333,54 @@ export default function EditProfileScreen() {
     return items.filter((i) => i.name.toLowerCase().includes(q));
   };
 
-  const pickImage = async (index: number) => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true, aspect: [1, 1], quality: 1,
+  const uploadAvatar = async (localUri: string): Promise<string> => {
+    const { data: auth } = await supabase.auth.getUser();
+    const uid = auth?.user?.id;
+    if (!uid) {
+      throw new Error('Not signed in');
+    }
+    const publicUrl = await uploadImage(localUri, uid);
+    const { error: avatarUpdateError } = await supabase
+      .from('profiles')
+      .upsert({ id: uid, avatar_url: publicUrl }, { onConflict: 'id' });
+    if (avatarUpdateError) {
+      if (__DEV__) console.warn('[EditProfile] avatar DB update failed:', avatarUpdateError);
+    } else if (__DEV__) {
+      console.log('[EditProfile] avatar DB update success', { publicUrl });
+    }
+    return publicUrl;
+  };
+
+  const pickImage = async () => {
+    if (isUploadingAvatar) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.5,
     });
-    if (!result.canceled) {
-      let newPics = [...formData.profilePics];
-      newPics[index] = result.assets[0].uri;
-      setFormData({ ...formData, profilePics: newPics });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    const localUri = asset.uri;
+    setIsUploadingAvatar(true);
+    try {
+      const publicUrl = await uploadAvatar(localUri);
+      setFormData((prev) => ({ ...prev, avatar_url: publicUrl }));
+      setUserInfo((prev) => ({ ...prev, avatar_url: publicUrl }));
+      onSaved?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Upload failed';
+      if (__DEV__) console.warn('[EditProfile] avatar upload failed', e);
+      Alert.alert('', msg);
+    } finally {
+      setIsUploadingAvatar(false);
     }
   };
 
   const validateMandatoryFields = (): boolean => {
     const nameOk = (formData.name ?? '').trim().length > 0;
     const mobileOk = (formData.phone ?? '').trim().length > 0;
-    const stateOk = formData.state_id != null;
+    const stateOk = (formData.state ?? '').trim().length > 0 || formData.stateId != null;
     if (!nameOk || !mobileOk || !stateOk) {
       Alert.alert('', t('mandatory_fields_alert'));
       return false;
@@ -203,41 +389,63 @@ export default function EditProfileScreen() {
   };
 
   const handleUpdate = async () => {
+    if (isUploadingAvatar) return;
     if (!validateMandatoryFields()) return;
-    setUserInfo(formData);
     try {
       const { data: authUser } = await supabase.auth.getUser();
       if (!authUser?.user?.id) {
         Alert.alert('', 'Not signed in');
         return;
       }
+      const uid = authUser.user.id;
+      const resolvedAvatarUrl = formData.avatar_url;
+
       const payload: Record<string, unknown> = {
-        party: formData.partyName,
-        party_name: formData.partyName,
-        state_id: formData.state_id,
-        loksabha_id: formData.loksabha_id,
-        assembly_id: formData.assembly_id,
-        full_name: formData.name.trim(),
+        id: uid,
         name: formData.name.trim(),
         phone: formData.phone.trim(),
+        email: formData.email.trim(),
+        party: formData.partyName,
+        state: (formData.state ?? '').trim(),
+        district: (formData.district ?? '').trim(),
+        constituency: (formData.constituency ?? '').trim(),
+        loksabha_id: formData.loksabha_id,
+        assembly_id: formData.assembly_id,
+        avatar_url: resolvedAvatarUrl || null,
       };
-      const { error } = await supabase.from('profiles').update(payload).eq('id', authUser.user.id);
-        if (error) {
-          if (__DEV__) console.warn('Profile save failed');
-          Alert.alert('', error.message ?? 'Could not save profile');
-          return;
-        }
+      const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
+      if (error) {
+        if (__DEV__) console.warn('Profile save failed', error.message, error);
+        Alert.alert('', error.message ?? 'Could not save profile');
+        return;
+      }
+      if (__DEV__) console.log('[EditProfile] profile upsert success', payload);
+      setFormData((prev) => ({ ...prev, avatar_url: resolvedAvatarUrl }));
+      try {
+        const { stateId: _sid, ...userOnly } = formData;
+        setUserInfo({
+          ...userOnly,
+          avatar_url: resolvedAvatarUrl,
+        });
+      } catch (syncErr) {
+        if (__DEV__) console.warn('[EditProfile] setUserInfo after save failed:', syncErr);
+        Alert.alert('', 'Profile saved but could not update app state');
+        return;
+      }
+      onSaved?.();
       await AsyncStorage.setItem(PROFILE_REDIRECT_DONE_KEY, 'true');
+      if (embedMode) {
+        return;
+      }
+      const goAfterSave = () => {
+        if (router.canGoBack()) router.back();
+        else router.replace('/(tabs)/dashboard');
+      };
+      Alert.alert(t('profile_updated_title'), t('profile_updated_message'), [{ text: 'OK', onPress: goAfterSave }]);
     } catch (e) {
-      if (__DEV__) console.warn('Profile save exception');
+      if (__DEV__) console.warn('Profile save exception', e);
       Alert.alert('', 'Could not save profile');
-      return;
     }
-    const goAfterSave = () => {
-      if (router.canGoBack()) router.back();
-      else router.replace('/(tabs)/dashboard');
-    };
-    Alert.alert(t('profile_updated_title'), t('profile_updated_message'), [{ text: 'OK', onPress: goAfterSave }]);
   };
 
   type TextFieldOptions = {
@@ -271,25 +479,42 @@ export default function EditProfileScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backCircle}>
-          <Ionicons name="chevron-back" size={20} color={Colors.textMuted} />
-        </TouchableOpacity>
+        {embedMode ? (
+          <View style={styles.backCircle} />
+        ) : (
+          <TouchableOpacity onPress={() => router.back()} style={styles.backCircle}>
+            <Ionicons name="chevron-back" size={20} color={Colors.textMuted} />
+          </TouchableOpacity>
+        )}
         <Text style={styles.headerTitle}>{t('edit_profile')}</Text>
-        <TouchableOpacity onPress={handleUpdate}><Text style={styles.saveHeaderBtn}>{t('save')}</Text></TouchableOpacity>
+        <TouchableOpacity onPress={handleUpdate} disabled={isUploadingAvatar}>
+          <Text style={[styles.saveHeaderBtn, isUploadingAvatar && { opacity: 0.45 }]}>{t('save')}</Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={styles.sectionHeader}><Text style={styles.sectionHeaderText}>{t('photo_manager')}</Text></View>
         <View style={styles.imageSection}>
-          <View style={styles.imageRow}>
-            {[0, 1, 2].map((i) => (
-              <TouchableOpacity key={i} style={[styles.imgCircle, formData.activePhotoIndex === i && styles.activeImg]} onPress={() => setFormData({ ...formData, activePhotoIndex: i })}>
-                {formData.profilePics[i] ? <Image source={{ uri: formData.profilePics[i] }} style={styles.img} /> : <Ionicons name="add" size={28} color="#CCC" />}
-                <TouchableOpacity style={styles.pencil} onPress={() => pickImage(i)}><Ionicons name="pencil" size={10} color="#333" /></TouchableOpacity>
-              </TouchableOpacity>
-            ))}
+          <View style={styles.previewBox}>
+            {formData.avatar_url ? (
+              <Image source={{ uri: formData.avatar_url }} style={styles.previewImage} />
+            ) : (
+              <Ionicons name="person" size={40} color="#CCC" />
+            )}
+            {isUploadingAvatar ? (
+              <View style={styles.avatarUploadingOverlay} pointerEvents="auto">
+                <ActivityIndicator color={Colors.primary} />
+              </View>
+            ) : null}
           </View>
-          <Text style={styles.hintText}>{t('tap_photo_hint')}</Text>
+          <TouchableOpacity
+            style={[styles.updateImageBtn, isUploadingAvatar && styles.updateImageBtnDisabled]}
+            onPress={() => void pickImage()}
+            disabled={isUploadingAvatar}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.updateImageBtnText}>Update Profile Picture</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.form}>
@@ -385,7 +610,7 @@ export default function EditProfileScreen() {
               onChangeText={setPartySearch}
             />
             <ScrollView style={styles.pickerScroll} keyboardShouldPersistTaps="handled">
-              {filteredParties.map((party) => {
+              {filteredParties.map((party: any) => {
                 const isSelected = formData.partyName === party.id;
                 return (
                   <TouchableOpacity
@@ -431,14 +656,30 @@ export default function EditProfileScreen() {
               onChangeText={setGeoSearch}
             />
             <ScrollView style={styles.pickerScroll} keyboardShouldPersistTaps="handled">
-              {filterGeo(availableStates).map((s) => {
-                const isSelected = formData.state_id === s.id;
+              {statesLoading ? (
+                <View style={styles.pickerLoading}>
+                  <ActivityIndicator size="large" color={Colors.accent} />
+                  <Text style={styles.pickerLoadingText}>Loading states…</Text>
+                </View>
+              ) : null}
+              {!statesLoading && filterGeo(availableStates).length === 0 ? (
+                <Text style={styles.pickerEmptyText}>No states found. Check Supabase RLS and table data.</Text>
+              ) : null}
+              {!statesLoading &&
+                filterGeo(availableStates).map((s) => {
+                const isSelected = Number(formData.stateId) === Number(s.id);
                 return (
                   <TouchableOpacity
                     key={s.id}
                     style={[styles.pickerItem, isSelected && styles.pickerItemSelected]}
                     onPress={() => {
-                      setFormData({ ...formData, state_id: s.id, loksabha_id: null, assembly_id: null });
+                      setFormData({
+                        ...formData,
+                        state: s.name,
+                        stateId: s.id,
+                        loksabha_id: null,
+                        assembly_id: null,
+                      });
                       setStatePickerOpen(false);
                       setGeoSearch('');
                     }}
@@ -472,7 +713,7 @@ export default function EditProfileScreen() {
             />
             <ScrollView style={styles.pickerScroll} keyboardShouldPersistTaps="handled">
               {filterGeo(availableLoksabhas).map((l) => {
-                const isSelected = formData.loksabha_id === l.id;
+                const isSelected = Number(formData.loksabha_id) === Number(l.id);
                 return (
                   <TouchableOpacity
                     key={l.id}
@@ -512,7 +753,7 @@ export default function EditProfileScreen() {
             />
             <ScrollView style={styles.pickerScroll} keyboardShouldPersistTaps="handled">
               {filterGeo(availableAssemblies).map((a) => {
-                const isSelected = formData.assembly_id === a.id;
+                const isSelected = Number(formData.assembly_id) === Number(a.id);
                 return (
                   <TouchableOpacity
                     key={a.id}
@@ -537,6 +778,10 @@ export default function EditProfileScreen() {
   );
 }
 
+export default function EditProfilePage() {
+  return <EditProfileScreen />;
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFF' },
   header: { flexDirection: 'row', justifyContent: 'space-between', padding: 20, alignItems: 'center', marginTop: Platform.OS === 'android' ? 30 : 0 },
@@ -546,12 +791,38 @@ const styles = StyleSheet.create({
   sectionHeader: { backgroundColor: '#F9F9FF', paddingVertical: 10, paddingHorizontal: 20 },
   sectionHeaderText: { fontSize: 11, fontWeight: '700', color: '#666' },
   imageSection: { paddingVertical: 20, alignItems: 'center' },
-  imageRow: { flexDirection: 'row', gap: 15 },
-  imgCircle: { width: 85, height: 85, borderRadius: 42.5, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#EEE' },
-  activeImg: { borderColor: Colors.accent, borderWidth: 2.5 },
-  img: { width: '100%', height: '100%', borderRadius: 42.5 },
-  pencil: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#FFF', padding: 5, borderRadius: 10, elevation: 3 },
-  hintText: { fontSize: 11, color: Colors.accent, fontWeight: '600', marginTop: 10 },
+  previewBox: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#FFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#EEE',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  previewImage: { width: '100%', height: '100%' },
+  avatarUploadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 15,
+    elevation: 9,
+  },
+  updateImageBtn: {
+    marginTop: 14,
+    width: 220,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  updateImageBtnDisabled: { opacity: 0.7 },
+  updateImageBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
   form: { paddingHorizontal: 20 },
   formHead: { fontSize: 11, fontWeight: '800', color: '#AAA', marginTop: 25, marginBottom: 5 },
   labelPart: { flexDirection: 'row', alignItems: 'center', flex: 1 },
@@ -570,6 +841,9 @@ const styles = StyleSheet.create({
   pickerCloseBtn: { padding: 4 },
   pickerSearch: { margin: 16, padding: 12, backgroundColor: '#F5F5F5', borderRadius: 12, fontSize: 16, color: '#333' },
   pickerScroll: { maxHeight: 360, paddingHorizontal: 20, paddingBottom: 24 },
+  pickerLoading: { paddingVertical: 40, alignItems: 'center', justifyContent: 'center' },
+  pickerLoadingText: { marginTop: 12, fontSize: 14, color: '#666' },
+  pickerEmptyText: { paddingVertical: 24, textAlign: 'center', fontSize: 14, color: '#888' },
   pickerItem: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F5F5F5', flexDirection: 'row', alignItems: 'center' },
   pickerItemSelected: { backgroundColor: 'rgba(138, 43, 226, 0.06)' },
   pickerOtherIconWrap: {

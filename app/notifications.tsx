@@ -4,12 +4,12 @@ import React, { useState } from 'react';
 import {
     FlatList,
     Platform,
-    SafeAreaView,
     StyleSheet,
     Text,
     TouchableOpacity,
     View
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
 import { useLang } from '../context/LanguageContext';
 

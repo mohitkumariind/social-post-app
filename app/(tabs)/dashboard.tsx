@@ -1,18 +1,17 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
+    BackHandler,
     Dimensions,
     Image,
     Modal,
     NativeScrollEvent,
     NativeSyntheticEvent,
     Platform,
-    SafeAreaView,
     ScrollView,
     StyleSheet,
     Text,
@@ -24,17 +23,13 @@ import { normalizePartyId } from '../../constants/Parties';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { supabase } from '../../lib/supabase';
-
-/** State selection popup translations by ui_language */
-const STATE_POPUP_TRANSLATIONS: Record<string, { title: string; button: string; subtitle?: string }> = {
-  en: { title: 'Select Your State', button: 'Proceed', subtitle: 'Please select your state to continue.' },
-  hi: { title: 'अपना राज्य चुनें', button: 'आगे बढ़ें', subtitle: 'जारी रखने के लिए अपना राज्य चुनें।' },
-  pa: { title: 'ਆਪਣਾ ਰਾਜ ਚੁਣੋ', button: 'ਅੱਗੇ ਵਧੋ', subtitle: 'ਜਾਰੀ ਰੱਖਣ ਲਈ ਆਪਣਾ ਰਾਜ ਚੁਣੋ।' },
-  mr: { title: 'तुमचा राज्य निवडा', button: 'पुढे जा', subtitle: 'सुरू ठेवण्यासाठी तुमचा राज्य निवडा।' },
-  gu: { title: 'તમારું રાજ્ય પસંદ કરો', button: 'આગળ વધો', subtitle: 'ચાલુ રાખવા માટે તમારું રાજ્ય પસંદ કરો।' },
-};
+import { EditProfileScreen } from '../edit-profile';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
+
+/** Dashboard par aane + profile load ke baad, incomplete users ko itni der baad edit-profile modal */
+const EDIT_PROFILE_GATE_DELAY_MS = 10_000;
 
 /** Video thumbnail - expo-video on native, Image fallback on web (expo-video native driver issues). */
 function VideoThumbnail({ uri, style }: { uri: string; style?: object }) {
@@ -52,49 +47,43 @@ interface Category {
 }
 
 type PostRow = { id: string; title: string; image_url: string; category: string; event_date?: string; is_video?: boolean; video_url?: string; party?: string[]; state?: string[] };
+type EventRow = { name: string; end: string; captions?: string[] };
 
-const PROFILE_REDIRECT_DONE_KEY = '@profile_redirect_done';
+function normalizeForCompare(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 /** Align with edit-profile mandatory fields + party selection */
-function isProfileIncomplete(info: { name: string; phone: string; state_id: number | null; partyName: string }, mustPickState: boolean): boolean {
-  if (mustPickState) return true;
+function isProfileIncomplete(info: { name: string; phone: string; state: string; partyName: string }): boolean {
   const nameOk = (info.name ?? '').trim().length > 0;
   const phoneOk = (info.phone ?? '').trim().length > 0;
-  const stateOk = info.state_id != null;
+  const stateOk = (info.state ?? '').trim().length > 0;
   const partyOk = (info.partyName ?? '').trim().length > 0;
   return !nameOk || !phoneOk || !stateOk || !partyOk;
 }
 
 export default function DashboardScreen() {
   const router = useRouter();
+  const dashParams = useLocalSearchParams();
   const { userInfo, setUserInfo } = useUser();
   const { t, lang } = useLang();
   const [activeTab, setActiveTab] = useState('graphics');
   const [activeCategory, setActiveCategory] = useState<Category | null>(null);
   const [posts, setPosts] = useState<PostRow[]>([]);
-  const [events, setEvents] = useState<{ name: string; end: string }[]>([]);
+  const [events, setEvents] = useState<EventRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-
-  const [mustSelectState, setMustSelectState] = useState(false);
-  const [selectedStateId, setSelectedStateId] = useState<number | null>(null);
-  const [availableStates, setAvailableStates] = useState<{ id: number; name: string }[]>([]);
-  const [stateSaving, setStateSaving] = useState(false);
 
   const categoryCarouselRef = useRef<ScrollView>(null);
   const trendingRef = useRef<ScrollView>(null);
   const hasFetchedProfileRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
   const [dashboardProfileLoaded, setDashboardProfileLoaded] = useState(false);
-  const userIdRef = useRef<string | null>(null);
+  const [editProfileDelayedVisible, setEditProfileDelayedVisible] = useState(false);
   const userInfoRef = useRef(userInfo);
+  const consumedExpandKeyRef = useRef<string>('');
   userInfoRef.current = userInfo;
-  const mustSelectStateRef = useRef(mustSelectState);
-  mustSelectStateRef.current = mustSelectState;
-
-  const langKey = (lang || 'en').toLowerCase().slice(0, 2);
-  const stateT = STATE_POPUP_TRANSLATIONS[langKey] ?? STATE_POPUP_TRANSLATIONS.en;
 
   /** Fetch user state & party from profiles table. Runs only after auth is ready. */
   const fetchUserProfile = React.useCallback(async () => {
@@ -104,35 +93,37 @@ export default function DashboardScreen() {
       const userId = sessionData?.session?.user?.id ?? null;
       if (!userId) return { state: '', party: '' };
 
-      userIdRef.current = userId;
       const { data: profile } = await supabase
         .from('profiles')
-        .select('state, state_id, loksabha_id, assembly_id, party, party_name, name, full_name, phone')
+        .select(
+          'state, district, constituency, loksabha_id, assembly_id, party, name, phone, avatar_url'
+        )
         .eq('id', userId)
         .single();
 
       if (profile) {
-        const rawParty = String(profile.party ?? profile.party_name ?? '').trim();
+        const rawParty = String(profile.party ?? '').trim();
         const party = normalizePartyId(rawParty) || rawParty;
-        const stateId = profile.state_id != null ? profile.state_id : null;
-        const nameFromDb = String(profile.full_name ?? profile.name ?? '').trim();
+        const stateStr = String(profile.state ?? '').trim();
+        const nameFromDb = String(profile.name ?? '').trim();
         const phoneFromDb = String(profile.phone ?? '').trim();
+        const avatarUrl = String((profile as { avatar_url?: string }).avatar_url ?? '').trim();
         setUserInfo((prev) => ({
           ...prev,
           name: nameFromDb,
           phone: phoneFromDb,
-          state_id: stateId ?? prev.state_id,
+          state: stateStr || prev.state,
+          district: String(profile.district ?? prev.district ?? ''),
+          constituency: String(profile.constituency ?? prev.constituency ?? ''),
           loksabha_id: profile.loksabha_id ?? prev.loksabha_id,
           assembly_id: profile.assembly_id ?? prev.assembly_id,
           partyName: party || prev.partyName,
+          avatar_url: avatarUrl,
         }));
-        if (stateId == null && !profile.state) setMustSelectState(true);
-        return { state: stateId != null ? String(stateId) : String(profile.state ?? ''), party };
+        return { state: stateStr, party };
       }
-      setMustSelectState(true);
     } catch (e) {
       if (__DEV__) console.error('fetchUserProfile failed');
-      setMustSelectState(true);
     }
     return { state: '', party: '' };
   }, [setUserInfo]);
@@ -143,39 +134,63 @@ export default function DashboardScreen() {
         setFetchError(null);
         setLoading(true);
       }
-      let query = supabase.from('posts').select('*').order('created_at', { ascending: false });
-
-      try {
-        if (userState) {
-          const esc = userState.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-          query = query.or(`state.is.null,state.cs.{"${esc}"}`);
-        }
-        if (userParty) {
-          const esc = userParty.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-          query = query.or(`party.is.null,party.cs.{"${esc}"}`);
-        }
-      } catch (_) {}
+      // No server-side .or() / .cs. filters here — they caused PGRST100 (parse filter) with some values.
+      // Filter by state/party in memory below (same behavior, safe PostgREST URL).
+      const query = supabase.from('posts').select('*').order('created_at', { ascending: false });
 
       const { data, error } = await query;
       if (error) {
         setFetchError(error.message);
-        if (__DEV__) console.error('Dashboard fetchPosts error');
+        // Full PostgREST error (RLS / missing table / bad filter) — visible in Metro / Logcat for APK debugging
+        console.warn('[Dashboard fetchPosts] Supabase error:', {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+        });
+        if (__DEV__) console.warn('[Dashboard fetchPosts] raw error object:', error);
         setPosts([]);
         return;
       }
       const raw = (data || []) as PostRow[];
+      const normalizedUserState = normalizeForCompare(userState || '');
+      const normalizedUserParty = normalizeForCompare(normalizePartyId(userParty || '') || userParty || '');
       const filtered = raw.filter((p) => {
         const postStates = Array.isArray(p.state) ? p.state : (p.state ? [p.state] : []);
         const postParties = Array.isArray(p.party) ? p.party : (p.party ? [p.party] : []);
-        const stateMatch = postStates.length === 0 || !userState || postStates.some((s) => String(s).trim() === userState);
-        const partyMatch = postParties.length === 0 || !userParty || postParties.some((pa) => String(pa).trim() === userParty);
+
+        const normalizedPostStates = postStates.map((s) => normalizeForCompare(String(s)));
+        const normalizedPostParties = postParties.map((pa) =>
+          normalizeForCompare(normalizePartyId(String(pa)) || String(pa))
+        );
+
+        const stateMatch =
+          normalizedPostStates.length === 0 ||
+          !normalizedUserState ||
+          normalizedPostStates.includes(normalizedUserState);
+        const partyMatch =
+          normalizedPostParties.length === 0 ||
+          !normalizedUserParty ||
+          normalizedPostParties.includes(normalizedUserParty);
         return stateMatch && partyMatch;
       });
-      setPosts(filtered);
+      const finalPosts = filtered.length > 0 ? filtered : raw;
+      if (__DEV__) {
+        console.log('[Dashboard fetchPosts] filter stats', {
+          rawCount: raw.length,
+          filteredCount: filtered.length,
+          finalCount: finalPosts.length,
+          userState,
+          userParty,
+          normalizedUserState,
+          normalizedUserParty,
+        });
+      }
+      setPosts(finalPosts);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setFetchError(msg);
-      if (__DEV__) console.error('Dashboard fetchPosts exception');
+      console.warn('[Dashboard fetchPosts] exception:', err);
       setPosts([]);
     } finally {
       if (!silent) setLoading(false);
@@ -183,8 +198,8 @@ export default function DashboardScreen() {
   }, []);
 
   const fetchEvents = async () => {
-    const { data } = await supabase.from('events').select('name, end');
-    const raw = (data as { name: string; end: string }[]) || [];
+    const { data } = await supabase.from('events').select('name, end, captions');
+    const raw = (data as EventRow[]) || [];
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     const filteredEvents = raw.filter((ev) => {
@@ -193,56 +208,6 @@ export default function DashboardScreen() {
       return evEndDate.getTime() >= today.getTime();
     });
     setEvents(filteredEvents);
-  };
-
-  useEffect(() => {
-    if (mustSelectState) {
-      setSelectedStateId(userInfo?.state_id ?? null);
-      supabase.from('states').select('*').then(({ data }) => {
-        if (data) setAvailableStates(data.map((r: { id: number; name: string }) => ({ id: r.id, name: r.name })));
-      });
-    }
-  }, [mustSelectState, userInfo?.state_id]);
-
-  const handleStateProceed = async () => {
-    if (selectedStateId == null || stateSaving) return;
-    setStateSaving(true);
-    try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      let userId = sessionData?.session?.user?.id ?? null;
-      if (!userId) {
-        const { data: userData } = await supabase.auth.getUser();
-        userId = userData?.user?.id ?? null;
-      }
-      if (!userId) userId = userIdRef.current;
-      if (!userId) {
-        if (__DEV__) console.error('[State Save] No logged-in user');
-        setStateSaving(false);
-        return;
-      }
-
-      const { error } = await supabase
-        .from('profiles')
-        .update({ state_id: selectedStateId })
-        .eq('id', userId);
-
-      if (error) {
-        if (__DEV__) console.error('[State Save] profiles update error');
-        setStateSaving(false);
-        return;
-      }
-
-      setUserInfo((prev) => ({ ...prev, state_id: selectedStateId }));
-      setMustSelectState(false);
-      setRefreshKey((p) => p + 1);
-      if (typeof window !== 'undefined' && typeof window.location?.reload === 'function') {
-        window.location.reload();
-      }
-    } catch (e) {
-      if (__DEV__) console.error('[State Save] Exception');
-    } finally {
-      setStateSaving(false);
-    }
   };
 
   useEffect(() => {
@@ -265,49 +230,46 @@ export default function DashboardScreen() {
         if (cancelled) return;
         await fetchPosts(state, party);
       } else {
-        const state = userInfo?.state_id != null ? String(userInfo.state_id) : '';
+        const state = (userInfo?.state ?? '').trim();
         const party = (userInfo?.partyName ?? '').trim();
         await fetchPosts(state, party);
       }
       if (!cancelled) setDashboardProfileLoaded(true);
     })();
     return () => { cancelled = true; };
-  }, [authReady, refreshKey, userInfo?.state_id, userInfo?.partyName, fetchUserProfile, fetchPosts]);
+  }, [authReady, refreshKey, userInfo?.state, userInfo?.partyName, fetchUserProfile, fetchPosts]);
 
-  /** After profile is synced from Supabase, optionally auto-open edit-profile for incomplete users (once). */
   useEffect(() => {
-    if (!authReady || !dashboardProfileLoaded) return;
-
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const done = await AsyncStorage.getItem(PROFILE_REDIRECT_DONE_KEY);
-        if (cancelled || done === 'true') return;
-        if (!isProfileIncomplete(userInfoRef.current, mustSelectStateRef.current)) return;
-
-        timeoutId = setTimeout(async () => {
-          if (cancelled) return;
-          try {
-            const again = await AsyncStorage.getItem(PROFILE_REDIRECT_DONE_KEY);
-            if (again === 'true') return;
-            if (!isProfileIncomplete(userInfoRef.current, mustSelectStateRef.current)) return;
-            router.push('/edit-profile');
-          } catch {
-            /* ignore */
-          }
-        }, 10_000);
-      } catch {
-        /* ignore AsyncStorage */
+    if (!authReady || !dashboardProfileLoaded) {
+      setEditProfileDelayedVisible(false);
+      return;
+    }
+    if (!isProfileIncomplete(userInfo)) {
+      setEditProfileDelayedVisible(false);
+      return;
+    }
+    const t = setTimeout(() => {
+      if (isProfileIncomplete(userInfoRef.current)) {
+        setEditProfileDelayedVisible(true);
       }
-    })();
+    }, EDIT_PROFILE_GATE_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [
+    authReady,
+    dashboardProfileLoaded,
+    userInfo.name,
+    userInfo.phone,
+    userInfo.state,
+    userInfo.partyName,
+  ]);
 
-    return () => {
-      cancelled = true;
-      if (timeoutId != null) clearTimeout(timeoutId);
-    };
-  }, [authReady, dashboardProfileLoaded, router]);
+  const showEditProfileModal =
+    editProfileDelayedVisible && authReady && dashboardProfileLoaded && isProfileIncomplete(userInfo);
+
+  const handleProfileSaved = React.useCallback(() => {
+    void fetchUserProfile();
+    setRefreshKey((p) => p + 1);
+  }, [fetchUserProfile]);
 
   useEffect(() => {
     fetchEvents();
@@ -353,6 +315,7 @@ export default function DashboardScreen() {
   const graphicsData = React.useMemo(() => {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
+    if (events.length === 0) return postsByCategory;
     const activeEventNames = new Set(events.map((e) => e.name));
     const eventEndByName = new Map(events.map((e) => [e.name, e.end]));
     const filtered = postsByCategory.filter((cat) => {
@@ -369,12 +332,14 @@ export default function DashboardScreen() {
       if (!endA || !endB) return 0;
       return new Date(endA).getTime() - new Date(endB).getTime();
     });
-    return result;
+    // If event-name mapping is out of sync with post category names, do not blank dashboard.
+    return result.length > 0 ? result : postsByCategory;
   }, [postsByCategory, events, refreshKey]);
 
   const reelsData = React.useMemo(() => {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
+    if (events.length === 0) return reelsByCategory;
     const activeEventNames = new Set(events.map((e) => e.name));
     const eventEndByName = new Map(events.map((e) => [e.name, e.end]));
     const filtered = reelsByCategory.filter((cat) => {
@@ -391,10 +356,20 @@ export default function DashboardScreen() {
       if (!endA || !endB) return 0;
       return new Date(endA).getTime() - new Date(endB).getTime();
     });
-    return result;
+    return result.length > 0 ? result : reelsByCategory;
   }, [reelsByCategory, events, refreshKey]);
 
   const CURRENT_DATA = activeTab === 'graphics' ? graphicsData : reelsData;
+  const eventCaptionsByName = useMemo(
+    () =>
+      new Map(
+        events.map((e) => [
+          e.name,
+          Array.isArray(e.captions) ? e.captions.filter((c): c is string => typeof c === 'string' && c.trim().length > 0) : [],
+        ])
+      ),
+    [events]
+  );
 
   useEffect(() => {
     const itemWidth = 140 + 15;
@@ -452,6 +427,45 @@ export default function DashboardScreen() {
       setActiveCategory(CURRENT_DATA[catIndex]);
     }
   };
+
+  useEffect(() => {
+    const tabParamRaw = dashParams?.expandTab;
+    const tabParam = typeof tabParamRaw === 'string' ? tabParamRaw : Array.isArray(tabParamRaw) ? tabParamRaw[0] : undefined;
+    if (tabParam === 'graphics' || tabParam === 'reels') {
+      setActiveTab(tabParam);
+    }
+  }, [dashParams?.expandTab]);
+
+  useEffect(() => {
+    const catParamRaw = dashParams?.expandCategory;
+    const expandCategory = typeof catParamRaw === 'string' ? catParamRaw : Array.isArray(catParamRaw) ? catParamRaw[0] : undefined;
+    if (!expandCategory || CURRENT_DATA.length === 0) return;
+    const tabParamRaw = dashParams?.expandTab;
+    const tabParam = typeof tabParamRaw === 'string' ? tabParamRaw : Array.isArray(tabParamRaw) ? tabParamRaw[0] : '';
+    const expandKey = `${tabParam}::${expandCategory}`;
+    if (consumedExpandKeyRef.current === expandKey) return;
+    const idx = CURRENT_DATA.findIndex((c) => c.name === expandCategory);
+    if (idx === -1) return;
+    const target = CURRENT_DATA[idx];
+    if (activeCategory?.id === target.id) return;
+    consumedExpandKeyRef.current = expandKey;
+    switchCategory(target, idx);
+    // Clear route params after one-time restore so next back press can collapse/exit normally.
+    router.setParams({ expandCategory: undefined, expandTab: undefined });
+  }, [dashParams?.expandCategory, dashParams?.expandTab, CURRENT_DATA, activeCategory, router]);
+
+  useEffect(() => {
+    const onBackPress = () => {
+      if (activeCategory) {
+        setActiveCategory(null);
+        router.setParams({ expandCategory: undefined, expandTab: undefined });
+        return true;
+      }
+      return false;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [activeCategory, router]);
 
   const renderTabs = () => (
     <View style={styles.tabContainer}>
@@ -511,7 +525,7 @@ export default function DashboardScreen() {
             {cat.images.slice(0, 2).map((img, index) => (
               <TouchableOpacity
                 key={index} style={[styles.postItem, { height: activeTab === 'graphics' ? Math.round((width - 55) / 2 * 5 / 4) : Math.round((width - 55) / 2 * 16 / 9) }]}
-                onPress={() => router.push({ pathname: '/(auth)/post-detail', params: { isVideo: img.isVideo ? 'true' : 'false', aspectRatio: activeTab === 'reels' ? '9:16' : '4:5', image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: index, category: cat.name } })}
+                onPress={() => switchCategory(cat, idx)}
               >
                 {img.isVideo ? (
                   <VideoThumbnail uri={img.url} style={styles.postImage} />
@@ -555,7 +569,7 @@ export default function DashboardScreen() {
                   key={idx} style={[styles.modernGridItem, { height: activeTab === 'graphics' ? Math.round((width - 50) / 2 * 5 / 4) : Math.round((width - 50) / 2 * 16 / 9), marginTop: idx % 2 === 0 ? 0 : 25 }]}
                   onPress={() => router.push({
                     pathname: '/(auth)/post-detail',
-                    params: { isVideo: img.isVideo ? 'true' : 'false', aspectRatio: activeTab === 'reels' ? '9:16' : '4:5', image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: idx, category: cat.name }
+                    params: { isVideo: img.isVideo ? 'true' : 'false', aspectRatio: activeTab === 'reels' ? '9:16' : '4:5', image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: idx, category: cat.name, captions: JSON.stringify(eventCaptionsByName.get(cat.name) ?? []), fromTab: activeTab }
                   })}
                 >
                   {img.isVideo ? (
@@ -580,57 +594,25 @@ export default function DashboardScreen() {
   return (
     <>
       <Modal
-        visible={mustSelectState}
-        transparent
-        animationType="fade"
+        visible={showEditProfileModal}
+        animationType="slide"
+        presentationStyle="fullScreen"
         onRequestClose={() => {}}
-        statusBarTranslucent
       >
-        <View style={styles.stateModalOverlay}>
-          <View style={styles.stateModalContent}>
-            <View style={styles.stateModalIcon}>
-              <Ionicons name="location" size={40} color={Colors.primary} />
-            </View>
-            <Text style={styles.stateModalTitle}>{stateT.title}</Text>
-            {stateT.subtitle ? <Text style={styles.stateModalSubtitle}>{stateT.subtitle}</Text> : null}
-            <ScrollView style={styles.stateModalList} showsVerticalScrollIndicator={false}>
-              {availableStates.map((s) => (
-                <TouchableOpacity
-                  key={s.id}
-                  style={[styles.stateModalItem, selectedStateId === s.id && styles.stateModalItemSelected]}
-                  onPress={() => setSelectedStateId(s.id)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.stateModalItemText, selectedStateId === s.id && styles.stateModalItemTextSelected]}>{s.name}</Text>
-                  {selectedStateId === s.id ? <Ionicons name="checkmark-circle" size={24} color={Colors.primary} /> : <View style={styles.stateModalItemCircle} />}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            <TouchableOpacity
-              style={[styles.stateModalBtn, (selectedStateId == null || stateSaving) && styles.stateModalBtnDisabled]}
-              onPress={handleStateProceed}
-              disabled={selectedStateId == null || stateSaving}
-              activeOpacity={0.8}
-            >
-              {stateSaving ? (
-                <View style={styles.stateModalBtnLoading}>
-                  <ActivityIndicator color="#FFF" size="small" />
-                  <Text style={[styles.stateModalBtnText, { marginLeft: 8 }]}>Saving...</Text>
-                </View>
-              ) : (
-                <Text style={styles.stateModalBtnText}>{stateT.button}</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
+        <EditProfileScreen embedMode isVisible={showEditProfileModal} onSaved={handleProfileSaved} />
       </Modal>
 
       <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.push('/profile')} style={styles.profileRow}>
           <View style={styles.avatarPlaceholder}>
-            {userInfo?.profilePics?.[0] ? (
-              <Image source={{ uri: userInfo.profilePics[0] }} style={{ width: 45, height: 45, borderRadius: 22.5 }} />
+            {userInfo?.avatar_url ? (
+              <Image
+                source={{
+                  uri: `${userInfo.avatar_url}${userInfo.avatar_url.includes('?') ? '&' : '?'}t=${Date.now()}`,
+                }}
+                style={{ width: 45, height: 45, borderRadius: 22.5 }}
+              />
             ) : (
               <Ionicons name="person" size={24} color={Colors.accent} />
             )}
@@ -683,10 +665,7 @@ export default function DashboardScreen() {
             <Text style={styles.statusError}>Error: {fetchError}</Text>
             <TouchableOpacity
               onPress={() =>
-                fetchPosts(
-                  userInfo?.state_id != null ? String(userInfo.state_id) : '',
-                  (userInfo?.partyName ?? '').trim()
-                )
+                fetchPosts((userInfo?.state ?? '').trim(), (userInfo?.partyName ?? '').trim())
               }
               style={styles.retryButton}
             >
@@ -711,108 +690,6 @@ export default function DashboardScreen() {
 }
 
 const styles = StyleSheet.create({
-  stateModalOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 9999,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  stateModalContent: {
-    backgroundColor: '#FFF',
-    borderRadius: 24,
-    width: '100%',
-    maxWidth: 400,
-    maxHeight: '85%',
-    padding: 24,
-    ...Platform.select({
-      web: { boxShadow: '0 20px 60px rgba(0,0,0,0.2)' },
-      default: { elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 16 },
-    }),
-  },
-  stateModalIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: Colors.cardBg,
-    justifyContent: 'center',
-    alignItems: 'center',
-    alignSelf: 'center',
-    marginBottom: 16,
-  },
-  stateModalTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: Colors.headerColor,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  stateModalSubtitle: {
-    fontSize: 14,
-    color: Colors.textMuted,
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  stateModalList: {
-    maxHeight: 280,
-    marginBottom: 20,
-  },
-  stateModalItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    marginBottom: 8,
-    backgroundColor: Colors.cardBg,
-  },
-  stateModalItemSelected: {
-    backgroundColor: 'rgba(67, 160, 71, 0.1)',
-    borderWidth: 2,
-    borderColor: Colors.primary,
-  },
-  stateModalItemText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.text,
-  },
-  stateModalItemTextSelected: {
-    color: Colors.primary,
-    fontWeight: '700',
-  },
-  stateModalItemCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: '#DDD',
-  },
-  stateModalBtn: {
-    backgroundColor: Colors.primary,
-    paddingVertical: 16,
-    borderRadius: 14,
-    alignItems: 'center',
-  },
-  stateModalBtnLoading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stateModalBtnDisabled: {
-    backgroundColor: Colors.border,
-    opacity: 0.7,
-  },
-  stateModalBtnText: {
-    color: '#FFF',
-    fontSize: 17,
-    fontWeight: '700',
-  },
   container: { flex: 1, backgroundColor: Colors.background },
   header: { paddingTop: Platform.OS === 'android' ? 40 : 10, paddingHorizontal: 25, paddingBottom: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   headerActions: { flexDirection: 'row', alignItems: 'center' },

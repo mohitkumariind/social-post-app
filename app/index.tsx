@@ -1,53 +1,61 @@
 import { Colors } from '../constants/Colors';
+import { supabase } from '../lib/supabase';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Image, StatusBar, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-export default function SplashScreen() {
+const SESSION_RESOLVE_TIMEOUT_MS = 3000;
+const MIN_SPLASH_MS = 1500;
+
+/**
+ * Entry: Supabase session check → logged in → dashboard; else → login (Google + Supabase on login screen).
+ */
+export default function Index() {
   const router = useRouter();
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const [dots, setDots] = useState('.');
 
   useEffect(() => {
-    Animated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 800,
-      useNativeDriver: true,
-    }).start();
-  }, [fadeAnim]);
+    let cancelled = false;
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDots((prev) => (prev === '.' ? '..' : prev === '..' ? '...' : '.'));
-    }, 400);
-    return () => clearInterval(interval);
-  }, []);
+    (async () => {
+      const start = Date.now();
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      router.replace('/language');
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, []);
+      const sessionResult = await Promise.race([
+        supabase.auth.getSession(),
+        new Promise<Awaited<ReturnType<typeof supabase.auth.getSession>>>((resolve) =>
+          setTimeout(
+            () => resolve({ data: { session: null }, error: null }),
+            SESSION_RESOLVE_TIMEOUT_MS
+          )
+        ),
+      ]);
+
+      const elapsed = Date.now() - start;
+      if (elapsed < MIN_SPLASH_MS) {
+        await new Promise<void>((r) => setTimeout(r, MIN_SPLASH_MS - elapsed));
+      }
+
+      if (cancelled) return;
+
+      const session = sessionResult.data?.session;
+      if (__DEV__) console.log('Current Session:', session);
+
+      if (!session?.user) {
+        router.replace('/login');
+        return;
+      }
+
+      router.replace('/(tabs)/dashboard');
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   return (
-    <View style={[styles.container, { backgroundColor: '#FFFFFF' }]}>
-      <StatusBar hidden={true} />
-      <View style={styles.content}>
-        <Animated.View style={[styles.logoWrapper, { opacity: fadeAnim }]}>
-          <Image
-            source={require('../assets/logo.png')}
-            style={styles.logo}
-            resizeMode="contain"
-          />
-        </Animated.View>
-        <Animated.Text style={[styles.tagline, { opacity: fadeAnim }]} numberOfLines={1}>
-          Connecting Leaders  {'\u2022'}  Connecting People
-        </Animated.Text>
-        <View style={styles.initializingRow}>
-          <Text style={styles.initializingText}>Initializing{dots}</Text>
-        </View>
-      </View>
+    <View style={styles.container}>
+      <ActivityIndicator size="large" color={Colors.primary} />
+      <Text style={styles.sub}>Loading…</Text>
     </View>
   );
 }
@@ -57,41 +65,12 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: Colors.background,
   },
-  content: {
-    alignItems: 'center',
-    paddingVertical: 48,
-  },
-  logoWrapper: {
-    width: 360,
-    height: 360,
-    marginBottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 1,
-  },
-  logo: {
-    width: 360,
-    height: 360,
-  },
-  tagline: {
-    color: '#262626',
-    fontSize: 14,
-    fontWeight: 'bold',
-    fontFamily: Colors.fontFamilyBold,
-    letterSpacing: 0.3,
-    textAlign: 'center',
-    marginTop: -50,
-    marginBottom: 32,
-    zIndex: 10,
-  },
-  initializingRow: {
-    paddingTop: 16,
-  },
-  initializingText: {
+  sub: {
+    marginTop: 16,
+    fontSize: 15,
     color: Colors.textMuted,
-    fontSize: 14,
-    fontWeight: '500',
     fontFamily: Colors.fontFamily,
   },
 });

@@ -1,97 +1,89 @@
-import { Inter_400Regular, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
-import { FontDisplay } from 'expo-font';
-import { Stack, usePathname, useRouter } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import React, { useCallback, useEffect } from 'react';
-import { Platform, View } from 'react-native';
+import { Stack, useRouter } from 'expo-router';
+import React, { useEffect } from 'react';
+import { LogBox } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { I18nextProvider } from 'react-i18next';
 import { LanguageProvider } from '../context/LanguageContext';
 import { UserProvider, useUser } from '../context/UserContext';
+import { supabase } from '../lib/supabase';
 import i18n from '../utils/i18n';
 
-try {
-  SplashScreen.preventAutoHideAsync?.();
-} catch (_) {}
-
-/** Redirects to /party if user is logged in but hasn't selected party. */
-function PartyGuard({ children }: { children: React.ReactNode }) {
+/** Supabase session ↔ `isLoggedIn` (AsyncStorage) on cold start + auth events */
+function SessionSync({ children }: { children: React.ReactNode }) {
+  const { setIsLoggedIn } = useUser();
   const router = useRouter();
-  const pathname = usePathname();
-  const { isLoggedIn, userInfo } = useUser();
 
   useEffect(() => {
-    if (!isLoggedIn || (userInfo?.partyName ?? '').trim()) return;
-    const allowed = ['/', '/language', '/(auth)/login', '/party'];
-    const isAllowed = allowed.some((p) => pathname === p || pathname?.startsWith(p + '/'));
-    if (!isAllowed) {
-      router.replace('/party');
-    }
-  }, [isLoggedIn, userInfo?.partyName, pathname]);
+    let cancelled = false;
+
+    const forceLogoutToLogin = async () => {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // Ignore: even if signOut throws, local navigation should still recover user flow.
+      }
+      if (cancelled) return;
+      setIsLoggedIn(false);
+      router.replace('/login');
+    };
+
+    (async () => {
+      const { error: refreshError } = await supabase.auth.refreshSession();
+      if (refreshError) {
+        if (__DEV__) console.warn('[SessionSync] refreshSession failed:', refreshError.message);
+        await forceLogoutToLogin();
+        return;
+      }
+
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        if (__DEV__) console.warn('[SessionSync] getSession failed:', error.message);
+        await forceLogoutToLogin();
+        return;
+      }
+      if (!cancelled) setIsLoggedIn(!!data.session?.user);
+    })();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setIsLoggedIn(false);
+        router.replace('/login');
+        return;
+      }
+      setIsLoggedIn(!!session?.user);
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [router, setIsLoggedIn]);
 
   return <>{children}</>;
 }
 
-const iconFonts = {
-  ionicons: { uri: require('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf'), display: FontDisplay.SWAP },
-  material: { uri: require('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialIcons.ttf'), display: FontDisplay.SWAP },
-};
-
 export default function RootLayout() {
-  const [fontsLoaded] = useFonts({
-    ...iconFonts,
-    Inter_400Regular,
-    Inter_700Bold,
-  });
-
-  const onLayoutRootView = useCallback(async () => {
-    if (Platform.OS === 'web') {
-      await SplashScreen.hideAsync?.();
-      return;
-    }
-    try {
-      await SplashScreen.hideAsync?.();
-    } catch (e) {
-      if (__DEV__) console.warn('SplashScreen.hideAsync failed');
-    }
+  useEffect(() => {
+    // expo-video / keep-awake runtime issue in some dev-client builds; avoid noisy unhandled rejection overlay.
+    LogBox.ignoreLogs(['Unable to activate keep awake']);
   }, []);
 
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      SplashScreen.hideAsync?.();
-      return;
-    }
-    if (fontsLoaded) {
-      SplashScreen.hideAsync?.();
-    } else {
-      const t = setTimeout(() => SplashScreen.hideAsync?.(), 100);
-      return () => clearTimeout(t);
-    }
-  }, [fontsLoaded]);
-
-  const shouldRender = Platform.OS === 'web' || fontsLoaded;
-
-  if (!shouldRender) {
-    return null;
-  }
-
   return (
-    <View style={{ flex: 1 }} onLayout={() => { onLayoutRootView(); }}>
-    <I18nextProvider i18n={i18n}>
-      
-      <LanguageProvider>
-        
-        <UserProvider>
-          <PartyGuard>
-            <Stack screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="index" />
-              <Stack.Screen name="language" />
-              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            </Stack>
-          </PartyGuard>
-        </UserProvider>
-      </LanguageProvider>
-    </I18nextProvider>
-    </View>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <I18nextProvider i18n={i18n}>
+          <LanguageProvider>
+            <UserProvider>
+              <SessionSync>
+                <Stack screenOptions={{ headerShown: false }} />
+              </SessionSync>
+            </UserProvider>
+          </LanguageProvider>
+        </I18nextProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
