@@ -8,6 +8,11 @@ export interface Party {
   fullName: string;
 }
 
+/**
+ * Fallback list (offline-safe).
+ * The app now prefers Supabase `parties` table (cached in AsyncStorage),
+ * but this remains as a safe default to prevent crashes without internet.
+ */
 export const PARTIES_DATA: Party[] = [
   { id: 'bjp', shortName: 'BJP', fullName: 'Bharatiya Janata Party' },
   { id: 'inc', shortName: 'INC', fullName: 'Indian National Congress' },
@@ -51,11 +56,12 @@ export const PARTIES_FIRST_8 = PARTIES_DATA.slice(0, 8);
 export const PARTIES_MORE = PARTIES_DATA.slice(8);
 
 /** Canonical party id for DB / filters (handles legacy shortName / fullName / casing). */
-export function normalizePartyId(raw: string): string {
+export function normalizePartyId(raw: string, parties?: Party[]): string {
   const s = (raw ?? '').trim();
   if (!s) return '';
   const lower = s.toLowerCase();
-  const p = PARTIES_DATA.find(
+  const list = parties && parties.length > 0 ? parties : PARTIES_DATA;
+  const p = list.find(
     (x) =>
       x.id === s ||
       x.id === lower ||
@@ -66,13 +72,14 @@ export function normalizePartyId(raw: string): string {
 }
 
 /** Short label for UI (e.g. "Other", "BJP"). Unknown ids returned as-is. */
-export function getPartyLabel(partyId: string): string {
-  const id = normalizePartyId(partyId);
+export function getPartyLabel(partyId: string, parties?: Party[]): string {
+  const id = normalizePartyId(partyId, parties);
   if (!id) return '';
-  const p = PARTIES_DATA.find((x) => x.id === id);
+  const list = parties && parties.length > 0 ? parties : PARTIES_DATA;
+  const p = list.find((x) => x.id === id);
   return p ? p.shortName : partyId.trim();
 }
 
-export function isPartyOtherId(partyId: string): boolean {
-  return normalizePartyId(partyId) === PARTY_OTHER_ID;
+export function isPartyOtherId(partyId: string, parties?: Party[]): boolean {
+  return normalizePartyId(partyId, parties) === PARTY_OTHER_ID;
 }

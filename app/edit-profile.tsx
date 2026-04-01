@@ -23,6 +23,7 @@ import { useLang } from '../context/LanguageContext';
 import { type UserInfo, useUser } from '../context/UserContext';
 import { supabase, supabaseUrl } from '../lib/supabase';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { getPartiesSafe } from '../lib/parties';
 
 const PROFILE_REDIRECT_DONE_KEY = '@profile_redirect_done';
 
@@ -141,6 +142,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [partyPickerOpen, setPartyPickerOpen] = useState(false);
   const [partySearch, setPartySearch] = useState('');
+  const [parties, setParties] = useState(PARTIES_DATA);
 
   const [availableStates, setAvailableStates] = useState<GeoItem[]>([]);
   const [availableLoksabhas, setAvailableLoksabhas] = useState<GeoItem[]>([]);
@@ -152,20 +154,39 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
   const [statesLoading, setStatesLoading] = useState(true);
 
   const selectedParty = useMemo(
-    () => getPartyByIdOrShort(formData.partyName),
-    [formData.partyName]
+    () => {
+      if (!formData.partyName) return null;
+      const v = formData.partyName.trim().toLowerCase();
+      return (
+        parties.find(
+          (p) => p.id === v || p.shortName.toUpperCase() === formData.partyName.trim().toUpperCase()
+        ) ?? null
+      );
+    },
+    [formData.partyName, parties]
   );
 
   const filteredParties = useMemo(() => {
-    if (!partySearch.trim()) return PARTIES_DATA;
+    if (!partySearch.trim()) return parties;
     const q = partySearch.trim().toLowerCase();
-    return PARTIES_DATA.filter(
+    return parties.filter(
       (p) =>
         p.shortName.toLowerCase().includes(q) ||
         p.fullName.toLowerCase().includes(q) ||
         p.id.toLowerCase().includes(q)
     );
-  }, [partySearch]);
+  }, [partySearch, parties]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const list = await getPartiesSafe();
+      if (!cancelled && Array.isArray(list) && list.length > 0) setParties(list);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const fetchStates = async () => {
@@ -231,7 +252,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
 
       const p = row as Record<string, unknown>;
       const rawParty = String(p.party ?? '').trim();
-      const partyCanon = normalizePartyId(rawParty) || rawParty;
+      const partyCanon = normalizePartyId(rawParty, parties) || rawParty;
       const avatarUrl = String(p.avatar_url ?? '').trim();
 
       const next: ProfileFormData = {
@@ -623,7 +644,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
                     }}
                     activeOpacity={0.7}
                   >
-                    {isPartyOtherId(party.id) ? (
+                    {isPartyOtherId(party.id, parties) ? (
                       <View style={styles.pickerOtherIconWrap}>
                         <MaterialCommunityIcons name="account-group" size={22} color="#64748B" />
                       </View>

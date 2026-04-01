@@ -1,12 +1,13 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ActivityIndicator, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Colors } from '../constants/Colors';
-import { isPartyOtherId, PARTIES_DATA, PARTIES_FIRST_8, PARTIES_MORE } from '../constants/Parties';
+import { isPartyOtherId, type Party, PARTIES_DATA } from '../constants/Parties';
 import { useLang } from '../context/LanguageContext';
 import { useUser } from '../context/UserContext';
 import { supabase } from '../lib/supabase';
+import { getPartiesSafe } from '../lib/parties';
 
 const PARTY_INDICATOR_COLOR = '#8A2BE2';
 
@@ -17,6 +18,21 @@ export default function PartyScreen() {
   const [selectedParty, setSelectedParty] = useState(userInfo?.partyName || '');
   const [showMore, setShowMore] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [parties, setParties] = useState<Party[]>(PARTIES_DATA);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const list = await getPartiesSafe();
+      if (!cancelled && Array.isArray(list) && list.length > 0) setParties(list);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const first8 = useMemo(() => parties.slice(0, 8), [parties]);
+  const more = useMemo(() => parties.slice(8), [parties]);
 
   const handleSelect = (partyId: string) => {
     setSelectedParty(partyId);
@@ -49,7 +65,7 @@ export default function PartyScreen() {
         onPress={() => handleSelect(party.id)}
         activeOpacity={0.7}
       >
-        {isPartyOtherId(party.id) ? (
+        {isPartyOtherId(party.id, parties) ? (
           <View style={styles.partyIconLead} accessibilityLabel="Other">
             <MaterialCommunityIcons name="account-group" size={26} color="#64748B" />
           </View>
@@ -76,7 +92,7 @@ export default function PartyScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
-        {PARTIES_FIRST_8.map(renderPartyCard)}
+        {first8.map(renderPartyCard)}
 
         <TouchableOpacity
           style={styles.moreCard}
@@ -86,7 +102,7 @@ export default function PartyScreen() {
           <View style={[styles.colorIndicator, { backgroundColor: '#666' }]} />
           <View style={styles.partyInfo}>
             <Text style={styles.moreCardTitle}>More parties</Text>
-            <Text style={styles.partyShort}>View all {PARTIES_DATA.length} parties</Text>
+            <Text style={styles.partyShort}>View all {parties.length} parties</Text>
           </View>
           <Ionicons name="chevron-forward" size={22} color="#666" />
         </TouchableOpacity>
@@ -102,7 +118,7 @@ export default function PartyScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
-              {PARTIES_MORE.map(renderPartyCard)}
+              {more.map(renderPartyCard)}
             </ScrollView>
           </View>
         </View>
