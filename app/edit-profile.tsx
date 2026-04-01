@@ -662,9 +662,6 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
                   <Text style={styles.pickerLoadingText}>Loading states…</Text>
                 </View>
               ) : null}
-              {!statesLoading && filterGeo(availableStates).length === 0 ? (
-                <Text style={styles.pickerEmptyText}>No states found. Check Supabase RLS and table data.</Text>
-              ) : null}
               {!statesLoading &&
                 filterGeo(availableStates).map((s) => {
                 const isSelected = Number(formData.stateId) === Number(s.id);

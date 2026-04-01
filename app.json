@@ -59,10 +59,11 @@
     ],
     "extra": {
       "router": {},
+      "googleWebClientId": "309496298521-recmd3pe2d6g2cqhkmc86g9ha7dffntn.apps.googleusercontent.com",
       "eas": {
-        "projectId": "32dd35fb-bdfc-4cf8-a71a-fadab7018be0"
-      },
-      "googleWebClientId": "309496298521-recmd3pe2d6g2cqhkmc86g9ha7dffntn.apps.googleusercontent.com"
-    }
+        "projectId": "8445ac4b-11a5-4ae5-bc3c-d60e3b921b40"
+      }
+    },
+    "owner": "poojamohit"
   }
 }

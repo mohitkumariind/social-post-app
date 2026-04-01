@@ -1,18 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import * as Clipboard from 'expo-clipboard';
+import * as Crypto from 'expo-crypto';
 import { FFmpegKit, ReturnCode } from 'ffmpeg-kit-react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
+import { downloadMediaToCache } from '../../lib/mediaCache';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   BackHandler,
   Dimensions,
-  Image,
   Platform,
   ScrollView,
   Share,
@@ -31,6 +33,71 @@ import { supabase } from '../../lib/supabase';
 const { width } = Dimensions.get('window');
 
 const FRAME_STATIC_COLOR = Colors.primary;
+
+const IMAGE_PLACEHOLDER_BLURHASH =
+  // Neutral shimmer-like placeholder (works on both light/dark)
+  'LGFFaXYk^6#M@-5c,1J5@[or[Q6.';
+
+type MediaKind = 'daily' | 'frame';
+
+function useCachedMediaUri(opts: { kind: MediaKind; url: string | null | undefined; ext?: string }) {
+  const url = typeof opts.url === 'string' ? opts.url.trim() : '';
+  const [localUri, setLocalUri] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!url) {
+      setLocalUri(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    (async () => {
+      try {
+        const uri = await downloadMediaToCache({ kind: opts.kind, url, ext: opts.ext });
+        if (!cancelled) setLocalUri(uri);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opts.kind, url, opts.ext]);
+
+  return { uri: localUri || url || null, loading };
+}
+
+function CachedMediaImage({
+  kind,
+  url,
+  style,
+  contentFit,
+}: {
+  kind: MediaKind;
+  url: string;
+  style?: any;
+  contentFit?: 'cover' | 'contain';
+}) {
+  const { uri, loading } = useCachedMediaUri({ kind, url });
+  return (
+    <View style={style}>
+      {loading ? <View style={[StyleSheet.absoluteFillObject, { backgroundColor: Colors.borderLight }]} /> : null}
+      <ExpoImage
+        source={{ uri: String(uri || url) }}
+        style={StyleSheet.absoluteFillObject}
+        contentFit={contentFit ?? 'contain'}
+        cachePolicy="disk"
+        placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
+        transition={200}
+      />
+    </View>
+  );
+}
 
 /** Validates URL - must be non-empty string, http/https. */
 function isValidVideoUrl(url: unknown): boolean {
@@ -75,11 +142,29 @@ function ReelVideoSlide({ uri }: { uri: string }) {
 }
 
 /** Renders video only when URL is validated; else placeholder. */
-function VideoSlideOrPlaceholder({ uri }: { uri: string }) {
+function VideoSlideOrPlaceholder({ uri, isActive }: { uri: string; isActive: boolean }) {
   if (!isValidVideoUrl(uri)) {
     return <VideoPlaceholder uri={uri} />;
   }
-  return <ReelVideoSlide uri={uri} />;
+
+  // On-demand caching: start download only when user lands on this slide
+  const { uri: cachedUri, loading } = useCachedMediaUri({
+    kind: 'daily',
+    url: isActive ? uri : null,
+    ext: 'mp4',
+  });
+
+  if (isActive && loading) {
+    return (
+      <View style={[styles.fullMedia, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#1a1a1a' }]}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={{ marginTop: 10, color: Colors.textMuted, fontWeight: '700' }}>Caching video…</Text>
+      </View>
+    );
+  }
+
+  // Use cached local uri if available; fallback to remote
+  return <ReelVideoSlide uri={String(cachedUri || uri)} />;
 }
 
 /** Normalizes video URL to https. */
@@ -187,9 +272,31 @@ export default function PostDetailScreen() {
     let cancelled = false;
     const fetchFrames = async () => {
       try {
-        const { data, error } = await supabase.from('user_frames').select('*');
+        // On some devices/screens, auth restore may lag behind navigation.
+        // Retry a few times before giving up to avoid "no frames" due to missing uid.
+        let uid: string | undefined;
+        for (let i = 0; i < 5; i++) {
+          const { data: sessionData } = await supabase.auth.getSession();
+          uid = sessionData?.session?.user?.id;
+          if (uid) break;
+          const { data: authData } = await supabase.auth.getUser();
+          uid = authData?.user?.id;
+          if (uid) break;
+          await new Promise((r) => setTimeout(r, 400));
+          if (cancelled) return;
+        }
+        if (!uid) {
+          if (!cancelled && __DEV__) console.warn('[PostDetail] fetchFrames: missing user id');
+          return;
+        }
+
+        const { data, error } = await supabase.from('user_frames').select('*').eq('user_id', uid);
         if (cancelled) return;
-        if (!error && data) setFrames(data);
+        if (error) {
+          if (!cancelled && __DEV__) console.warn('[PostDetail] fetchFrames error:', error.message);
+          return;
+        }
+        if (data) setFrames(data);
       } catch (e) {
         if (!cancelled && __DEV__) console.warn('fetchFrames exception');
       }
@@ -211,83 +318,57 @@ export default function PostDetailScreen() {
     const videoUrl = originalData[realIndex];
     if (!videoUrl || !isValidVideoUrl(videoUrl)) return null;
 
-    const cacheDir = (FileSystem.cacheDirectory || '').replace(/\/?$/, '/');
-    if (!cacheDir) return null;
-
     const normalizedUrl = normalizeVideoUrl(videoUrl);
-    const timestamp = Date.now();
-    const inputPath = `${cacheDir}video_${timestamp}.mp4`;
-    const outputPath = `${cacheDir}video_out_${timestamp}.mp4`;
+    if (!FileSystem.documentDirectory) return null;
+
+    const toPath = (u: string) => (u || '').replace(/^file:\/\//, '');
+
+    // Use global cache utility: daily for videos, frame for overlays.
+    const cachedVideoUri = await downloadMediaToCache({ kind: 'daily', url: normalizedUrl, ext: 'mp4' });
+    if (!cachedVideoUri || !String(cachedVideoUri).startsWith('file://')) return null;
+
+    const cachedOverlayUri =
+      overlayUrl && overlayUrl.trim().length > 0
+        ? await downloadMediaToCache({ kind: 'frame', url: overlayUrl, ext: 'png' })
+        : null;
+
+    // Stable output file path (no Date.now) so repeated burns reuse output.
+    const outDir = `${(FileSystem.cacheDirectory || FileSystem.documentDirectory || '').replace(/\/?$/, '/') }video-exports/`;
+    try {
+      await FileSystem.makeDirectoryAsync(outDir, { intermediates: true });
+    } catch {}
+
+    const outKey = await Crypto.digestStringAsync(
+      Crypto.CryptoDigestAlgorithm.SHA256,
+      `out:${normalizedUrl}:${String(cachedOverlayUri || '')}`
+    );
+    const outputPath = `${outDir}burn_${outKey}.mp4`;
 
     try {
-      const downloadResult = await FileSystem.downloadAsync(normalizedUrl, inputPath);
-      if (downloadResult.status < 200 || downloadResult.status >= 300) {
-        if (__DEV__) console.warn('Video download failed');
-        return null;
-      }
-      const localInput = downloadResult.uri;
+      const outInfo = await FileSystem.getInfoAsync(outputPath);
+      if (outInfo.exists) return outputPath.startsWith('file://') ? outputPath : `file://${outputPath}`;
 
-      const fileInfo = await FileSystem.getInfoAsync(localInput);
-      if (!fileInfo.exists) {
-        if (__DEV__) console.warn('Video file missing after download');
-        return null;
-      }
+      const inputLocal = toPath(String(cachedVideoUri));
+      const outputLocal = toPath(outputPath);
 
-      let finalUri = localInput;
-      if (overlayUrl && overlayUrl.trim().length > 0) {
-        try {
-          const overlayPath = `${cacheDir}overlay_${timestamp}.png`;
-          const overlayResult = await FileSystem.downloadAsync(overlayUrl, overlayPath);
-          if (overlayResult.status >= 200 && overlayResult.status < 300) {
-            const toPath = (u: string) => (u || '').replace(/^file:\/\//, '');
-            const overlayLocal = toPath(overlayResult.uri);
-            const inputLocal = toPath(localInput);
-            const outputLocal = toPath(outputPath);
-
-            const session = await FFmpegKit.execute(
-              `-i "${inputLocal}" -i "${overlayLocal}" -filter_complex "[0:v]scale=1080:1920,setsar=1[v0];[1:v]scale=1080:1920,setsar=1[v1];[v0][v1]overlay=0:0[outv]" -map "[outv]" -map 0:a? -c:a copy -b:v 4M "${outputLocal}"`
-            );
-            const returnCode = await session.getReturnCode();
-            if (ReturnCode.isSuccess(returnCode)) {
-              const outInfo = await FileSystem.getInfoAsync(outputPath);
-              if (outInfo.exists) {
-                finalUri = outputPath.startsWith('file://') ? outputPath : `file://${outputPath}`;
-                try {
-                  await FileSystem.deleteAsync(inputPath, { idempotent: true });
-                } catch (_) {}
-              }
-            }
-            try {
-              await FileSystem.deleteAsync(overlayPath, { idempotent: true });
-            } catch (_) {}
-          }
-        } catch (overlayErr) {
-          if (__DEV__) console.warn('Overlay merge failed, using raw video');
-        }
+      if (cachedOverlayUri && String(cachedOverlayUri).startsWith('file://')) {
+        const overlayLocal = toPath(String(cachedOverlayUri));
+        const session = await FFmpegKit.execute(
+          `-i "${inputLocal}" -i "${overlayLocal}" -filter_complex "[0:v]scale=1080:1920,setsar=1[v0];[1:v]scale=1080:1920,setsar=1[v1];[v0][v1]overlay=0:0[outv]" -map "[outv]" -map 0:a? -c:a copy -b:v 4M "${outputLocal}"`
+        );
+        const returnCode = await session.getReturnCode();
+        if (!ReturnCode.isSuccess(returnCode)) return null;
       } else {
-        try {
-          const toPath = (u: string) => (u || '').replace(/^file:\/\//, '');
-          const inputLocal = toPath(localInput);
-          const outputLocal = toPath(outputPath);
-          const session = await FFmpegKit.execute(
-            `-i "${inputLocal}" -filter_complex "[0:v]scale=1080:1920,setsar=1[outv]" -map "[outv]" -map 0:a? -c:a copy -b:v 4M "${outputLocal}"`
-          );
-          const returnCode = await session.getReturnCode();
-          if (ReturnCode.isSuccess(returnCode)) {
-            const outInfo = await FileSystem.getInfoAsync(outputPath);
-            if (outInfo.exists) {
-              finalUri = outputPath.startsWith('file://') ? outputPath : `file://${outputPath}`;
-              try {
-                await FileSystem.deleteAsync(inputPath, { idempotent: true });
-              } catch (_) {}
-            }
-          }
-        } catch (scaleErr) {
-          if (__DEV__) console.warn('Video scale failed, using raw');
-        }
+        const session = await FFmpegKit.execute(
+          `-i "${inputLocal}" -filter_complex "[0:v]scale=1080:1920,setsar=1[outv]" -map "[outv]" -map 0:a? -c:a copy -b:v 4M "${outputLocal}"`
+        );
+        const returnCode = await session.getReturnCode();
+        if (!ReturnCode.isSuccess(returnCode)) return null;
       }
 
-      return finalUri;
+      const doneInfo = await FileSystem.getInfoAsync(outputPath);
+      if (!doneInfo.exists) return null;
+      return outputPath.startsWith('file://') ? outputPath : `file://${outputPath}`;
     } catch (err) {
       if (__DEV__) console.warn('processVideoMerge error');
       return null;
@@ -431,31 +512,41 @@ export default function PostDetailScreen() {
     if (!visibleFrameIds.includes(selectedFrame)) setSelectedFrame(1);
   }, [visibleFrameIds, selectedFrame]);
 
-  const captionKeys = ['caption_1', 'caption_2', 'caption_3', 'caption_4', 'caption_5', 'caption_6'] as const;
-  const staticCaptions = useMemo(() => captionKeys.map((key) => t(key)), [t]);
-  const captionsToRender = dynamicCaptions.length > 0 ? dynamicCaptions : staticCaptions;
+  const captionsToRender = dynamicCaptions;
 
   useEffect(() => {
-    const raw = params?.captions;
+    // Dashboard may send `captions` (array JSON) or older `caption` key by mistake.
+    const raw = (params as any)?.captions ?? (params as any)?.caption;
     const value = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw[0] : undefined;
+    console.log('LOGGING CAPTIONS:', value);
     if (!value) {
       setDynamicCaptions([]);
       return;
     }
+    const v = value.trim();
+    if (!v) {
+      setDynamicCaptions([]);
+      return;
+    }
     try {
-      const parsed = JSON.parse(value);
+      const parsed = JSON.parse(v);
       if (Array.isArray(parsed)) {
         const list = parsed
           .map((x) => (typeof x === 'string' ? x.trim() : ''))
           .filter((x) => x.length > 0);
         setDynamicCaptions(list);
-      } else {
-        setDynamicCaptions([]);
+        return;
       }
+      if (typeof parsed === 'string' && parsed.trim()) {
+        setDynamicCaptions([parsed.trim()]);
+        return;
+      }
+      setDynamicCaptions([v]);
     } catch {
-      setDynamicCaptions([]);
+      // Not JSON (or invalid JSON) → treat as plain caption text.
+      setDynamicCaptions([v]);
     }
-  }, [params?.captions]);
+  }, [(params as any)?.captions, (params as any)?.caption]);
 
   const handleCopyCaption = useCallback(
     async (text: string) => {
@@ -490,14 +581,7 @@ export default function PostDetailScreen() {
           <Text style={styles.headerTitle}>{t('ready_to_post')} 🚀</Text>
           <View style={{ width: 40 }} />
         </View>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-          <Text style={{ color: '#666', textAlign: 'center', marginBottom: 16 }}>
-            {t('save_error_message') || 'No media found. Please go back and try again.'}
-          </Text>
-          <TouchableOpacity onPress={goBackToExpandedCategory} style={[styles.downloadBtn, { paddingHorizontal: 24 }]}>
-            <Text style={styles.downloadBtnText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
+        <View style={{ flex: 1 }} />
       </SafeAreaView>
     );
   }
@@ -536,10 +620,10 @@ export default function PostDetailScreen() {
                   <View style={[styles.mediaContainer, { aspectRatio: aspectRatio === '9:16' ? 9 / 16 : 4 / 5 }]}>
                     <View style={styles.mediaDragWrapper}>
                       {isVideoParam ? (
-                        <VideoSlideOrPlaceholder uri={item} />
+                        <VideoSlideOrPlaceholder uri={item} isActive={index === activeIndex} />
                       ) : (
                         item && typeof item === 'string' ? (
-                          <Image source={{ uri: item }} style={styles.fullMedia} resizeMode="contain" />
+                          <CachedMediaImage kind="daily" url={item} style={styles.fullMedia} contentFit="contain" />
                         ) : (
                           <View style={[styles.fullMedia, { backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }]}>
                             <ActivityIndicator size="small" color="#FFF" />
@@ -562,10 +646,16 @@ export default function PostDetailScreen() {
                         </View>
                         <View style={styles.photoContainer}>
                           {userInfo?.avatar_url?.trim() ? (
-                            <Image
-                              source={{ uri: userInfo.avatar_url }}
-                              style={styles.userPhotoActual}
-                            />
+                            <View style={styles.userPhotoActual}>
+                              <ExpoImage
+                                source={{ uri: userInfo.avatar_url }}
+                                style={StyleSheet.absoluteFillObject}
+                                contentFit="cover"
+                                cachePolicy="disk"
+                                placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
+                                transition={200}
+                              />
+                            </View>
                           ) : (
                             <View style={[styles.userPhotoActual, styles.userPhotoPlaceholder]}>
                               <Ionicons name="person" size={28} color="#FFF" />
@@ -576,7 +666,7 @@ export default function PostDetailScreen() {
                     )}
                     {overlayUrl ? (
                       <View style={styles.frameOverlayImageWrap}>
-                        <Image source={{ uri: overlayUrl }} style={styles.frameOverlayImage} resizeMode="contain" />
+                        <CachedMediaImage kind="frame" url={overlayUrl} style={styles.frameOverlayImage} contentFit="contain" />
                       </View>
                     ) : null}
                   </View>
@@ -595,7 +685,12 @@ export default function PostDetailScreen() {
               ) : (
                 <View style={[styles.miniFrameUI, selectedFrame === f.id && { borderColor: f.color, borderWidth: 3 }, { overflow: 'hidden' }]}>
                   {f.url ? (
-                    <Image source={{ uri: f.url }} style={StyleSheet.absoluteFillObject} resizeMode="contain" />
+                    <CachedMediaImage
+                      kind="frame"
+                      url={String(f.url)}
+                      style={StyleSheet.absoluteFillObject}
+                      contentFit="contain"
+                    />
                   ) : null}
                 </View>
               )}
@@ -619,7 +714,9 @@ export default function PostDetailScreen() {
             </TouchableOpacity>
           ))}
         </View>
+      </ScrollView>
 
+      <View style={styles.stickyActionCard} pointerEvents="box-none">
         <View style={styles.buttonContainer}>
           <TouchableOpacity style={styles.shareBtn} onPress={handleShare} disabled={processing}>
             <Ionicons name="logo-whatsapp" size={22} color={Colors.textOnPrimary} />
@@ -634,8 +731,7 @@ export default function PostDetailScreen() {
             <Text style={styles.downloadBtnText}>{processing ? '...' : t('save_to_gallery')}</Text>
           </TouchableOpacity>
         </View>
-        <View style={{ height: 50 }} />
-      </ScrollView>
+      </View>
 
       {showCopiedToast && (
         <View style={styles.toast}>
@@ -652,7 +748,7 @@ const styles = StyleSheet.create({
   header: { paddingTop: 40, paddingHorizontal: 20, paddingBottom: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   headerTitle: { fontSize: 18, fontWeight: '800' },
   backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
-  scrollContent: { paddingVertical: 10 },
+  scrollContent: { paddingVertical: 10, paddingBottom: 220 },
   slideWrapper: { width: width, alignItems: 'center', justifyContent: 'center' },
   mediaContainer: { width: width - 20, backgroundColor: '#000', borderRadius: 0, overflow: 'hidden', position: 'relative' },
   mediaDragWrapper: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
@@ -682,4 +778,5 @@ const styles = StyleSheet.create({
   captionCopyBtn: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E8E0FF', justifyContent: 'center', alignItems: 'center' },
   toast: { position: 'absolute', bottom: 100, left: 24, right: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.accent, paddingVertical: 12, paddingHorizontal: 20, borderRadius: 12, gap: 8, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4 },
   toastText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
+  stickyActionCard: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: '#FFF' },
 });

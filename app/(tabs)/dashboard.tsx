@@ -1,13 +1,14 @@
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { downloadMediaToCache } from '../../lib/mediaCache';
 import {
     ActivityIndicator,
     BackHandler,
     Dimensions,
-    Image,
     Modal,
     NativeScrollEvent,
     NativeSyntheticEvent,
@@ -34,20 +35,22 @@ const EDIT_PROFILE_GATE_DELAY_MS = 10_000;
 /** Video thumbnail - expo-video on native, Image fallback on web (expo-video native driver issues). */
 function VideoThumbnail({ uri, style }: { uri: string; style?: object }) {
   if (Platform.OS === 'web') {
-    return <Image source={{ uri }} style={style} resizeMode="cover" />;
+    return <ExpoImage source={{ uri }} style={style} contentFit="cover" cachePolicy="disk" />;
   }
   const player = useVideoPlayer(uri, () => {});
   return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
 }
 
+const IMAGE_PLACEHOLDER_BLURHASH = 'LGFFaXYk^6#M@-5c,1J5@[or[Q6.';
+
 interface Category {
   id: string;
   name: string;
-  images: { url: string; shares: string; isVideo?: boolean }[];
+  images: { url: string; shares: string; isVideo?: boolean; captions?: string }[];
 }
 
-type PostRow = { id: string; title: string; image_url: string; category: string; event_date?: string; is_video?: boolean; video_url?: string; party?: string[]; state?: string[] };
-type EventRow = { name: string; end: string; captions?: string[] };
+type PostRow = { id: string; title: string; image_url: string; category: string; event_date?: string; is_video?: boolean; video_url?: string; party?: string[]; state?: string[]; captions?: string };
+type EventRow = { name: string; end: string };
 
 function normalizeForCompare(value: string): string {
   return value.trim().toLowerCase();
@@ -84,6 +87,28 @@ export default function DashboardScreen() {
   const userInfoRef = useRef(userInfo);
   const consumedExpandKeyRef = useRef<string>('');
   userInfoRef.current = userInfo;
+
+  const [dailyLocalByUrl, setDailyLocalByUrl] = useState<Record<string, string>>({});
+  const dailyInFlightRef = useRef<Set<string>>(new Set());
+
+  const ensureDailyCached = React.useCallback(
+    async (url: string) => {
+      const u = String(url ?? '').trim();
+      if (!u) return;
+      if (dailyLocalByUrl[u]) return;
+      if (dailyInFlightRef.current.has(u)) return;
+      dailyInFlightRef.current.add(u);
+      try {
+        const local = await downloadMediaToCache({ kind: 'daily', url: u });
+        if (local) {
+          setDailyLocalByUrl((prev) => (prev[u] ? prev : { ...prev, [u]: local }));
+        }
+      } finally {
+        dailyInFlightRef.current.delete(u);
+      }
+    },
+    [dailyLocalByUrl]
+  );
 
   /** Fetch user state & party from profiles table. Runs only after auth is ready. */
   const fetchUserProfile = React.useCallback(async () => {
@@ -136,7 +161,10 @@ export default function DashboardScreen() {
       }
       // No server-side .or() / .cs. filters here — they caused PGRST100 (parse filter) with some values.
       // Filter by state/party in memory below (same behavior, safe PostgREST URL).
-      const query = supabase.from('posts').select('*').order('created_at', { ascending: false });
+      const query = supabase
+        .from('posts')
+        .select('id,title,image_url,video_url,is_video,category,event_date,party,state,created_at,captions')
+        .order('created_at', { ascending: false });
 
       const { data, error } = await query;
       if (error) {
@@ -198,7 +226,7 @@ export default function DashboardScreen() {
   }, []);
 
   const fetchEvents = async () => {
-    const { data } = await supabase.from('events').select('name, end, captions');
+    const { data } = await supabase.from('events').select('name, end');
     const raw = (data as EventRow[]) || [];
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
@@ -293,7 +321,12 @@ export default function DashboardScreen() {
       if (!map.has(catId)) {
         map.set(catId, { id: catId, name: catName, images: [] });
       }
-      map.get(catId)!.images.push({ url: p.image_url, shares: '0', isVideo: false });
+      map.get(catId)!.images.push({
+        url: p.image_url,
+        shares: '0',
+        isVideo: false,
+        captions: typeof p.captions === 'string' ? p.captions : '',
+      });
     }
     return Array.from(map.values());
   }, [filteredPosts, refreshKey]);
@@ -307,7 +340,12 @@ export default function DashboardScreen() {
       if (!map.has(catId)) {
         map.set(catId, { id: catId, name: catName, images: [] });
       }
-      map.get(catId)!.images.push({ url: p.video_url || p.image_url || '', shares: '0', isVideo: true });
+      map.get(catId)!.images.push({
+        url: p.video_url || p.image_url || '',
+        shares: '0',
+        isVideo: true,
+        captions: typeof p.captions === 'string' ? p.captions : '',
+      });
     }
     return Array.from(map.values());
   }, [filteredPosts, refreshKey]);
@@ -360,16 +398,7 @@ export default function DashboardScreen() {
   }, [reelsByCategory, events, refreshKey]);
 
   const CURRENT_DATA = activeTab === 'graphics' ? graphicsData : reelsData;
-  const eventCaptionsByName = useMemo(
-    () =>
-      new Map(
-        events.map((e) => [
-          e.name,
-          Array.isArray(e.captions) ? e.captions.filter((c): c is string => typeof c === 'string' && c.trim().length > 0) : [],
-        ])
-      ),
-    [events]
-  );
+  // Captions now come from `posts.captions` only (not events).
 
   useEffect(() => {
     const itemWidth = 140 + 15;
@@ -500,7 +529,15 @@ export default function DashboardScreen() {
           {item.isVideo ? (
             <VideoThumbnail uri={item.url} style={styles.postImage} />
           ) : (
-            <Image source={{ uri: item.url }} style={styles.postImage} resizeMode="contain" />
+            <ExpoImage
+              source={{ uri: dailyLocalByUrl[item.url] || item.url }}
+              style={styles.postImage}
+              contentFit="contain"
+              cachePolicy="disk"
+              placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
+              transition={200}
+              onLoadStart={() => void ensureDailyCached(item.url)}
+            />
           )}
           {item.isVideo && <View style={styles.playIconOverlay}><Ionicons name="play-outline" size={28} color="#FFF" /></View>}
           <View style={styles.catLabelBadge}><Text style={styles.catLabelText}>{item.catSource.name}</Text></View>
@@ -530,7 +567,15 @@ export default function DashboardScreen() {
                 {img.isVideo ? (
                   <VideoThumbnail uri={img.url} style={styles.postImage} />
                 ) : (
-                  <Image source={{ uri: img.url }} style={styles.postImage} resizeMode="contain" />
+                  <ExpoImage
+                    source={{ uri: dailyLocalByUrl[img.url] || img.url }}
+                    style={styles.postImage}
+                    contentFit="contain"
+                    cachePolicy="disk"
+                    placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
+                    transition={200}
+                    onLoadStart={() => void ensureDailyCached(img.url)}
+                  />
                 )}
                 {img.isVideo && <View style={styles.playIconOverlay}><Ionicons name="play-outline" size={28} color="#FFF" /></View>}
               </TouchableOpacity>
@@ -569,13 +614,30 @@ export default function DashboardScreen() {
                   key={idx} style={[styles.modernGridItem, { height: activeTab === 'graphics' ? Math.round((width - 50) / 2 * 5 / 4) : Math.round((width - 50) / 2 * 16 / 9), marginTop: idx % 2 === 0 ? 0 : 25 }]}
                   onPress={() => router.push({
                     pathname: '/(auth)/post-detail',
-                    params: { isVideo: img.isVideo ? 'true' : 'false', aspectRatio: activeTab === 'reels' ? '9:16' : '4:5', image: img.url, images: JSON.stringify(cat.images.map(i => i.url)), currentIndex: idx, category: cat.name, captions: JSON.stringify(eventCaptionsByName.get(cat.name) ?? []), fromTab: activeTab }
+                    params: {
+                      isVideo: img.isVideo ? 'true' : 'false',
+                      aspectRatio: activeTab === 'reels' ? '9:16' : '4:5',
+                      image: img.url,
+                      images: JSON.stringify(cat.images.map(i => i.url)),
+                      currentIndex: idx,
+                      category: cat.name,
+                      captions: img.captions || '',
+                      fromTab: activeTab
+                    }
                   })}
                 >
                   {img.isVideo ? (
                     <VideoThumbnail uri={img.url} style={styles.modernGridImg} />
                   ) : (
-                    <Image source={{ uri: img.url }} style={styles.modernGridImg} resizeMode="contain" />
+                    <ExpoImage
+                      source={{ uri: dailyLocalByUrl[img.url] || img.url }}
+                      style={styles.modernGridImg}
+                      contentFit="contain"
+                      cachePolicy="disk"
+                      placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
+                      transition={200}
+                      onLoadStart={() => void ensureDailyCached(img.url)}
+                    />
                   )}
                   {img.isVideo && <View style={styles.playIconOverlay}><Ionicons name="play-outline" size={32} color="#FFF" /></View>}
                   <View style={styles.modernShareLabel}>
@@ -607,11 +669,13 @@ export default function DashboardScreen() {
         <TouchableOpacity onPress={() => router.push('/profile')} style={styles.profileRow}>
           <View style={styles.avatarPlaceholder}>
             {userInfo?.avatar_url ? (
-              <Image
-                source={{
-                  uri: `${userInfo.avatar_url}${userInfo.avatar_url.includes('?') ? '&' : '?'}t=${Date.now()}`,
-                }}
+              <ExpoImage
+                source={{ uri: userInfo.avatar_url }}
                 style={{ width: 45, height: 45, borderRadius: 22.5 }}
+                contentFit="cover"
+                cachePolicy="disk"
+                placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
+                transition={200}
               />
             ) : (
               <Ionicons name="person" size={24} color={Colors.accent} />
@@ -672,15 +736,9 @@ export default function DashboardScreen() {
               <Text style={styles.retryButtonText}>Retry</Text>
             </TouchableOpacity>
           </View>
-        ) : filteredPosts.length === 0 ? (
-          <View style={styles.statusMessage}>
-            <Text style={styles.statusText}>{t('no_posts_available')}</Text>
-          </View>
-        ) : (activeTab === 'graphics' && graphicsData.length === 0) || (activeTab === 'reels' && reelsData.length === 0) ? (
-          <View style={styles.statusMessage}>
-            <Text style={styles.statusText}>{t('no_active_content')}</Text>
-          </View>
-        ) : (
+        ) : filteredPosts.length === 0 ||
+          (activeTab === 'graphics' && graphicsData.length === 0) ||
+          (activeTab === 'reels' && reelsData.length === 0) ? null : (
           activeCategory ? renderSlidingGrids() : renderHomeRows()
         )}
       </ScrollView>

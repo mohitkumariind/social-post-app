@@ -470,6 +470,8 @@ export default function App() {
       if (stateArr.length > 0) postPayload.state = stateArr;
       if (loksabhaArr.length > 0) postPayload.loksabha = loksabhaArr;
       if (assemblyArr.length > 0) postPayload.assembly = assemblyArr;
+      // `posts.captions` is TEXT storing a JSON string like '["A","B"]'
+      postPayload.captions = JSON.stringify(Array.isArray(selectedEvent.captions) ? selectedEvent.captions : []);
       const { data: insertData, error: insertErr } = await supabase
         .from('posts')
         .insert(postPayload)

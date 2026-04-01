@@ -66,21 +66,14 @@ export default function NotificationScreen() {
         </TouchableOpacity>
       </View>
 
-      {notifications.length > 0 ? (
-        <FlatList
-          data={notifications}
-          keyExtractor={(item) => item.id}
-          renderItem={renderItem}
-          contentContainerStyle={{ padding: 20 }}
-          showsVerticalScrollIndicator={false}
-        />
-      ) : (
-        <View style={styles.emptyState}>
-          <Ionicons name="notifications-off-outline" size={80} color="#CCC" />
-          <Text style={styles.emptyTitle}>{t('no_notifications')}</Text>
-          <Text style={styles.emptySub}>{t('no_notifications_sub')}</Text>
-        </View>
-      )}
+      <FlatList
+        data={notifications}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        contentContainerStyle={{ padding: 20 }}
+        showsVerticalScrollIndicator={false}
+        ListEmptyComponent={null}
+      />
     </SafeAreaView>
   );
 }
@@ -119,7 +112,5 @@ const styles = StyleSheet.create({
   notiMessage: { fontSize: 13, color: '#666', marginTop: 3, lineHeight: 18 },
   notiTime: { fontSize: 11, color: '#AAA', marginTop: 8, fontWeight: '500' },
   
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 100 },
-  emptyTitle: { fontSize: 18, fontWeight: '800', color: '#333', marginTop: 20 },
-  emptySub: { fontSize: 14, color: '#999', marginTop: 5 }
+  // Intentionally no empty state UI (silent empty screen)
 });

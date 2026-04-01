@@ -72,6 +72,8 @@ export default function ReelUploaderPage() {
         is_video: true,
         aspect_ratio: '9:16',
         title: selectedVideo.name.replace(/\.[^/.]+$/, ''),
+        // `posts.captions` is TEXT storing JSON string.
+        captions: '[]',
       });
 
       if (insertErr) {
