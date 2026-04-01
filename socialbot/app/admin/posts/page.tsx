@@ -23,6 +23,7 @@ import {
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { isPartyOtherId, LANGUAGE_OPTIONS, LANGUAGE_TO_STATES, PARTIES_DATA } from '@/lib/constants';
+import { captionsJsonForPostColumn, normalizeCaptionsFromDb } from '@/lib/captions';
 
 // --- TYPES ---
 interface Post {
@@ -225,7 +226,7 @@ export default function App() {
         setEvents([]);
         return;
       }
-      const mapped: CampaignEvent[] = (data || []).map((row: { id?: string; name: string; start?: string; end?: string; language?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; captions?: string[] }) => ({
+      const mapped: CampaignEvent[] = (data || []).map((row: { id?: string; name: string; start?: string; end?: string; language?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; captions?: unknown }) => ({
         id: row.id ?? row.name,
         name: row.name,
         start: row.start ?? '',
@@ -236,7 +237,7 @@ export default function App() {
         loksabha: toStrArr(row.loksabha),
         assembly: toStrArr(row.assembly),
         posts: [],
-        captions: Array.isArray(row.captions) ? row.captions : [],
+        captions: normalizeCaptionsFromDb(row.captions),
       }));
       setEvents(mapped);
     };
@@ -355,6 +356,19 @@ export default function App() {
     return { id: 'done', label: 'Expired', color: 'bg-slate-100 text-slate-400' };
   };
 
+  /** Image posts for this campaign; excludes reels (`is_video`). Keeps `posts.captions` in sync with `events.captions`. */
+  const syncGraphicsPostCaptions = async (ev: CampaignEvent, captionsList: string[]) => {
+    const json = captionsJsonForPostColumn(captionsList);
+    let q = supabase
+      .from('posts')
+      .update({ captions: json })
+      .eq('category', ev.name)
+      .or('is_video.eq.false,is_video.is.null');
+    if (ev.language && ev.language.trim()) q = q.eq('language', ev.language);
+    const { error } = await q;
+    if (error) console.error('sync graphics captions to posts:', error);
+  };
+
   const createEvent = async () => {
     if (!newName || !startDate || !endDate) return;
     const startVal = `${startDate}T00:00:00`;
@@ -390,7 +404,7 @@ export default function App() {
       loksabha: loksabhaArr.length ? loksabhaArr : undefined,
       assembly: assemblyArr.length ? assemblyArr : undefined,
       posts: [],
-      captions: Array.isArray(data.captions) ? data.captions : [],
+      captions: normalizeCaptionsFromDb(data.captions),
     };
     setEvents((prev) => [ev, ...prev]);
     setNewName('');
@@ -408,7 +422,7 @@ export default function App() {
     let postsQuery = supabase.from('posts').select('id, image_url, title').eq('category', ev.name);
     if (ev.language && ev.language.trim()) postsQuery = postsQuery.eq('language', ev.language);
     const [eventsRes, postsRes] = await Promise.all([eventsQuery, postsQuery.order('created_at', { ascending: false })]);
-    const dbCaptions = Array.isArray(eventsRes.data?.captions) ? eventsRes.data.captions : ev.captions;
+    const dbCaptions = normalizeCaptionsFromDb(eventsRes.data?.captions ?? ev.captions);
     const evParty = toStrArr((eventsRes.data as { party?: string | string[] })?.party ?? ev.party);
     const evState = toStrArr((eventsRes.data as { state?: string | string[] })?.state ?? ev.state);
     const evLoksabha = toStrArr((eventsRes.data as { loksabha?: string | string[] })?.loksabha ?? ev.loksabha);
@@ -441,6 +455,9 @@ export default function App() {
     );
     if (imageFiles.length === 0) return;
 
+    const { data: freshEv } = await supabase.from('events').select('captions').eq('id', selectedEvent.id).maybeSingle();
+    const batchCaptions = normalizeCaptionsFromDb(freshEv?.captions ?? selectedEvent.captions);
+
     const newPosts: Post[] = [];
     for (const file of imageFiles) {
       const ext = file.name.toLowerCase().endsWith('.jpeg')
@@ -470,8 +487,8 @@ export default function App() {
       if (stateArr.length > 0) postPayload.state = stateArr;
       if (loksabhaArr.length > 0) postPayload.loksabha = loksabhaArr;
       if (assemblyArr.length > 0) postPayload.assembly = assemblyArr;
-      // `posts.captions` is TEXT storing a JSON string like '["A","B"]'
-      postPayload.captions = JSON.stringify(Array.isArray(selectedEvent.captions) ? selectedEvent.captions : []);
+      // `posts.captions` is TEXT storing a JSON string like '["A","B"]' (snapshot from DB so order: captions-first vs upload-first does not matter)
+      postPayload.captions = captionsJsonForPostColumn(batchCaptions);
       const { data: insertData, error: insertErr } = await supabase
         .from('posts')
         .insert(postPayload)
@@ -505,6 +522,7 @@ export default function App() {
     if (!selectedEvent || !newCaptionText.trim()) return;
     const updatedCaptions = [...selectedEvent.captions, newCaptionText.trim()];
     await supabase.from('events').update({ captions: updatedCaptions }).eq('id', selectedEvent.id);
+    await syncGraphicsPostCaptions(selectedEvent, updatedCaptions);
     const updatedEvents = events.map((ev) =>
       ev.id === selectedEvent.id ? { ...ev, captions: updatedCaptions } : ev
     );
@@ -517,6 +535,7 @@ export default function App() {
     if (!selectedEvent || captionToDelete === null) return;
     const updatedCaptions = selectedEvent.captions.filter((_, i) => i !== captionToDelete);
     await supabase.from('events').update({ captions: updatedCaptions }).eq('id', selectedEvent.id);
+    await syncGraphicsPostCaptions(selectedEvent, updatedCaptions);
     const updatedEvents = events.map((ev) =>
       ev.id === selectedEvent.id ? { ...ev, captions: updatedCaptions } : ev
     );

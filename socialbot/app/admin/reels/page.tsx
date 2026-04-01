@@ -16,6 +16,7 @@ import {
   Video
 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
+import { captionsJsonForPostColumn, normalizeCaptionsFromDb } from '@/lib/captions';
 import { supabase } from "../../../lib/supabase";
 
 interface ReelPost {
@@ -59,13 +60,13 @@ export default function ReelUploaderPage() {
         setEvents([]);
         return;
       }
-      const mapped: ReelEvent[] = (data || []).map((row: { id?: string; name: string; start?: string; end?: string; captions?: string[] }) => ({
+      const mapped: ReelEvent[] = (data || []).map((row: { id?: string; name: string; start?: string; end?: string; captions?: unknown }) => ({
         id: row.id ?? row.name,
         name: row.name,
         start: row.start ?? '',
         end: row.end ?? '',
         posts: [],
-        captions: Array.isArray(row.captions) ? row.captions : [],
+        captions: normalizeCaptionsFromDb(row.captions),
       }));
       setEvents(mapped);
     };
@@ -111,7 +112,7 @@ export default function ReelUploaderPage() {
       start: data.start ?? startVal,
       end: data.end ?? endVal,
       posts: [],
-      captions: Array.isArray(data.captions) ? data.captions : [],
+      captions: normalizeCaptionsFromDb(data.captions),
     };
     setEvents((prev) => [ev, ...prev]);
     setNewName('');
@@ -124,7 +125,7 @@ export default function ReelUploaderPage() {
       supabase.from('events').select('captions').eq('name', ev.name).single(),
       supabase.from('posts').select('id, image_url, video_url, title, is_video').eq('category', ev.name).order('created_at', { ascending: false }),
     ]);
-    const dbCaptions = Array.isArray(eventsRes.data?.captions) ? eventsRes.data.captions : ev.captions;
+    const dbCaptions = normalizeCaptionsFromDb(eventsRes.data?.captions ?? ev.captions);
     const postsFromDb: ReelPost[] = (postsRes.data || [])
       .filter((p: { is_video?: boolean; video_url?: string }) => p.is_video === true || (p as { video_url?: string }).video_url)
       .map((p: { id: string; image_url?: string; video_url?: string; title?: string }) => ({
@@ -171,6 +172,7 @@ export default function ReelUploaderPage() {
           is_video: true,
           aspect_ratio: '9:16',
           title: file.name.replace(/\.[^/.]+$/, '') || 'New Reel',
+          captions: captionsJsonForPostColumn(normalizeCaptionsFromDb(selectedEvent.captions)),
         })
         .select('id')
         .single();

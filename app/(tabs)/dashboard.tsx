@@ -49,7 +49,15 @@ interface Category {
   images: { url: string; shares: string; isVideo?: boolean; captions?: string }[];
 }
 
-type PostRow = { id: string; title: string; image_url: string; category: string; event_date?: string; is_video?: boolean; video_url?: string; party?: string[]; state?: string[]; captions?: string };
+type PostRow = { id: string; title: string; image_url: string; category: string; event_date?: string; is_video?: boolean; video_url?: string; party?: string[]; state?: string[]; captions?: string | string[] };
+
+/** `posts.captions` may be TEXT (JSON string) or jsonb array from Supabase. */
+function postCaptionsForNavigation(c: string | string[] | null | undefined): string {
+  if (c == null) return '';
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) return JSON.stringify(c);
+  return '';
+}
 type EventRow = { name: string; end: string };
 
 function normalizeForCompare(value: string): string {
@@ -325,7 +333,7 @@ export default function DashboardScreen() {
         url: p.image_url,
         shares: '0',
         isVideo: false,
-        captions: typeof p.captions === 'string' ? p.captions : '',
+        captions: postCaptionsForNavigation(p.captions),
       });
     }
     return Array.from(map.values());
@@ -344,7 +352,7 @@ export default function DashboardScreen() {
         url: p.video_url || p.image_url || '',
         shares: '0',
         isVideo: true,
-        captions: typeof p.captions === 'string' ? p.captions : '',
+        captions: postCaptionsForNavigation(p.captions),
       });
     }
     return Array.from(map.values());

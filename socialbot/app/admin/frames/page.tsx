@@ -8,6 +8,7 @@ import {
   Video
 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
+import { captionsJsonForPostColumn, normalizeCaptionsFromDb } from '@/lib/captions';
 import { supabase } from "../../../lib/supabase";
 
 export default function ReelUploaderPage() {
@@ -65,6 +66,9 @@ export default function ReelUploaderPage() {
       const { data: urlData } = supabase.storage.from('post-images').getPublicUrl(storagePath);
       const publicUrl = urlData.publicUrl;
 
+      const { data: evRow } = await supabase.from('events').select('captions').eq('name', selectedCategory).maybeSingle();
+      const captionList = normalizeCaptionsFromDb(evRow?.captions);
+
       const { error: insertErr } = await supabase.from('posts').insert({
         image_url: publicUrl,
         video_url: publicUrl,
@@ -72,8 +76,7 @@ export default function ReelUploaderPage() {
         is_video: true,
         aspect_ratio: '9:16',
         title: selectedVideo.name.replace(/\.[^/.]+$/, ''),
-        // `posts.captions` is TEXT storing JSON string.
-        captions: '[]',
+        captions: captionsJsonForPostColumn(captionList),
       });
 
       if (insertErr) {
