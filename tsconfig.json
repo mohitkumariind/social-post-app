@@ -8,6 +8,9 @@
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
     "baseUrl": ".",
+    "typeRoots": [
+      "./node_modules/@types"
+    ],
     "paths": {
       "@supabase/supabase-js": [
         "./node_modules/@supabase/supabase-js/dist/index.d.mts"
