@@ -12,12 +12,12 @@ import {
   TrendingUp,
   Users
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 
 // --- TYPES FOR TS ---
 interface PostPerformance {
-  id: number;
+  id: string;
   title: string;
   reach: string;
   shares: string;
@@ -49,7 +49,7 @@ interface SecondaryStat {
 }
 
 interface UpcomingEvent {
-  id: number;
+  id: string;
   name: string;
   date: string;
   color: string;
@@ -58,48 +58,142 @@ interface UpcomingEvent {
 export default function Dashboard() {
   const [postPage, setPostPage] = useState(1);
 
-  // 1. TOP STATS (5 Metrics as requested)
-  const topStats = [
-    { id: 1, label: 'Total Users', value: '12,840', color: 'bg-blue-600', shadow: 'shadow-blue-100' },
-    { id: 2, label: 'New User Today', value: '+450', color: 'bg-emerald-600', shadow: 'shadow-emerald-100' },
-    { id: 3, label: 'Active User Daily', value: '3,210', color: 'bg-orange-500', shadow: 'shadow-orange-100' },
-    { id: 4, label: 'Active User Monthly', value: '8,400', color: 'bg-indigo-600', shadow: 'shadow-indigo-100' },
-    { id: 5, label: 'Inactive Users 30 Days', value: '1,120', color: 'bg-red-600', shadow: 'shadow-red-100' },
-  ];
+  const [loading, setLoading] = useState(true);
+  const [totalUsers, setTotalUsers] = useState<number | null>(null);
+  const [newUsersToday, setNewUsersToday] = useState<number | null>(null);
+  const [postsCount, setPostsCount] = useState<number | null>(null);
+  const [eventsCount, setEventsCount] = useState<number | null>(null);
+  const [recentPosts, setRecentPosts] = useState<PostPerformance[]>([]);
+  const [geoReport, setGeoReport] = useState<GeoReport[]>([]);
+  const [upcomingEvents, setUpcomingEvents] = useState<UpcomingEvent[]>([]);
 
-  // 2. APP HEALTH (3 Metrics as requested)
-  const appHealthStats: AppHealthStat[] = [
-    { id: 1, label: 'System Stability', value: '99.9%', subText: 'Crash-Free Sessions', icon: <Activity className="text-emerald-600" size={24} />, color: 'bg-emerald-50' },
-    { id: 2, label: 'User Engagement', value: '4m 12s', subText: 'Avg. Session Time', icon: <TrendingUp className="text-blue-600" size={24} />, color: 'bg-blue-50' },
-    { id: 3, label: 'Resource Usage', value: '1.2 TB', subText: 'Cloud Storage Used', icon: <HardDrive className="text-orange-600" size={24} />, color: 'bg-orange-50' },
-  ];
+  const fmtDateShort = (iso: string | null | undefined) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  };
 
-  const postsPerformance: PostPerformance[] = [
-    { id: 1, title: 'Holi Mubarak Frame', reach: '45,200', shares: '12,400', date: 'Feb 24' },
-    { id: 2, title: 'Ambedkar Jayanti Post', reach: '38,100', shares: '10,210', date: 'Feb 22' },
-    { id: 3, title: 'Good Morning Quote', reach: '22,050', shares: '8,050', date: 'Feb 21' },
-    { id: 4, title: 'Joining Campaign', reach: '18,400', shares: '5,200', date: 'Feb 20' },
-    { id: 5, title: 'Vikas Reporting', reach: '12,900', shares: '3,100', date: 'Feb 19' },
-  ];
+  useEffect(() => {
+    let cancelled = false;
 
-  const geoReport: GeoReport[] = [
-    { label: 'Top State', value: 'Uttar Pradesh', sub: '8,400 Users' },
-    { label: 'Top District', value: 'Meerut', sub: '2,400 Users' },
-    { label: 'Top Loksabha', value: 'Lucknow', sub: '1,200 Users' },
-    { label: 'Top Assembly', value: 'Cantt', sub: '450 Users' },
-    { label: 'Top Party', value: 'BJP', sub: '6,200 Users' },
-  ];
+    const startOfTodayIso = () => {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      return start.toISOString();
+    };
 
-  const secondaryStats: SecondaryStat[] = [
-    { id: 1, label: 'Active Parties', value: '12', subText: 'Registered Groups', icon: <Flag className="text-indigo-600" size={28} />, color: 'border-indigo-100' },
-    { id: 2, label: 'Active Assembly', value: '403', subText: 'Operational Seats', icon: <Layers className="text-blue-600" size={28} />, color: 'border-blue-100' },
-  ];
+    (async () => {
+      setLoading(true);
+      try {
+        const [
+          usersCountRes,
+          postsCountRes,
+          eventsCountRes,
+          newUsersRes,
+          recentPostsRes,
+          upcomingEventsRes,
+          geoProfilesRes,
+        ] = await Promise.all([
+          supabase.from('profiles').select('id', { count: 'exact', head: true }),
+          supabase.from('posts').select('id', { count: 'exact', head: true }),
+          supabase.from('events').select('id', { count: 'exact', head: true }),
+          supabase.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', startOfTodayIso()),
+          supabase.from('posts').select('id,title,created_at').order('created_at', { ascending: false }).limit(5),
+          supabase.from('events').select('id,name,end').order('end', { ascending: true }).limit(3),
+          // Used only to compute "Top State/Party" from real profile rows.
+          supabase.from('profiles').select('state, party').limit(2000),
+        ]);
 
-  const upcomingEvents: UpcomingEvent[] = [
-    { id: 1, name: 'Ambedkar Jayanti', date: '14 April', color: 'border-orange-500' },
-    { id: 2, name: 'Ram Navami', date: '16 April', color: 'border-red-500' },
-    { id: 3, name: 'Labour Day', date: '01 May', color: 'border-blue-500' },
-  ];
+        if (cancelled) return;
+
+        setTotalUsers(typeof usersCountRes.count === 'number' ? usersCountRes.count : null);
+        setPostsCount(typeof postsCountRes.count === 'number' ? postsCountRes.count : null);
+        setEventsCount(typeof eventsCountRes.count === 'number' ? eventsCountRes.count : null);
+        setNewUsersToday(typeof newUsersRes.count === 'number' ? newUsersRes.count : null);
+
+        const postsRows = (recentPostsRes.data || []) as Array<{ id: string; title: string | null; created_at?: string | null }>;
+        setRecentPosts(
+          postsRows.map((p) => ({
+            id: p.id,
+            title: String(p.title ?? '').trim() || '—',
+            reach: '—',
+            shares: '—',
+            date: fmtDateShort(p.created_at),
+          }))
+        );
+
+        const eventsRows = (upcomingEventsRes.data || []) as Array<{ id: string; name: string; end?: string | null }>;
+        setUpcomingEvents(
+          eventsRows.map((e, idx) => ({
+            id: e.id ?? e.name,
+            name: e.name,
+            date: fmtDateShort(e.end),
+            color: idx % 3 === 0 ? 'border-orange-500' : idx % 3 === 1 ? 'border-red-500' : 'border-blue-500',
+          }))
+        );
+
+        const profiles = (geoProfilesRes.data || []) as Array<{ state?: string | null; party?: string | null }>;
+        const countBy = (keyFn: (r: (typeof profiles)[number]) => string) => {
+          const m = new Map<string, number>();
+          for (const r of profiles) {
+            const k = keyFn(r);
+            if (!k) continue;
+            m.set(k, (m.get(k) || 0) + 1);
+          }
+          let best: { key: string; count: number } | null = null;
+          for (const [key, count] of m.entries()) {
+            if (!best || count > best.count) best = { key, count };
+          }
+          return best;
+        };
+
+        const topState = countBy((r) => String(r.state ?? '').trim());
+        const topParty = countBy((r) => String(r.party ?? '').trim());
+
+        const nextGeo: GeoReport[] = [];
+        if (topState) nextGeo.push({ label: 'Top State', value: topState.key, sub: `${topState.count} Users` });
+        if (topParty) nextGeo.push({ label: 'Top Party', value: topParty.key, sub: `${topParty.count} Users` });
+        setGeoReport(nextGeo);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 1. TOP STATS GRID (real data; no dummy)
+  const topStats = useMemo(
+    () => [
+      { id: 1, label: 'Total Users', value: totalUsers != null ? String(totalUsers) : '—', color: 'bg-blue-600', shadow: 'shadow-blue-100' },
+      { id: 2, label: 'New User Today', value: newUsersToday != null ? `+${newUsersToday}` : '—', color: 'bg-emerald-600', shadow: 'shadow-emerald-100' },
+      { id: 3, label: 'Total Posts', value: postsCount != null ? String(postsCount) : '—', color: 'bg-orange-500', shadow: 'shadow-orange-100' },
+      { id: 4, label: 'Active Campaigns', value: eventsCount != null ? String(eventsCount) : '—', color: 'bg-indigo-600', shadow: 'shadow-indigo-100' },
+      { id: 5, label: '—', value: '—', color: 'bg-red-600', shadow: 'shadow-red-100' },
+    ],
+    [totalUsers, newUsersToday, postsCount, eventsCount]
+  );
+
+  // 2. APP HEALTH (no dummy values; placeholders only)
+  const appHealthStats: AppHealthStat[] = useMemo(
+    () => [
+      { id: 1, label: 'System Stability', value: '—', subText: 'Crash-Free Sessions', icon: <Activity className="text-emerald-600" size={24} />, color: 'bg-emerald-50' },
+      { id: 2, label: 'User Engagement', value: '—', subText: 'Avg. Session Time', icon: <TrendingUp className="text-blue-600" size={24} />, color: 'bg-blue-50' },
+      { id: 3, label: 'Resource Usage', value: '—', subText: 'Cloud Storage Used', icon: <HardDrive className="text-orange-600" size={24} />, color: 'bg-orange-50' },
+    ],
+    []
+  );
+
+  const secondaryStats: SecondaryStat[] = useMemo(
+    () => [
+      { id: 1, label: 'Total Posts', value: postsCount != null ? String(postsCount) : '—', subText: 'In Library', icon: <Flag className="text-indigo-600" size={28} />, color: 'border-indigo-100' },
+      { id: 2, label: 'Total Campaigns', value: eventsCount != null ? String(eventsCount) : '—', subText: 'In Events', icon: <Layers className="text-blue-600" size={28} />, color: 'border-blue-100' },
+    ],
+    [postsCount, eventsCount]
+  );
 
   return (
     <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in duration-500 pb-20 text-slate-700">
@@ -151,7 +245,7 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {postsPerformance.map((post) => (
+              {(recentPosts.length > 0 ? recentPosts : []).map((post) => (
                 <tr key={post.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-8 py-5 font-bold text-slate-800">{post.title}</td>
                   <td className="px-8 py-5 text-center font-black text-slate-500">{post.reach}</td>
