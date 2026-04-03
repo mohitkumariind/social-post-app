@@ -3,7 +3,7 @@ import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useLang } from '../../context/LanguageContext';
 
-/** Web fallback - post detail uses native-only libs (FFmpeg, ViewShot, etc). */
+/** Web fallback - post detail uses native-only libs (ViewShot, etc). */
 export default function PostDetailWeb() {
   const router = useRouter();
   const { t } = useLang();
@@ -12,7 +12,7 @@ export default function PostDetailWeb() {
     <View style={styles.container}>
       <Text style={styles.title}>{t('ready_to_post') || 'Ready to Post'}</Text>
       <Text style={styles.message}>
-        Post creation with frames and video merge is available on the mobile app.
+        Poster creation with frames is available on the mobile app.
       </Text>
       <TouchableOpacity style={styles.btn} onPress={() => router.back()}>
         <Text style={styles.btnText}>Go Back</Text>

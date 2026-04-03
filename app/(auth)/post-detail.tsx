@@ -1,10 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
-import { useVideoPlayer, VideoView } from 'expo-video';
 import * as Clipboard from 'expo-clipboard';
-import * as Crypto from 'expo-crypto';
-import { FFmpegKit, ReturnCode } from 'ffmpeg-kit-react-native';
-import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
@@ -15,13 +11,12 @@ import {
   Alert,
   BackHandler,
   Dimensions,
-  Platform,
   ScrollView,
   Share,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ViewShot from "react-native-view-shot";
@@ -99,80 +94,6 @@ function CachedMediaImage({
   );
 }
 
-/** Validates URL - must be non-empty string, http/https. */
-function isValidVideoUrl(url: unknown): boolean {
-  if (url == null || typeof url !== 'string') return false;
-  const s = url.trim();
-  if (s.length === 0) return false;
-  try {
-    const normalized = s.startsWith('http://') ? s.replace('http://', 'https://') : s;
-    const u = new URL(normalized);
-    return u.protocol === 'https:' || u.protocol === 'http:';
-  } catch {
-    return false;
-  }
-}
-
-/** Placeholder when video URL invalid. */
-function VideoPlaceholder({ uri }: { uri: string }) {
-  return (
-    <View style={[styles.fullMedia, { backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' }]}>
-      <Ionicons name="videocam-outline" size={64} color="#666" />
-      <Text style={{ color: '#FFF', marginTop: 12, fontSize: 14 }}>Video placeholder</Text>
-    </View>
-  );
-}
-
-/** Safe Mode video player: autoPlay false, preload none, native controls. Only mounts when URL validated. */
-function ReelVideoSlide({ uri }: { uri: string }) {
-  const player = useVideoPlayer(uri, () => {
-    // autoPlay: false - do not call player.play()
-    // preload: 'none' - expo-video loads on mount; user taps play via native controls
-  });
-  return (
-    <View style={styles.fullMedia}>
-      <VideoView
-        player={player}
-        style={StyleSheet.absoluteFillObject}
-        contentFit="contain"
-        nativeControls={true}
-      />
-    </View>
-  );
-}
-
-/** Renders video only when URL is validated; else placeholder. */
-function VideoSlideOrPlaceholder({ uri, isActive }: { uri: string; isActive: boolean }) {
-  if (!isValidVideoUrl(uri)) {
-    return <VideoPlaceholder uri={uri} />;
-  }
-
-  // On-demand caching: start download only when user lands on this slide
-  const { uri: cachedUri, loading } = useCachedMediaUri({
-    kind: 'daily',
-    url: isActive ? uri : null,
-    ext: 'mp4',
-  });
-
-  if (isActive && loading) {
-    return (
-      <View style={[styles.fullMedia, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#1a1a1a' }]}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-        <Text style={{ marginTop: 10, color: Colors.textMuted, fontWeight: '700' }}>Caching video…</Text>
-      </View>
-    );
-  }
-
-  // Use cached local uri if available; fallback to remote
-  return <ReelVideoSlide uri={String(cachedUri || uri)} />;
-}
-
-/** Normalizes video URL to https. */
-function normalizeVideoUrl(url: string): string {
-  const s = url.trim();
-  return s.startsWith('http://') ? s.replace('http://', 'https://') : s;
-}
-
 export default function PostDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -180,16 +101,13 @@ export default function PostDetailScreen() {
   const { userInfo } = useUser();
   const viewShotRef = useRef<any>(null);
 
-  const isVideoParam = params?.isVideo === 'true';
   const initialIndex = params?.currentIndex != null ? parseInt(String(params.currentIndex), 10) : 0;
-  const aspectRatio = (params?.aspectRatio as string) === '9:16' ? '9:16' : '4:5';
 
   const [frames, setFrames] = useState<any[]>([]);
   const [selectedFrame, setSelectedFrame] = useState(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
-  const [processing, setProcessing] = useState(false);
   const [dynamicCaptions, setDynamicCaptions] = useState<string[]>([]);
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -205,24 +123,16 @@ export default function PostDetailScreen() {
         : Array.isArray(categoryRaw)
           ? categoryRaw[0]
           : undefined;
-    const tabRaw = params?.fromTab;
-    const tabParam =
-      typeof tabRaw === 'string'
-        ? tabRaw
-        : Array.isArray(tabRaw)
-          ? tabRaw[0]
-          : (isVideoParam ? 'reels' : 'graphics');
-
     if (category && category.trim().length > 0) {
       router.replace({
         pathname: '/(tabs)/dashboard',
-        params: { expandCategory: category, expandTab: tabParam },
+        params: { expandCategory: category, expandTab: 'graphics' },
       });
     } else {
       router.back();
     }
     return true;
-  }, [isVideoParam, params?.category, params?.fromTab, router]);
+  }, [params?.category, router]);
 
   const originalData: string[] = useMemo(() => {
     try {
@@ -311,107 +221,7 @@ export default function PostDetailScreen() {
       ? (frames[selectedFrame - 2]?.url || frames[selectedFrame - 2]?.frame_url || null)
       : null;
 
-  const processVideoMerge = useCallback(async (): Promise<string | null> => {
-    const total = originalData.length;
-    if (total === 0) return null;
-    const realIndex = total > 1 ? activeIndex % total : 0;
-    const videoUrl = originalData[realIndex];
-    if (!videoUrl || !isValidVideoUrl(videoUrl)) return null;
-
-    const normalizedUrl = normalizeVideoUrl(videoUrl);
-    if (!FileSystem.documentDirectory) return null;
-
-    const toPath = (u: string) => (u || '').replace(/^file:\/\//, '');
-
-    // Use global cache utility: daily for videos, frame for overlays.
-    const cachedVideoUri = await downloadMediaToCache({ kind: 'daily', url: normalizedUrl, ext: 'mp4' });
-    if (!cachedVideoUri || !String(cachedVideoUri).startsWith('file://')) return null;
-
-    const cachedOverlayUri =
-      overlayUrl && overlayUrl.trim().length > 0
-        ? await downloadMediaToCache({ kind: 'frame', url: overlayUrl, ext: 'png' })
-        : null;
-
-    // Stable output file path (no Date.now) so repeated burns reuse output.
-    const outDir = `${(FileSystem.cacheDirectory || FileSystem.documentDirectory || '').replace(/\/?$/, '/') }video-exports/`;
-    try {
-      await FileSystem.makeDirectoryAsync(outDir, { intermediates: true });
-    } catch {}
-
-    const outKey = await Crypto.digestStringAsync(
-      Crypto.CryptoDigestAlgorithm.SHA256,
-      `out:${normalizedUrl}:${String(cachedOverlayUri || '')}`
-    );
-    const outputPath = `${outDir}burn_${outKey}.mp4`;
-
-    try {
-      const outInfo = await FileSystem.getInfoAsync(outputPath);
-      if (outInfo.exists) return outputPath.startsWith('file://') ? outputPath : `file://${outputPath}`;
-
-      const inputLocal = toPath(String(cachedVideoUri));
-      const outputLocal = toPath(outputPath);
-
-      if (cachedOverlayUri && String(cachedOverlayUri).startsWith('file://')) {
-        const overlayLocal = toPath(String(cachedOverlayUri));
-        const session = await FFmpegKit.execute(
-          `-i "${inputLocal}" -i "${overlayLocal}" -filter_complex "[0:v]scale=1080:1920,setsar=1[v0];[1:v]scale=1080:1920,setsar=1[v1];[v0][v1]overlay=0:0[outv]" -map "[outv]" -map 0:a? -c:a copy -b:v 4M "${outputLocal}"`
-        );
-        const returnCode = await session.getReturnCode();
-        if (!ReturnCode.isSuccess(returnCode)) return null;
-      } else {
-        const session = await FFmpegKit.execute(
-          `-i "${inputLocal}" -filter_complex "[0:v]scale=1080:1920,setsar=1[outv]" -map "[outv]" -map 0:a? -c:a copy -b:v 4M "${outputLocal}"`
-        );
-        const returnCode = await session.getReturnCode();
-        if (!ReturnCode.isSuccess(returnCode)) return null;
-      }
-
-      const doneInfo = await FileSystem.getInfoAsync(outputPath);
-      if (!doneInfo.exists) return null;
-      return outputPath.startsWith('file://') ? outputPath : `file://${outputPath}`;
-    } catch (err) {
-      if (__DEV__) console.warn('processVideoMerge error');
-      return null;
-    }
-  }, [originalData, activeIndex, overlayUrl]);
-
   const handleDownload = async () => {
-    if (isVideoParam) {
-      try {
-        setProcessing(true);
-        const { status } = await MediaLibrary.requestPermissionsAsync(
-          true,
-          Platform.OS === 'android' ? ['photo', 'video'] : undefined
-        );
-        if (status !== 'granted') {
-          Alert.alert(t('permission_required'), t('permission_message'));
-          return;
-        }
-        const videoUri = await processVideoMerge();
-        if (!videoUri) {
-          Alert.alert(t('save_error_title'), t('save_error_message'));
-          return;
-        }
-        const uriToSave = videoUri.startsWith('file://') ? videoUri : `file://${videoUri}`;
-        try {
-          await MediaLibrary.createAssetAsync(uriToSave);
-        } catch (createErr) {
-          try {
-            await MediaLibrary.saveToLibraryAsync(uriToSave);
-          } catch (saveErr) {
-            if (__DEV__) console.warn('createAssetAsync / saveToLibraryAsync failed');
-            throw createErr;
-          }
-        }
-        Alert.alert(t('save_success_title'), t('save_success_message'));
-      } catch (err) {
-        if (__DEV__) console.warn('Video save error');
-        Alert.alert(t('save_error_title'), t('save_error_message'));
-      } finally {
-        setProcessing(false);
-      }
-      return;
-    }
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
@@ -433,28 +243,6 @@ export default function PostDetailScreen() {
   };
 
   const handleShare = async () => {
-    if (isVideoParam) {
-      try {
-        setProcessing(true);
-        const videoUri = await processVideoMerge();
-        if (!videoUri) {
-          Alert.alert(t('save_error_title'), t('save_error_message'));
-          return;
-        }
-        const shareUri = videoUri.startsWith('file://') ? videoUri : `file://${videoUri}`;
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(shareUri);
-        } else {
-          Share.share({ message: t('share_message') });
-        }
-      } catch (err) {
-        if (__DEV__) console.warn('share video failed');
-        Alert.alert(t('save_error_title'), t('save_error_message'));
-      } finally {
-        setProcessing(false);
-      }
-      return;
-    }
     try {
       const shotRef = viewShotRef.current;
       if (!shotRef) return;
@@ -518,7 +306,6 @@ export default function PostDetailScreen() {
     // Dashboard may send `captions` (array JSON) or older `caption` key by mistake.
     const raw = (params as any)?.captions ?? (params as any)?.caption;
     const value = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw[0] : undefined;
-    console.log('LOGGING CAPTIONS:', value);
     if (!value) {
       setDynamicCaptions([]);
       return;
@@ -614,21 +401,17 @@ export default function PostDetailScreen() {
                     format: 'jpg',
                     quality: 1.0,
                     width: 1080,
-                    height: aspectRatio === '9:16' ? 1920 : 1350,
+                    height: 1350,
                   }}
                 >
-                  <View style={[styles.mediaContainer, { aspectRatio: aspectRatio === '9:16' ? 9 / 16 : 4 / 5 }]}>
+                  <View style={[styles.mediaContainer, { aspectRatio: 4 / 5 }]}>
                     <View style={styles.mediaDragWrapper}>
-                      {isVideoParam ? (
-                        <VideoSlideOrPlaceholder uri={item} isActive={index === activeIndex} />
+                      {item && typeof item === 'string' ? (
+                        <CachedMediaImage kind="daily" url={item} style={styles.fullMedia} contentFit="contain" />
                       ) : (
-                        item && typeof item === 'string' ? (
-                          <CachedMediaImage kind="daily" url={item} style={styles.fullMedia} contentFit="contain" />
-                        ) : (
-                          <View style={[styles.fullMedia, { backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }]}>
-                            <ActivityIndicator size="small" color="#FFF" />
-                          </View>
-                        )
+                        <View style={[styles.fullMedia, { backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }]}>
+                          <ActivityIndicator size="small" color="#FFF" />
+                        </View>
                       )}
                     </View>
                     {isStaticFrame && (
@@ -718,17 +501,13 @@ export default function PostDetailScreen() {
 
       <View style={styles.stickyActionCard} pointerEvents="box-none">
         <View style={styles.buttonContainer}>
-          <TouchableOpacity style={styles.shareBtn} onPress={handleShare} disabled={processing}>
+          <TouchableOpacity style={styles.shareBtn} onPress={handleShare}>
             <Ionicons name="logo-whatsapp" size={22} color={Colors.textOnPrimary} />
-            <Text style={styles.shareBtnText}>{processing ? '...' : t('share_whatsapp')}</Text>
+            <Text style={styles.shareBtnText}>{t('share_whatsapp')}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.downloadBtn, processing && { opacity: 0.7 }]} onPress={handleDownload} disabled={processing}>
-            {processing ? (
-              <ActivityIndicator size="small" color="#FFF" />
-            ) : (
-              <Ionicons name="download-outline" size={22} color="#FFF" />
-            )}
-            <Text style={styles.downloadBtnText}>{processing ? '...' : t('save_to_gallery')}</Text>
+          <TouchableOpacity style={styles.downloadBtn} onPress={handleDownload}>
+            <Ionicons name="download-outline" size={22} color="#FFF" />
+            <Text style={styles.downloadBtnText}>{t('save_to_gallery')}</Text>
           </TouchableOpacity>
         </View>
       </View>

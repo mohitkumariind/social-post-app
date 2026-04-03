@@ -356,7 +356,7 @@ export default function App() {
     return { id: 'done', label: 'Expired', color: 'bg-slate-100 text-slate-400' };
   };
 
-  /** Image posts for this campaign; excludes reels (`is_video`). Keeps `posts.captions` in sync with `events.captions`. */
+  /** Image posts for this campaign; excludes video posts (`is_video` true). Keeps `posts.captions` in sync with `events.captions`. */
   const syncGraphicsPostCaptions = async (ev: CampaignEvent, captionsList: string[]) => {
     const json = captionsJsonForPostColumn(captionsList);
     let q = supabase

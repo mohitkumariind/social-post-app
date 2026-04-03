@@ -80,7 +80,6 @@ export default function RootLayout() {
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
-    // expo-video / keep-awake runtime issue in some dev-client builds; avoid noisy unhandled rejection overlay.
     LogBox.ignoreLogs(['Unable to activate keep awake']);
   }, []);
 

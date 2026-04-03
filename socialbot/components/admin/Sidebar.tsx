@@ -5,7 +5,6 @@ import {
   FileText,
   Building2,
   MapPin,
-  Frame,
   Users,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -16,7 +15,6 @@ const navItems = [
   { href: '/admin/posts', label: 'Posts', icon: FileText },
   { href: '/admin/parties', label: 'Parties', icon: Building2 },
   { href: '/admin/geography', label: 'Geography', icon: MapPin },
-  { href: '/admin/reels', label: 'Upload Reel', icon: Frame },
   { href: '/admin/users', label: 'Users', icon: Users },
 ];
 

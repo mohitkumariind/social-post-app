@@ -1,23 +1,22 @@
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
-import { useVideoPlayer, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { downloadMediaToCache } from '../../lib/mediaCache';
 import {
-    ActivityIndicator,
-    BackHandler,
-    Dimensions,
-    Modal,
-    NativeScrollEvent,
-    NativeSyntheticEvent,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  BackHandler,
+  Dimensions,
+  Modal,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { normalizePartyId } from '../../constants/Parties';
@@ -32,24 +31,24 @@ const { width } = Dimensions.get('window');
 /** Dashboard par aane + profile load ke baad, incomplete users ko itni der baad edit-profile modal */
 const EDIT_PROFILE_GATE_DELAY_MS = 10_000;
 
-/** Video thumbnail - expo-video on native, Image fallback on web (expo-video native driver issues). */
-function VideoThumbnail({ uri, style }: { uri: string; style?: object }) {
-  if (Platform.OS === 'web') {
-    return <ExpoImage source={{ uri }} style={style} contentFit="cover" cachePolicy="disk" />;
-  }
-  const player = useVideoPlayer(uri, () => {});
-  return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
-}
-
 const IMAGE_PLACEHOLDER_BLURHASH = 'LGFFaXYk^6#M@-5c,1J5@[or[Q6.';
 
 interface Category {
   id: string;
   name: string;
-  images: { url: string; shares: string; isVideo?: boolean; captions?: string }[];
+  images: { url: string; shares: string; captions?: string }[];
 }
 
-type PostRow = { id: string; title: string; image_url: string; category: string; event_date?: string; is_video?: boolean; video_url?: string; party?: string[]; state?: string[]; captions?: string | string[] };
+type PostRow = {
+  id: string;
+  title: string;
+  image_url: string;
+  category: string;
+  event_date?: string;
+  party?: string[] | string;
+  state?: string[] | string;
+  captions?: string | string[];
+};
 
 /** `posts.captions` may be TEXT (JSON string) or jsonb array from Supabase. */
 function postCaptionsForNavigation(c: string | string[] | null | undefined): string {
@@ -78,7 +77,6 @@ export default function DashboardScreen() {
   const dashParams = useLocalSearchParams();
   const { userInfo, setUserInfo } = useUser();
   const { t, lang } = useLang();
-  const [activeTab, setActiveTab] = useState('graphics');
   const [activeCategory, setActiveCategory] = useState<Category | null>(null);
   const [posts, setPosts] = useState<PostRow[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -167,17 +165,16 @@ export default function DashboardScreen() {
         setFetchError(null);
         setLoading(true);
       }
-      // No server-side .or() / .cs. filters here — they caused PGRST100 (parse filter) with some values.
-      // Filter by state/party in memory below (same behavior, safe PostgREST URL).
+      // Graphics only: not a reel (`is_video` true). Uses false OR NULL so legacy image rows (unset flag) still show.
       const query = supabase
         .from('posts')
-        .select('id,title,image_url,video_url,is_video,category,event_date,party,state,created_at,captions')
+        .select('id,title,image_url,category,event_date,party,state,created_at,captions')
+        .or('is_video.eq.false,is_video.is.null')
         .order('created_at', { ascending: false });
 
       const { data, error } = await query;
       if (error) {
         setFetchError(error.message);
-        // Full PostgREST error (RLS / missing table / bad filter) — visible in Metro / Logcat for APK debugging
         console.warn('[Dashboard fetchPosts] Supabase error:', {
           message: error.message,
           code: error.code,
@@ -192,8 +189,8 @@ export default function DashboardScreen() {
       const normalizedUserState = normalizeForCompare(userState || '');
       const normalizedUserParty = normalizeForCompare(normalizePartyId(userParty || '') || userParty || '');
       const filtered = raw.filter((p) => {
-        const postStates = Array.isArray(p.state) ? p.state : (p.state ? [p.state] : []);
-        const postParties = Array.isArray(p.party) ? p.party : (p.party ? [p.party] : []);
+        const postStates = Array.isArray(p.state) ? p.state : p.state ? [p.state] : [];
+        const postParties = Array.isArray(p.party) ? p.party : p.party ? [p.party] : [];
 
         const normalizedPostStates = postStates.map((s) => normalizeForCompare(String(s)));
         const normalizedPostParties = postParties.map((pa) =>
@@ -253,7 +250,9 @@ export default function DashboardScreen() {
       if (cancelled) return;
       setAuthReady(true);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -262,7 +261,7 @@ export default function DashboardScreen() {
     (async () => {
       if (refreshKey === 0 && !hasFetchedProfileRef.current) {
         hasFetchedProfileRef.current = true;
-        const { state, party } = await fetchUserProfile() as { state: string; party: string };
+        const { state, party } = (await fetchUserProfile()) as { state: string; party: string };
         if (cancelled) return;
         await fetchPosts(state, party);
       } else {
@@ -272,7 +271,9 @@ export default function DashboardScreen() {
       }
       if (!cancelled) setDashboardProfileLoaded(true);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [authReady, refreshKey, userInfo?.state, userInfo?.partyName, fetchUserProfile, fetchPosts]);
 
   useEffect(() => {
@@ -284,12 +285,12 @@ export default function DashboardScreen() {
       setEditProfileDelayedVisible(false);
       return;
     }
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       if (isProfileIncomplete(userInfoRef.current)) {
         setEditProfileDelayedVisible(true);
       }
     }, EDIT_PROFILE_GATE_DELAY_MS);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [
     authReady,
     dashboardProfileLoaded,
@@ -314,16 +315,17 @@ export default function DashboardScreen() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'events' }, () => setRefreshKey((p) => p + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => setRefreshKey((p) => p + 1))
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
-  /** Posts are already filtered by user state/party in fetchPosts */
   const filteredPosts = posts;
 
   const postsByCategory = React.useMemo(() => {
     const map = new Map<string, Category>();
     for (const p of filteredPosts) {
-      if (!p.image_url || p.is_video) continue;
+      if (!p.image_url) continue;
       const catName = p.category || 'Latest';
       const catId = catName.toLowerCase().replace(/\s+/g, '-');
       if (!map.has(catId)) {
@@ -332,26 +334,6 @@ export default function DashboardScreen() {
       map.get(catId)!.images.push({
         url: p.image_url,
         shares: '0',
-        isVideo: false,
-        captions: postCaptionsForNavigation(p.captions),
-      });
-    }
-    return Array.from(map.values());
-  }, [filteredPosts, refreshKey]);
-
-  const reelsByCategory = React.useMemo(() => {
-    const map = new Map<string, Category>();
-    for (const p of filteredPosts) {
-      if (!(p.is_video && (p.video_url || p.image_url))) continue;
-      const catName = p.category || 'Latest';
-      const catId = catName.toLowerCase().replace(/\s+/g, '-');
-      if (!map.has(catId)) {
-        map.set(catId, { id: catId, name: catName, images: [] });
-      }
-      map.get(catId)!.images.push({
-        url: p.video_url || p.image_url || '',
-        shares: '0',
-        isVideo: true,
         captions: postCaptionsForNavigation(p.captions),
       });
     }
@@ -372,52 +354,28 @@ export default function DashboardScreen() {
       evEndDate.setUTCHours(0, 0, 0, 0);
       return evEndDate.getTime() >= today.getTime();
     });
-    const result = filtered.length === 0 ? [] : filtered.sort((a, b) => {
-      const endA = eventEndByName.get(a.name);
-      const endB = eventEndByName.get(b.name);
-      if (!endA || !endB) return 0;
-      return new Date(endA).getTime() - new Date(endB).getTime();
-    });
-    // If event-name mapping is out of sync with post category names, do not blank dashboard.
+    const result =
+      filtered.length === 0
+        ? []
+        : filtered.sort((a, b) => {
+            const endA = eventEndByName.get(a.name);
+            const endB = eventEndByName.get(b.name);
+            if (!endA || !endB) return 0;
+            return new Date(endA).getTime() - new Date(endB).getTime();
+          });
     return result.length > 0 ? result : postsByCategory;
   }, [postsByCategory, events, refreshKey]);
 
-  const reelsData = React.useMemo(() => {
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    if (events.length === 0) return reelsByCategory;
-    const activeEventNames = new Set(events.map((e) => e.name));
-    const eventEndByName = new Map(events.map((e) => [e.name, e.end]));
-    const filtered = reelsByCategory.filter((cat) => {
-      if (!activeEventNames.has(cat.name)) return false;
-      const evEnd = eventEndByName.get(cat.name);
-      if (!evEnd) return false;
-      const evEndDate = new Date(evEnd);
-      evEndDate.setUTCHours(0, 0, 0, 0);
-      return evEndDate.getTime() >= today.getTime();
-    });
-    const result = filtered.length === 0 ? [] : filtered.sort((a, b) => {
-      const endA = eventEndByName.get(a.name);
-      const endB = eventEndByName.get(b.name);
-      if (!endA || !endB) return 0;
-      return new Date(endA).getTime() - new Date(endB).getTime();
-    });
-    return result.length > 0 ? result : reelsByCategory;
-  }, [reelsByCategory, events, refreshKey]);
-
-  const CURRENT_DATA = activeTab === 'graphics' ? graphicsData : reelsData;
-  // Captions now come from `posts.captions` only (not events).
+  const CURRENT_DATA = graphicsData;
 
   useEffect(() => {
     const itemWidth = 140 + 15;
     const initialOffset = itemWidth * CURRENT_DATA.length;
     trendingRef.current?.scrollTo({ x: initialOffset, animated: false });
-  }, [activeTab, lang]);
+  }, [CURRENT_DATA.length, lang]);
 
   const allTrending = useMemo(() => {
-    return CURRENT_DATA
-      .filter((cat) => cat.images.length > 0)
-      .map((cat) => ({ ...cat.images[0], catSource: cat }));
+    return CURRENT_DATA.filter((cat) => cat.images.length > 0).map((cat) => ({ ...cat.images[0], catSource: cat }));
   }, [CURRENT_DATA, lang]);
 
   const infiniteTrendingData = useMemo(() => {
@@ -434,11 +392,6 @@ export default function DashboardScreen() {
     } else if (offsetX <= 5) {
       trendingRef.current?.scrollTo({ x: offsetX + totalSetWidth, animated: false });
     }
-  };
-
-  const handleTabChange = (tab: string) => {
-    setActiveTab(tab);
-    setActiveCategory(null);
   };
 
   const switchCategory = (cat: Category | null, index: number) => {
@@ -466,20 +419,11 @@ export default function DashboardScreen() {
   };
 
   useEffect(() => {
-    const tabParamRaw = dashParams?.expandTab;
-    const tabParam = typeof tabParamRaw === 'string' ? tabParamRaw : Array.isArray(tabParamRaw) ? tabParamRaw[0] : undefined;
-    if (tabParam === 'graphics' || tabParam === 'reels') {
-      setActiveTab(tabParam);
-    }
-  }, [dashParams?.expandTab]);
-
-  useEffect(() => {
     const catParamRaw = dashParams?.expandCategory;
-    const expandCategory = typeof catParamRaw === 'string' ? catParamRaw : Array.isArray(catParamRaw) ? catParamRaw[0] : undefined;
+    const expandCategory =
+      typeof catParamRaw === 'string' ? catParamRaw : Array.isArray(catParamRaw) ? catParamRaw[0] : undefined;
     if (!expandCategory || CURRENT_DATA.length === 0) return;
-    const tabParamRaw = dashParams?.expandTab;
-    const tabParam = typeof tabParamRaw === 'string' ? tabParamRaw : Array.isArray(tabParamRaw) ? tabParamRaw[0] : '';
-    const expandKey = `${tabParam}::${expandCategory}`;
+    const expandKey = expandCategory;
     if (consumedExpandKeyRef.current === expandKey) return;
     const idx = CURRENT_DATA.findIndex((c) => c.name === expandCategory);
     if (idx === -1) return;
@@ -487,9 +431,8 @@ export default function DashboardScreen() {
     if (activeCategory?.id === target.id) return;
     consumedExpandKeyRef.current = expandKey;
     switchCategory(target, idx);
-    // Clear route params after one-time restore so next back press can collapse/exit normally.
     router.setParams({ expandCategory: undefined, expandTab: undefined });
-  }, [dashParams?.expandCategory, dashParams?.expandTab, CURRENT_DATA, activeCategory, router]);
+  }, [dashParams?.expandCategory, CURRENT_DATA, activeCategory, router]);
 
   useEffect(() => {
     const onBackPress = () => {
@@ -504,23 +447,12 @@ export default function DashboardScreen() {
     return () => sub.remove();
   }, [activeCategory, router]);
 
-  const renderTabs = () => (
-    <View style={styles.tabContainer}>
-      <TouchableOpacity style={[styles.tabButton, activeTab === 'graphics' && styles.activeTab]} onPress={() => handleTabChange('graphics')}>
-        <Ionicons name="image" size={18} color={activeTab === 'graphics' ? '#FFF' : Colors.primary} />
-        <Text style={[styles.tabText, activeTab === 'graphics' && styles.activeTabText]}>{t('graphics')}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={[styles.tabButton, activeTab === 'reels' && styles.activeTab]} onPress={() => handleTabChange('reels')}>
-        <Ionicons name="play-circle" size={18} color={activeTab === 'reels' ? '#FFF' : Colors.primary} />
-        <Text style={[styles.tabText, activeTab === 'reels' && styles.activeTabText]}>{t('reels')}</Text>
-      </TouchableOpacity>
-    </View>
-  );
-
   const renderTrendingSection = () => (
     <View style={styles.sectionContainer}>
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>{activeTab === 'graphics' ? `Trending ${t('graphics')}` : `Trending ${t('reels')}`}</Text>
+        <Text style={styles.sectionTitle}>
+          {t('trending')} {t('graphics')}
+        </Text>
         {activeCategory && (
           <TouchableOpacity onPress={() => setActiveCategory(null)} style={styles.backLink}>
             <Text style={styles.backLinkText}>{t('explore_all')} 🚀</Text>
@@ -528,15 +460,19 @@ export default function DashboardScreen() {
         )}
       </View>
       <ScrollView
-        ref={trendingRef} horizontal showsHorizontalScrollIndicator={false}
-        onScroll={handleTrendingScroll} scrollEventThrottle={16}
+        ref={trendingRef}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        onScroll={handleTrendingScroll}
+        scrollEventThrottle={16}
         contentContainerStyle={{ paddingLeft: 20 }}
       >
-      {infiniteTrendingData.map((item, index) => (
-        <TouchableOpacity key={index} style={[styles.trendingItem, { height: activeTab === 'graphics' ? Math.round(140 * 5 / 4) : Math.round(140 * 16 / 9) }]} onPress={() => switchCategory(item.catSource, index % allTrending.length)}>
-          {item.isVideo ? (
-            <VideoThumbnail uri={item.url} style={styles.postImage} />
-          ) : (
+        {infiniteTrendingData.map((item, index) => (
+          <TouchableOpacity
+            key={index}
+            style={[styles.trendingItem, { height: Math.round(140 * 5 / 4) }]}
+            onPress={() => switchCategory(item.catSource, index % allTrending.length)}
+          >
             <ExpoImage
               source={{ uri: dailyLocalByUrl[item.url] || item.url }}
               style={styles.postImage}
@@ -546,12 +482,12 @@ export default function DashboardScreen() {
               transition={200}
               onLoadStart={() => void ensureDailyCached(item.url)}
             />
-          )}
-          {item.isVideo && <View style={styles.playIconOverlay}><Ionicons name="play-outline" size={28} color="#FFF" /></View>}
-          <View style={styles.catLabelBadge}><Text style={styles.catLabelText}>{item.catSource.name}</Text></View>
-        </TouchableOpacity>
-      ))}
-    </ScrollView>
+            <View style={styles.catLabelBadge}>
+              <Text style={styles.catLabelText}>{item.catSource.name}</Text>
+            </View>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
     </View>
   );
 
@@ -569,23 +505,19 @@ export default function DashboardScreen() {
           <View style={styles.postGridRow}>
             {cat.images.slice(0, 2).map((img, index) => (
               <TouchableOpacity
-                key={index} style={[styles.postItem, { height: activeTab === 'graphics' ? Math.round((width - 55) / 2 * 5 / 4) : Math.round((width - 55) / 2 * 16 / 9) }]}
+                key={index}
+                style={[styles.postItem, { height: Math.round(((width - 55) / 2) * 5 / 4) }]}
                 onPress={() => switchCategory(cat, idx)}
               >
-                {img.isVideo ? (
-                  <VideoThumbnail uri={img.url} style={styles.postImage} />
-                ) : (
-                  <ExpoImage
-                    source={{ uri: dailyLocalByUrl[img.url] || img.url }}
-                    style={styles.postImage}
-                    contentFit="contain"
-                    cachePolicy="disk"
-                    placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
-                    transition={200}
-                    onLoadStart={() => void ensureDailyCached(img.url)}
-                  />
-                )}
-                {img.isVideo && <View style={styles.playIconOverlay}><Ionicons name="play-outline" size={28} color="#FFF" /></View>}
+                <ExpoImage
+                  source={{ uri: dailyLocalByUrl[img.url] || img.url }}
+                  style={styles.postImage}
+                  contentFit="contain"
+                  cachePolicy="disk"
+                  placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
+                  transition={200}
+                  onLoadStart={() => void ensureDailyCached(img.url)}
+                />
               </TouchableOpacity>
             ))}
           </View>
@@ -598,14 +530,18 @@ export default function DashboardScreen() {
     <View style={{ marginTop: 10, paddingBottom: 30 }}>
       {renderTrendingSection()}
       <ScrollView
-        ref={categoryCarouselRef} horizontal pagingEnabled
-        showsHorizontalScrollIndicator={false} onScroll={handleGridScroll} scrollEventThrottle={16}
+        ref={categoryCarouselRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onScroll={handleGridScroll}
+        scrollEventThrottle={16}
       >
         <View style={{ width: width, justifyContent: 'center', alignItems: 'center' }}>
           <TouchableOpacity style={styles.allTrendingBackCard} onPress={() => setActiveCategory(null)}>
             <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.allTrendingGradient}>
-              <Ionicons name={activeTab === 'graphics' ? "apps" : "videocam"} size={50} color="#FFF" />
-              <Text style={styles.allTrendingTitle}>{activeTab === 'graphics' ? `All ${t('graphics')}` : `All ${t('reels')}`}</Text>
+              <Ionicons name="apps" size={50} color="#FFF" />
+              <Text style={styles.allTrendingTitle}>{t('graphics')}</Text>
               <Text style={styles.allTrendingSub}>{t('tap_see_categories')}</Text>
             </LinearGradient>
           </TouchableOpacity>
@@ -619,35 +555,36 @@ export default function DashboardScreen() {
             <View style={styles.staggeredContainer}>
               {cat.images.map((img, idx) => (
                 <TouchableOpacity
-                  key={idx} style={[styles.modernGridItem, { height: activeTab === 'graphics' ? Math.round((width - 50) / 2 * 5 / 4) : Math.round((width - 50) / 2 * 16 / 9), marginTop: idx % 2 === 0 ? 0 : 25 }]}
-                  onPress={() => router.push({
-                    pathname: '/(auth)/post-detail',
-                    params: {
-                      isVideo: img.isVideo ? 'true' : 'false',
-                      aspectRatio: activeTab === 'reels' ? '9:16' : '4:5',
-                      image: img.url,
-                      images: JSON.stringify(cat.images.map(i => i.url)),
-                      currentIndex: idx,
-                      category: cat.name,
-                      captions: img.captions || '',
-                      fromTab: activeTab
-                    }
-                  })}
+                  key={idx}
+                  style={[
+                    styles.modernGridItem,
+                    {
+                      height: Math.round(((width - 50) / 2) * 5 / 4),
+                      marginTop: idx % 2 === 0 ? 0 : 25,
+                    },
+                  ]}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(auth)/post-detail',
+                      params: {
+                        image: img.url,
+                        images: JSON.stringify(cat.images.map((i) => i.url)),
+                        currentIndex: idx,
+                        category: cat.name,
+                        captions: img.captions || '',
+                      },
+                    })
+                  }
                 >
-                  {img.isVideo ? (
-                    <VideoThumbnail uri={img.url} style={styles.modernGridImg} />
-                  ) : (
-                    <ExpoImage
-                      source={{ uri: dailyLocalByUrl[img.url] || img.url }}
-                      style={styles.modernGridImg}
-                      contentFit="contain"
-                      cachePolicy="disk"
-                      placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
-                      transition={200}
-                      onLoadStart={() => void ensureDailyCached(img.url)}
-                    />
-                  )}
-                  {img.isVideo && <View style={styles.playIconOverlay}><Ionicons name="play-outline" size={32} color="#FFF" /></View>}
+                  <ExpoImage
+                    source={{ uri: dailyLocalByUrl[img.url] || img.url }}
+                    style={styles.modernGridImg}
+                    contentFit="contain"
+                    cachePolicy="disk"
+                    placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
+                    transition={200}
+                    onLoadStart={() => void ensureDailyCached(img.url)}
+                  />
                   <View style={styles.modernShareLabel}>
                     <Ionicons name="flame" size={10} color="#FFD700" />
                     <Text style={styles.modernShareText}>{img.shares}</Text>
@@ -673,91 +610,96 @@ export default function DashboardScreen() {
       </Modal>
 
       <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.push('/profile')} style={styles.profileRow}>
-          <View style={styles.avatarPlaceholder}>
-            {userInfo?.avatar_url ? (
-              <ExpoImage
-                source={{ uri: userInfo.avatar_url }}
-                style={{ width: 45, height: 45, borderRadius: 22.5 }}
-                contentFit="cover"
-                cachePolicy="disk"
-                placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
-                transition={200}
-              />
-            ) : (
-              <Ionicons name="person" size={24} color={Colors.accent} />
-            )}
-          </View>
-          <View style={styles.welcomeTextGroup}>
-            <Text style={styles.welcomeText}>{t('welcome')}!</Text>
-            <Text style={styles.userName}>{t('hi_user')}, {userInfo?.name?.split(' ')[0] || t('user')}</Text>
-          </View>
-        </TouchableOpacity>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            onPress={() => router.push({ pathname: '/language', params: { next: '/dashboard' } })}
-            style={styles.langBtn}
-            activeOpacity={0.7}
-          >
-            <View style={styles.langIconCircle}>
-              <MaterialIcons name="translate" size={18} color={Colors.accent} />
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.push('/profile')} style={styles.profileRow}>
+            <View style={styles.avatarPlaceholder}>
+              {userInfo?.avatar_url ? (
+                <ExpoImage
+                  source={{ uri: userInfo.avatar_url }}
+                  style={{ width: 45, height: 45, borderRadius: 22.5 }}
+                  contentFit="cover"
+                  cachePolicy="disk"
+                  placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
+                  transition={200}
+                />
+              ) : (
+                <Ionicons name="person" size={24} color={Colors.accent} />
+              )}
             </View>
-            <Text style={styles.langCode}>{(lang || 'en').toUpperCase()}</Text>
+            <View style={styles.welcomeTextGroup}>
+              <Text style={styles.welcomeText}>{t('welcome')}!</Text>
+              <Text style={styles.userName}>
+                {t('hi_user')}, {userInfo?.name?.split(' ')[0] || t('user')}
+              </Text>
+            </View>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={() => router.push('/notifications')}
-            style={styles.headerIconBtn}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="notifications-outline" size={28} color={Colors.textMuted} />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-        {renderTabs()}
-
-        <View style={styles.gradientHeaderWrapper}>
-          <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.eclipseGradient}>
-            <Text style={styles.modernCenterTitle}>
-              {activeCategory ? activeCategory.name : (activeTab === 'graphics' ? `Top Picks ${t('graphics')}` : `Top Picks ${t('reels')}`)}
-            </Text>
-          </LinearGradient>
-        </View>
-
-        {loading ? (
-          <View style={styles.statusMessage}>
-            <ActivityIndicator size="large" color={Colors.primary} />
-            <Text style={[styles.statusText, { marginTop: 12 }]}>Loading...</Text>
-          </View>
-        ) : fetchError ? (
-          <View style={styles.statusMessage}>
-            <Text style={styles.statusError}>Error: {fetchError}</Text>
+          <View style={styles.headerActions}>
             <TouchableOpacity
-              onPress={() =>
-                fetchPosts((userInfo?.state ?? '').trim(), (userInfo?.partyName ?? '').trim())
-              }
-              style={styles.retryButton}
+              onPress={() => router.push({ pathname: '/language', params: { next: '/dashboard' } })}
+              style={styles.langBtn}
+              activeOpacity={0.7}
             >
-              <Text style={styles.retryButtonText}>Retry</Text>
+              <View style={styles.langIconCircle}>
+                <MaterialIcons name="translate" size={18} color={Colors.accent} />
+              </View>
+              <Text style={styles.langCode}>{(lang || 'en').toUpperCase()}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => router.push('/notifications')}
+              style={styles.headerIconBtn}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="notifications-outline" size={28} color={Colors.textMuted} />
             </TouchableOpacity>
           </View>
-        ) : filteredPosts.length === 0 ||
-          (activeTab === 'graphics' && graphicsData.length === 0) ||
-          (activeTab === 'reels' && reelsData.length === 0) ? null : (
-          activeCategory ? renderSlidingGrids() : renderHomeRows()
-        )}
-      </ScrollView>
-    </SafeAreaView>
+        </View>
+
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+          <View style={styles.gradientHeaderWrapper}>
+            <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.eclipseGradient}>
+              <Text style={styles.modernCenterTitle}>
+                {activeCategory ? activeCategory.name : `${t('top_picks')} ${t('graphics')}`}
+              </Text>
+            </LinearGradient>
+          </View>
+
+          {loading ? (
+            <View style={styles.statusMessage}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+              <Text style={[styles.statusText, { marginTop: 12 }]}>Loading...</Text>
+            </View>
+          ) : fetchError ? (
+            <View style={styles.statusMessage}>
+              <Text style={styles.statusError}>Error: {fetchError}</Text>
+              <TouchableOpacity
+                onPress={() => fetchPosts((userInfo?.state ?? '').trim(), (userInfo?.partyName ?? '').trim())}
+                style={styles.retryButton}
+              >
+                <Text style={styles.retryButtonText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : filteredPosts.length === 0 || graphicsData.length === 0 ? null : activeCategory ? (
+            renderSlidingGrids()
+          ) : (
+            renderHomeRows()
+          )}
+        </ScrollView>
+      </SafeAreaView>
     </>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { paddingTop: Platform.OS === 'android' ? 40 : 10, paddingHorizontal: 25, paddingBottom: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  header: {
+    paddingTop: Platform.OS === 'android' ? 40 : 10,
+    paddingHorizontal: 25,
+    paddingBottom: 15,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   headerActions: { flexDirection: 'row', alignItems: 'center' },
   headerIconBtn: { paddingLeft: 14 },
   langBtn: {
@@ -785,42 +727,107 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   profileRow: { flexDirection: 'row', alignItems: 'center' },
-  avatarPlaceholder: { width: 45, height: 45, borderRadius: 22.5, backgroundColor: '#E8EAF6', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
+  avatarPlaceholder: {
+    width: 45,
+    height: 45,
+    borderRadius: 22.5,
+    backgroundColor: '#E8EAF6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
   welcomeTextGroup: { marginLeft: 12 },
   welcomeText: { fontSize: 11, color: Colors.textMuted, fontWeight: '500' },
   userName: { fontSize: 18, fontWeight: '800', color: Colors.headerColor, fontFamily: Colors.fontFamilyBold },
-  tabContainer: { flexDirection: 'row', marginHorizontal: 24, marginVertical: 16, backgroundColor: Colors.cardBg, borderRadius: Colors.borderRadius, padding: 6, ...Colors.cardShadow, elevation: Colors.cardElevation },
-  tabButton: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 14, borderRadius: Colors.borderRadiusSm, gap: 8 },
-  activeTab: { backgroundColor: Colors.primary },
-  tabText: { fontWeight: '700', color: Colors.primary, fontSize: 14 },
-  activeTabText: { color: '#FFF' },
   gradientHeaderWrapper: { height: 60, marginVertical: 10, paddingHorizontal: 20 },
   eclipseGradient: { height: 50, width: '100%', borderRadius: 15, justifyContent: 'center', alignItems: 'center' },
   modernCenterTitle: { fontSize: 17, fontWeight: '800', color: '#FFF' },
   sectionContainer: { marginTop: 25 },
-  sectionHeader: { paddingHorizontal: 25, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  sectionHeader: {
+    paddingHorizontal: 25,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
   sectionTitle: { fontSize: 19, fontWeight: '800', color: Colors.headerColor, fontFamily: Colors.fontFamilyBold },
   viewAllText: { color: Colors.primary, fontWeight: '700', fontSize: 13 },
   backLink: { backgroundColor: '#E3F2FD', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10 },
   backLinkText: { color: Colors.primary, fontSize: 12, fontWeight: '800' },
-  trendingItem: { width: 140, borderRadius: Colors.borderRadius, overflow: 'hidden', marginRight: 15, backgroundColor: Colors.cardBg, ...Colors.cardShadow, elevation: Colors.cardElevation },
+  trendingItem: {
+    width: 140,
+    borderRadius: Colors.borderRadius,
+    overflow: 'hidden',
+    marginRight: 15,
+    backgroundColor: Colors.cardBg,
+    ...Colors.cardShadow,
+    elevation: Colors.cardElevation,
+  },
   postGridRow: { flexDirection: 'row', paddingHorizontal: 20, justifyContent: 'space-between' },
-  postItem: { width: (width - 55) / 2, borderRadius: Colors.borderRadius, overflow: 'hidden', backgroundColor: Colors.cardBg, ...Colors.cardShadow, elevation: Colors.cardElevation },
+  postItem: {
+    width: (width - 55) / 2,
+    borderRadius: Colors.borderRadius,
+    overflow: 'hidden',
+    backgroundColor: Colors.cardBg,
+    ...Colors.cardShadow,
+    elevation: Colors.cardElevation,
+  },
   postImage: { width: '100%', height: '100%', backgroundColor: Colors.borderLight },
-  playIconOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.15)' },
-  catLabelBadge: { position: 'absolute', top: 10, left: 10, backgroundColor: 'rgba(142, 36, 170, 0.9)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, elevation: 3 },
+  catLabelBadge: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    backgroundColor: 'rgba(142, 36, 170, 0.9)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    elevation: 3,
+  },
   catLabelText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
   gridSectionHeader: { paddingHorizontal: 25, marginBottom: 15, marginTop: 10 },
   gridSectionTitle: { fontSize: 22, fontWeight: '900', color: Colors.headerColor, fontFamily: Colors.fontFamilyBold },
   gridSectionSub: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
-  allTrendingBackCard: { width: width - 80, height: 350, borderRadius: 12, overflow: 'hidden', elevation: 4, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8 },
+  allTrendingBackCard: {
+    width: width - 80,
+    height: 350,
+    borderRadius: 12,
+    overflow: 'hidden',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+  },
   allTrendingGradient: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 15 },
   allTrendingTitle: { color: '#FFF', fontSize: 28, fontWeight: '900' },
   allTrendingSub: { color: 'rgba(255,255,255,0.85)', fontSize: 14 },
-  staggeredContainer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: 15, paddingBottom: 50 },
-  modernGridItem: { width: (width - 50) / 2, borderRadius: Colors.borderRadius, overflow: 'hidden', backgroundColor: Colors.cardBg, ...Colors.cardShadow, elevation: Colors.cardElevation },
+  staggeredContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    paddingHorizontal: 15,
+    paddingBottom: 50,
+  },
+  modernGridItem: {
+    width: (width - 50) / 2,
+    borderRadius: Colors.borderRadius,
+    overflow: 'hidden',
+    backgroundColor: Colors.cardBg,
+    ...Colors.cardShadow,
+    elevation: Colors.cardElevation,
+  },
   modernGridImg: { width: '100%', height: '100%' },
-  modernShareLabel: { position: 'absolute', bottom: 12, left: 12, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  modernShareLabel: {
+    position: 'absolute',
+    bottom: 12,
+    left: 12,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   modernShareText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
   statusMessage: { paddingVertical: 40, paddingHorizontal: 25, alignItems: 'center', justifyContent: 'center' },
   statusText: { fontSize: 16, fontWeight: '700', color: Colors.textMuted },
