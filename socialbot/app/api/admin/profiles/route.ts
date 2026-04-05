@@ -12,12 +12,17 @@ export async function GET() {
   const admin = createServiceRoleClient();
   const db = admin ?? supabase;
 
-  const { data, error } = await db.from('profiles').select('*').order('created_at', { ascending: false });
+  // Avoid .order('created_at'): many projects only have join_date / no created_at on profiles
+  // (PostgREST errors → 500 → empty User Management). Prefer id (always present on profiles).
+  const { data, error } = await db.from('profiles').select('*').order('id', { ascending: false });
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ profiles: data ?? [], usedServiceRole: !!admin });
+  return NextResponse.json(
+    { profiles: data ?? [], usedServiceRole: !!admin },
+    { headers: { 'Cache-Control': 'no-store' } }
+  );
 }
 
 export async function DELETE(request: NextRequest) {
