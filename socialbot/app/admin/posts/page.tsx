@@ -21,6 +21,7 @@ import {
   X
 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
+import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { isPartyOtherId, LANGUAGE_OPTIONS, LANGUAGE_TO_STATES, PARTIES_DATA } from '@/lib/constants';
 import { captionsJsonForPostColumn, isLikelyEventUuid, normalizeCaptionsFromDb } from '@/lib/captions';
@@ -518,14 +519,14 @@ export default function App() {
           : '.jpg';
       const storagePath = `public/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
 
-      const { error: uploadErr } = await supabase.storage.from('post-images').upload(storagePath, file, { upsert: true });
-      if (uploadErr) {
+      let imageUrl: string;
+      try {
+        const up = await adminStorageUpload('post-images', storagePath, file);
+        imageUrl = up.publicUrl;
+      } catch (uploadErr) {
         console.error('Upload error:', uploadErr);
         continue;
       }
-
-      const { data: urlData } = supabase.storage.from('post-images').getPublicUrl(storagePath);
-      const imageUrl = urlData.publicUrl;
 
       /** category = event name (manual match; no FK). Use event's language, party, state, loksabha, assembly directly. */
       const postPayload: Record<string, unknown> = {
@@ -632,8 +633,7 @@ export default function App() {
 
       if (filePaths.length > 0) {
         try {
-          const { error: storageErr } = await supabase.storage.from('post-images').remove(filePaths);
-          if (storageErr) console.error('Storage delete error:', storageErr);
+          await adminStorageRemove('post-images', filePaths);
         } catch (storageEx) {
           console.error('Storage delete exception:', storageEx);
         }
@@ -683,7 +683,11 @@ export default function App() {
 
     const filePath = getStoragePathFromUrl(postUrl);
     if (filePath) {
-      await supabase.storage.from('post-images').remove([filePath]);
+      try {
+        await adminStorageRemove('post-images', [filePath]);
+      } catch (e) {
+        console.error('removePost storage:', e);
+      }
     }
 
     const filtered = ev.posts.filter((p) => p.id !== postId);

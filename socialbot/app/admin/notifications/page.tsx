@@ -3,6 +3,7 @@
 
 import { Bell, ImageIcon, Loader2, Send, Upload, X } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 
@@ -149,17 +150,14 @@ export default function NotificationBroadcastCenterPage() {
     }
     setUploadLoading(true);
     const storagePath = `public/broadcast/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-    const { error: uploadErr } = await supabase.storage.from('post-images').upload(storagePath, file, {
-      upsert: true,
-    });
-    if (uploadErr) {
+    try {
+      const { publicUrl } = await adminStorageUpload('post-images', storagePath, file);
+      setImageUrl(publicUrl);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
       setUploadLoading(false);
-      alert(uploadErr.message);
-      return;
     }
-    const { data: urlData } = supabase.storage.from('post-images').getPublicUrl(storagePath);
-    setImageUrl(urlData.publicUrl);
-    setUploadLoading(false);
   };
 
   const loadBroadcasts = useCallback(async () => {

@@ -21,6 +21,7 @@ import {
   X
 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
+import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 
@@ -165,13 +166,14 @@ export default function UserManagement() {
     const newFrames: UserFrame[] = [];
     for (const file of pngFiles) {
       const storagePath = `public/${selectedUser.id}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-      const { error: uploadErr } = await supabase.storage.from('user-frames').upload(storagePath, file, { upsert: true });
-      if (uploadErr) {
+      let imageUrl: string;
+      try {
+        const up = await adminStorageUpload('user-frames', storagePath, file);
+        imageUrl = up.publicUrl;
+      } catch (uploadErr) {
         console.error('Frame upload error:', uploadErr);
         continue;
       }
-      const { data: urlData } = supabase.storage.from('user-frames').getPublicUrl(storagePath);
-      const imageUrl = urlData.publicUrl;
 
       const { data: insertData, error: insertErr } = await supabase
         .from('user_frames')
@@ -210,7 +212,13 @@ export default function UserManagement() {
     const frame = selectedUser.personalFrames.find((f) => f.id === frameId);
     if (frame) {
       const filePath = getStoragePathFromFrameUrl(frame.url);
-      if (filePath) await supabase.storage.from('user-frames').remove([filePath]);
+      if (filePath) {
+        try {
+          await adminStorageRemove('user-frames', [filePath]);
+        } catch (e) {
+          console.error('Frame storage remove:', e);
+        }
+      }
       await supabase.from('user_frames').delete().eq('id', frameId);
     }
     const updatedFrames = selectedUser.personalFrames.filter((f) => f.id !== frameId);
