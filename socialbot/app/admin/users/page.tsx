@@ -76,16 +76,17 @@ export default function UserManagement() {
   useEffect(() => {
     const fetchProfiles = async () => {
       try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .order('created_at', { ascending: false });
-        if (error) {
-          console.error('Full Error:', error.message, error.details, error.hint);
+        const res = await fetch('/api/admin/profiles', { credentials: 'same-origin' });
+        if (!res.ok) {
+          if (process.env.NODE_ENV === 'development') {
+            console.error('[users] /api/admin/profiles', res.status, await res.text());
+          }
           setUsers([]);
           return;
         }
-        const mapped = (data || []).map((row) => mapProfileToAppUser(row as Record<string, unknown>));
+        const json = (await res.json()) as { profiles?: Record<string, unknown>[] };
+        const rows = json.profiles || [];
+        const mapped = rows.map((row) => mapProfileToAppUser(row));
         setUsers(mapped);
       } catch (err) {
         console.error('fetchProfiles exception:', err);
@@ -231,9 +232,12 @@ export default function UserManagement() {
             <div className="flex gap-4">
               <button onClick={() => setIsDeleting(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold">Cancel</button>
               <button onClick={async () => {
-                await supabase.from('profiles').delete().eq('id', isDeleting.id);
-                setUsers((prev) => prev.filter((u) => u.id !== isDeleting.id));
-                if (selectedUser?.id === isDeleting.id) setSelectedUser(null);
+                const id = encodeURIComponent(String(isDeleting.id));
+                const res = await fetch(`/api/admin/profiles?id=${id}`, { method: 'DELETE', credentials: 'same-origin' });
+                if (res.ok) {
+                  setUsers((prev) => prev.filter((u) => u.id !== isDeleting.id));
+                  if (selectedUser?.id === isDeleting.id) setSelectedUser(null);
+                }
                 setIsDeleting(null);
               }} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold shadow-lg shadow-red-200 transition-all active:scale-95">Delete</button>
             </div>

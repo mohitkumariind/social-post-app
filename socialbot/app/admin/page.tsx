@@ -1,7 +1,6 @@
 "use client";
 import { BarChart3, Calendar, ChevronRight, Layout, Users } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabase';
 
 interface PostRow {
   id: string;
@@ -41,50 +40,41 @@ export default function Dashboard() {
   useEffect(() => {
     let cancelled = false;
 
-    const startOfTodayIso = () => {
-      const now = new Date();
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      return start.toISOString();
-    };
-
     (async () => {
-      const [
-        usersCountRes,
-        postsCountRes,
-        eventsCountRes,
-        newUsersRes,
-        recentPostsRes,
-        upcomingEventsRes,
-        geoProfilesRes,
-      ] = await Promise.all([
-        supabase.from('profiles').select('id', { count: 'exact', head: true }),
-        supabase.from('posts').select('id', { count: 'exact', head: true }),
-        supabase.from('events').select('id', { count: 'exact', head: true }),
-        supabase.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', startOfTodayIso()),
-        supabase.from('posts').select('id,title,created_at').order('created_at', { ascending: false }).limit(5),
-        supabase.from('events').select('id,name,end').order('end', { ascending: true }).limit(3),
-        supabase.from('profiles').select('state, party').limit(2000),
-      ]);
+      const res = await fetch('/api/admin/dashboard-stats', { credentials: 'same-origin' });
+      if (!res.ok) {
+        if (process.env.NODE_ENV === 'development') {
+          console.warn('[dashboard] dashboard-stats', res.status, await res.text());
+        }
+        return;
+      }
+      const payload = (await res.json()) as {
+        totalUsers: number | null;
+        newUsersToday: number | null;
+        postsCount: number | null;
+        eventsCount: number | null;
+        recentPosts: Array<{ id: string; title: string | null; created_at?: string | null }>;
+        upcomingEvents: Array<{ id: string; name: string; end?: string | null }>;
+        geoReport: GeoReport[];
+      };
 
       if (cancelled) return;
 
-      setTotalUsers(typeof usersCountRes.count === 'number' ? usersCountRes.count : null);
-      setPostsCount(typeof postsCountRes.count === 'number' ? postsCountRes.count : null);
-      setEventsCount(typeof eventsCountRes.count === 'number' ? eventsCountRes.count : null);
-      setNewUsersToday(typeof newUsersRes.count === 'number' ? newUsersRes.count : null);
+      setTotalUsers(payload.totalUsers);
+      setPostsCount(payload.postsCount);
+      setEventsCount(payload.eventsCount);
+      setNewUsersToday(payload.newUsersToday);
 
-      const postsRows = (recentPostsRes.data || []) as Array<{ id: string; title: string | null; created_at?: string | null }>;
       setRecentPosts(
-        postsRows.map((p) => ({
+        (payload.recentPosts || []).map((p) => ({
           id: p.id,
           title: String(p.title ?? '').trim() || '—',
           date: fmtDateShort(p.created_at),
         }))
       );
 
-      const eventsRows = (upcomingEventsRes.data || []) as Array<{ id: string; name: string; end?: string | null }>;
       setUpcomingEvents(
-        eventsRows.map((e, idx) => ({
+        (payload.upcomingEvents || []).map((e, idx) => ({
           id: e.id ?? e.name,
           name: e.name,
           date: fmtDateShort(e.end),
@@ -92,28 +82,7 @@ export default function Dashboard() {
         }))
       );
 
-      const profiles = (geoProfilesRes.data || []) as Array<{ state?: string | null; party?: string | null }>;
-      const countBy = (keyFn: (r: (typeof profiles)[number]) => string) => {
-        const m = new Map<string, number>();
-        for (const r of profiles) {
-          const k = keyFn(r);
-          if (!k) continue;
-          m.set(k, (m.get(k) || 0) + 1);
-        }
-        let best: { key: string; count: number } | null = null;
-        for (const [key, count] of m.entries()) {
-          if (!best || count > best.count) best = { key, count };
-        }
-        return best;
-      };
-
-      const topState = countBy((r) => String(r.state ?? '').trim());
-      const topParty = countBy((r) => String(r.party ?? '').trim());
-
-      const nextGeo: GeoReport[] = [];
-      if (topState) nextGeo.push({ label: 'Top State', value: topState.key, sub: `${topState.count} Users` });
-      if (topParty) nextGeo.push({ label: 'Top Party', value: topParty.key, sub: `${topParty.count} Users` });
-      setGeoReport(nextGeo);
+      setGeoReport(payload.geoReport || []);
     })();
 
     return () => {

@@ -1,13 +1,11 @@
 import { type NextRequest } from 'next/server';
+import { ADMIN_EMAIL_BYPASS } from '@/lib/admin-gate';
 import {
   createSupabaseMiddlewareClient,
   fetchProfileRoleForMiddleware,
   isAdminRole,
   redirectPreservingAuthCookies,
 } from '@/lib/supabase/session-helpers';
-
-/** Temporary allowlist: full admin access without DB role (remove when RLS/service role is stable). */
-const ADMIN_EMAIL_BYPASS = 'mohitkumariind@gmail.com';
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
@@ -43,7 +41,7 @@ export async function middleware(request: NextRequest) {
   }
 
   const emailLower = user?.email?.toLowerCase() ?? '';
-  const isBypassEmail = emailLower === ADMIN_EMAIL_BYPASS;
+  const isBypassEmail = emailLower === ADMIN_EMAIL_BYPASS.toLowerCase();
 
   if (user && isBypassEmail) {
     console.log('[middleware] Step BYPASS: allowlisted email', { email: user.email });
