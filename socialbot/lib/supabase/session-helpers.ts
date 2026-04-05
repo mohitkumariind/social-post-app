@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
@@ -53,7 +53,7 @@ export function redirectPreservingAuthCookies(
   return redirect;
 }
 
-/** Fresh role from DB (not JWT claims). */
+/** Fresh role from DB via user JWT client (subject to RLS). */
 export async function fetchProfileRole(
   supabase: SupabaseClient,
   userId: string
@@ -66,13 +66,62 @@ export async function fetchProfileRole(
 
   if (error || data == null) {
     if (process.env.NODE_ENV === 'development' && error?.code !== 'PGRST116') {
-      console.warn('[middleware] profiles.role fetch:', error?.message ?? 'no row');
+      console.warn('[middleware] profiles.role fetch (anon):', error?.message ?? 'no row');
     }
     return null;
   }
 
   const r = (data as { role?: unknown }).role;
   return typeof r === 'string' ? r.trim() : r != null ? String(r).trim() : null;
+}
+
+export type ProfileRoleResult = {
+  role: string | null;
+  usedServiceRole: boolean;
+  errorMessage?: string;
+};
+
+/**
+ * Prefer service role so RLS cannot hide `profiles.role`. Falls back to anon client if key missing.
+ * `userId` must be `auth.users.id` (same as `profiles.id`).
+ */
+export async function fetchProfileRoleForMiddleware(
+  userId: string,
+  anonSupabase: SupabaseClient
+): Promise<ProfileRoleResult> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+
+  if (!url) {
+    return { role: null, usedServiceRole: false, errorMessage: 'NEXT_PUBLIC_SUPABASE_URL missing' };
+  }
+
+  if (serviceKey) {
+    const admin = createClient(url, serviceKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data, error } = await admin.from('profiles').select('role').eq('id', userId).single();
+
+    if (error || data == null) {
+      return {
+        role: null,
+        usedServiceRole: true,
+        errorMessage: error?.message ?? 'no row (service role)',
+      };
+    }
+
+    const r = (data as { role?: unknown }).role;
+    const role =
+      typeof r === 'string' ? r.trim() : r != null ? String(r).trim() : null;
+    return { role, usedServiceRole: true };
+  }
+
+  const role = await fetchProfileRole(anonSupabase, userId);
+  return {
+    role,
+    usedServiceRole: false,
+    errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
+  };
 }
 
 export function isAdminRole(role: string | null): boolean {
