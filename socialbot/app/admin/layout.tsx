@@ -30,6 +30,10 @@ export default function AdminLayout({
   const pathname = usePathname();
   const title = getTitle(pathname);
 
+  if (pathname === '/admin/login') {
+    return <>{children}</>;
+  }
+
   return (
     <div className="flex min-h-screen bg-zinc-950">
       <Sidebar />
