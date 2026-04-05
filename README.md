@@ -2,6 +2,10 @@
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
+## Environment variables (mobile app)
+
+The Expo app needs **`EXPO_PUBLIC_SUPABASE_URL`** and **`EXPO_PUBLIC_SUPABASE_ANON_KEY`** (copy from `.env.example` into `.env` or set them in EAS for production builds).
+
 ## Get started
 
 1. Install dependencies
