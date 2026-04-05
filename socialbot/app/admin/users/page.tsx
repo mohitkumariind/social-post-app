@@ -76,7 +76,10 @@ export default function UserManagement() {
   useEffect(() => {
     const fetchProfiles = async () => {
       try {
-        const { data, error } = await supabase.from('profiles').select('*').order('join_date', { ascending: false });
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .order('created_at', { ascending: false });
         if (error) {
           console.error('Full Error:', error.message, error.details, error.hint);
           setUsers([]);
