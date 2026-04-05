@@ -10,7 +10,6 @@ const ACCENT = '#25D366';
 function AdminLoginInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const next = searchParams.get('next') || '/admin';
   const error = searchParams.get('error');
   const [loading, setLoading] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
@@ -28,7 +27,7 @@ function AdminLoginInner() {
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next.startsWith('/') ? next : '/admin')}`,
+        redirectTo: `${origin}/auth/callback`,
       },
     });
     setLoading(false);
