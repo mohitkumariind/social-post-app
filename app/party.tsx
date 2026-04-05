@@ -1,6 +1,6 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Colors } from '../constants/Colors';
 import { isPartyOtherId, type Party, PARTIES_DATA } from '../constants/Parties';
@@ -10,6 +10,7 @@ import { supabase } from '../lib/supabase';
 import { getPartiesSafe } from '../lib/parties';
 
 const PARTY_INDICATOR_COLOR = '#8A2BE2';
+const PRIORITY_PARTY_SHORTNAMES = ['BJP', 'INC', 'AAP', 'BSP', 'SAD', 'SP', 'Other'] as const;
 
 export default function PartyScreen() {
   const router = useRouter();
@@ -19,24 +20,63 @@ export default function PartyScreen() {
   const [showMore, setShowMore] = useState(false);
   const [saving, setSaving] = useState(false);
   const [parties, setParties] = useState<Party[]>(PARTIES_DATA);
+  const listRef = useRef<ScrollView>(null);
 
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
       const list = await getPartiesSafe();
-      if (!cancelled && Array.isArray(list) && list.length > 0) setParties(list);
+      if (!cancelled && Array.isArray(list) && list.length > 0) {
+        const priorityIndex = new Map<string, number>(
+          (PRIORITY_PARTY_SHORTNAMES as readonly string[]).map((s, i) => [s.toLowerCase(), i])
+        );
+        const sorted = [...list].sort((a, b) => {
+          const aKey = String(a.shortName ?? '').trim().toLowerCase();
+          const bKey = String(b.shortName ?? '').trim().toLowerCase();
+          const aPri = priorityIndex.get(aKey);
+          const bPri = priorityIndex.get(bKey);
+          const aIsPri = aPri != null;
+          const bIsPri = bPri != null;
+          if (aIsPri && bIsPri) return aPri! - bPri!;
+          if (aIsPri) return -1;
+          if (bIsPri) return 1;
+          return String(a.shortName ?? '').localeCompare(String(b.shortName ?? ''), undefined, { sensitivity: 'base' });
+        });
+        setParties(sorted);
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const first8 = useMemo(() => parties.slice(0, 8), [parties]);
-  const more = useMemo(() => parties.slice(8), [parties]);
+  const priorityParties = useMemo(() => {
+    const priSet = new Set((PRIORITY_PARTY_SHORTNAMES as readonly string[]).map((s) => s.toLowerCase()));
+    return parties.filter((p) => priSet.has(String(p.shortName ?? '').trim().toLowerCase()));
+  }, [parties]);
+  const more = useMemo(() => {
+    const priSet = new Set((PRIORITY_PARTY_SHORTNAMES as readonly string[]).map((s) => s.toLowerCase()));
+    return parties.filter((p) => !priSet.has(String(p.shortName ?? '').trim().toLowerCase()));
+  }, [parties]);
+  const selectedPartyObj = useMemo(
+    () => (selectedParty ? parties.find((p) => p.id === selectedParty) : undefined),
+    [parties, selectedParty]
+  );
+  const selectedIsInFirst8 = useMemo(
+    () => (selectedParty ? priorityParties.some((p) => p.id === selectedParty) : false),
+    [priorityParties, selectedParty]
+  );
 
   const handleSelect = (partyId: string) => {
     setSelectedParty(partyId);
-    if (showMore) setShowMore(false);
+    if (showMore) {
+      setShowMore(false);
+      // When selecting inside the "More parties" modal, bring user back to the top
+      // so they can immediately see the selected card state.
+      requestAnimationFrame(() => {
+        listRef.current?.scrollTo({ y: 0, animated: true });
+      });
+    }
   };
 
   const handleContinue = async () => {
@@ -52,7 +92,7 @@ export default function PartyScreen() {
       if (__DEV__) console.warn('Party backend update failed');
     } finally {
       setSaving(false);
-      router.replace('/dashboard');
+      router.replace('/(tabs)/dashboard');
     }
   };
 
@@ -91,8 +131,10 @@ export default function PartyScreen() {
         <Text style={styles.title}>{t('select_party_title')}</Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
-        {first8.map(renderPartyCard)}
+      <ScrollView ref={listRef} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+        {/* If user selected a party from the modal (not in first 8), surface it here for visibility */}
+        {!selectedIsInFirst8 && selectedPartyObj ? renderPartyCard(selectedPartyObj) : null}
+        {priorityParties.map(renderPartyCard)}
 
         <TouchableOpacity
           style={styles.moreCard}

@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Colors } from '../constants/Colors';
 import { useLang } from '../context/LanguageContext';
+import { useUser } from '../context/UserContext';
 import { supabase } from '../lib/supabase';
 import '../utils/i18n';
 
@@ -26,6 +27,7 @@ export default function LanguageScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { t, changeLanguage, lang } = useLang();
+  const { setUserInfo } = useUser();
   const [selectedLang, setSelectedLang] = useState(lang || 'en');
 
   useEffect(() => {
@@ -35,6 +37,17 @@ export default function LanguageScreen() {
   const handleConfirm = async () => {
     if (!selectedLang) return;
     changeLanguage(selectedLang);
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (session?.user?.id) {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ language: selectedLang })
+        .eq('id', session.user.id);
+      if (error && __DEV__) console.warn('[Language] profiles.language save:', error.message);
+    }
+    setUserInfo((prev) => ({ ...prev, language: selectedLang }));
     const next =
       typeof params.next === 'string'
         ? params.next
@@ -47,9 +60,6 @@ export default function LanguageScreen() {
       return;
     }
     // Bina `next` ke (purana flow): logged-in user ko login par mat bhejo — loop fix
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
     if (session?.user) {
       router.replace('/party');
     } else {

@@ -9,7 +9,7 @@ const SESSION_RESOLVE_TIMEOUT_MS = 3000;
 const MIN_SPLASH_MS = 1500;
 
 /**
- * Entry: Supabase session check → logged in → dashboard; else → login (Google + Supabase on login screen).
+ * Entry: Supabase session check → logged in → dashboard; else → login (Google Sign-In + Supabase).
  */
 export default function Index() {
   const router = useRouter();

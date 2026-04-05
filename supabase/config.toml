@@ -1,0 +1,5 @@
+# Supabase CLI — https://supabase.com/docs/guides/cli/config
+# Run: supabase functions deploy notify-workers
+
+[functions.notify-workers]
+verify_jwt = true

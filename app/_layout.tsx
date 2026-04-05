@@ -1,14 +1,20 @@
 import { Stack, useRouter } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Image, LogBox, Platform, StyleSheet, Text, View } from 'react-native';
+import { Animated, Image, LogBox, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { I18nextProvider } from 'react-i18next';
 import { LanguageProvider } from '../context/LanguageContext';
 import { UserProvider, useUser } from '../context/UserContext';
-import { supabase } from '../lib/supabase';
 import { cleanupDailyContentCache } from '../lib/mediaCache';
+import {
+  recordBroadcastOpenFromNotificationResponse,
+  registerForPushNotificationsAsync,
+  saveTokenToSupabase,
+} from '../lib/notifications';
+import { signOutApp, supabase } from '../lib/supabase';
 import i18n from '../utils/i18n';
 
 // Keep native splash until we explicitly hide it (prevents white flash).
@@ -26,7 +32,7 @@ function SessionSync({ children }: { children: React.ReactNode }) {
 
     const forceLogoutToLogin = async () => {
       try {
-        await supabase.auth.signOut();
+        await signOutApp();
       } catch {
         // Ignore: even if signOut throws, local navigation should still recover user flow.
       }
@@ -72,6 +78,127 @@ function SessionSync({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+const BANNER_GREEN = '#25D366';
+
+/** Registers Expo push token when logged in; foreground in-app banner for incoming notifications. */
+function PushNotificationLayer() {
+  const { isLoggedIn } = useUser();
+  const insets = useSafeAreaInsets();
+  const [banner, setBanner] = useState<{ title: string; body: string } | null>(null);
+  const bannerClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: false,
+        shouldShowList: false,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      }),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    let cancelled = false;
+    void (async () => {
+      const token = await registerForPushNotificationsAsync();
+      if (cancelled || !token) return;
+      await saveTokenToSupabase(token);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn]);
+
+  useEffect(() => {
+    const sub = Notifications.addNotificationReceivedListener((notification) => {
+      const { title, body } = notification.request.content;
+      setBanner({
+        title: typeof title === 'string' ? title : title != null ? String(title) : '',
+        body: typeof body === 'string' ? body : body != null ? String(body) : '',
+      });
+      if (bannerClearRef.current) clearTimeout(bannerClearRef.current);
+      bannerClearRef.current = setTimeout(() => setBanner(null), 4500);
+    });
+    return () => {
+      sub.remove();
+      if (bannerClearRef.current) clearTimeout(bannerClearRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      void recordBroadcastOpenFromNotificationResponse(response);
+    });
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    void (async () => {
+      const last = await Notifications.getLastNotificationResponseAsync();
+      if (last) await recordBroadcastOpenFromNotificationResponse(last);
+    })();
+  }, [isLoggedIn]);
+
+  if (!banner) return null;
+
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <Pressable
+        onPress={() => {
+          if (bannerClearRef.current) clearTimeout(bannerClearRef.current);
+          setBanner(null);
+        }}
+        style={[pushStyles.bannerOuter, { paddingTop: Math.max(insets.top, 8) + 8 }]}
+      >
+        <View style={pushStyles.bannerInner}>
+          {banner.title ? <Text style={pushStyles.bannerTitle}>{banner.title}</Text> : null}
+          {banner.body ? (
+            <Text style={pushStyles.bannerBody} numberOfLines={3}>
+              {banner.body}
+            </Text>
+          ) : null}
+        </View>
+      </Pressable>
+    </View>
+  );
+}
+
+const pushStyles = StyleSheet.create({
+  bannerOuter: {
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  bannerInner: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: BANNER_GREEN,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  bannerTitle: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  bannerBody: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+    lineHeight: 20,
+    opacity: 0.95,
+  },
+});
+
 export default function RootLayout() {
   const [showCustomLoader, setShowCustomLoader] = useState(true);
   const [dots, setDots] = useState(1);
@@ -81,6 +208,18 @@ export default function RootLayout() {
 
   useEffect(() => {
     LogBox.ignoreLogs(['Unable to activate keep awake']);
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    void Notifications.setNotificationChannelAsync('default', {
+      name: 'Default',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      enableVibrate: true,
+      sound: 'default',
+      showBadge: true,
+    });
   }, []);
 
   useEffect(() => {
@@ -130,7 +269,10 @@ export default function RootLayout() {
           <LanguageProvider>
             <UserProvider>
               <SessionSync>
-                <Stack screenOptions={{ headerShown: false }} />
+                <View style={{ flex: 1 }}>
+                  <Stack screenOptions={{ headerShown: false }} />
+                  <PushNotificationLayer />
+                </View>
               </SessionSync>
             </UserProvider>
           </LanguageProvider>

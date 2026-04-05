@@ -1,10 +1,12 @@
 import React, { createContext, ReactNode, useContext, useState } from 'react';
 
 export interface UserInfo {
+  /** Selected app language (mirrors `profiles.language`, and LanguageContext). */
+  language: string;
   name: string;
   phone: string;
   email: string;
-  designation: string;
+  designation1: string;
   designation2: string;
   designation3: string;
   designation4: string;
@@ -13,15 +15,39 @@ export interface UserInfo {
   partyName: string;
   /** Maps to `profiles.state` (e.g. state name) — not `state_id` */
   state: string;
-  district: string;
-  constituency: string;
   loksabha_id: number | null;
+  /** Human-readable Lok Sabha name (for poster labels). Maps to `profiles.loksabha` */
+  loksabha: string;
   assembly_id: number | null;
+  /** Human-readable Assembly name (for poster labels). Maps to `profiles.assembly` */
+  assembly: string;
   whatsapp: string;
   facebook: string;
   twitter: string;
   instagram: string;
 }
+
+export const EMPTY_USER_INFO: UserInfo = {
+  language: '',
+  name: '',
+  phone: '',
+  email: '',
+  designation1: '',
+  designation2: '',
+  designation3: '',
+  designation4: '',
+  avatar_url: '',
+  partyName: '',
+  state: '',
+  loksabha_id: null,
+  assembly_id: null,
+  loksabha: '',
+  assembly: '',
+  whatsapp: '',
+  facebook: '',
+  twitter: '',
+  instagram: '',
+};
 
 interface UserContextType {
   userInfo: UserInfo;
@@ -34,26 +60,7 @@ const UserContext = createContext<UserContextType | undefined>(undefined);
 
 export const UserProvider = ({ children }: { children: ReactNode }) => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [userInfo, setUserInfo] = useState<UserInfo>({
-    name: '',
-    phone: '',
-    email: '',
-    designation: '',
-    designation2: '',
-    designation3: '',
-    designation4: '',
-    avatar_url: '',
-    partyName: '',
-    state: '',
-    district: '',
-    constituency: '',
-    loksabha_id: null,
-    assembly_id: null,
-    whatsapp: '',
-    facebook: '',
-    twitter: '',
-    instagram: '',
-  });
+  const [userInfo, setUserInfo] = useState<UserInfo>({ ...EMPTY_USER_INFO });
 
   return (
     <UserContext.Provider value={{ userInfo, setUserInfo, isLoggedIn, setIsLoggedIn }}>

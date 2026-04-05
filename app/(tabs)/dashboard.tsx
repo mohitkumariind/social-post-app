@@ -20,7 +20,7 @@ import {
 } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { normalizePartyId } from '../../constants/Parties';
-import { useLang } from '../../context/LanguageContext';
+import { SUPPORTED_LANGS, useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { supabase } from '../../lib/supabase';
 import { EditProfileScreen } from '../edit-profile';
@@ -29,14 +29,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 const { width } = Dimensions.get('window');
 
 /** Dashboard par aane + profile load ke baad, incomplete users ko itni der baad edit-profile modal */
-const EDIT_PROFILE_GATE_DELAY_MS = 10_000;
+const EDIT_PROFILE_GATE_DELAY_MS = 30_000;
 
-const IMAGE_PLACEHOLDER_BLURHASH = 'LGFFaXYk^6#M@-5c,1J5@[or[Q6.';
+/** Solid skeleton while graphics thumbnails load (no blurhash). */
+const IMAGE_SKELETON_BG = '#E8E8E8';
 
 interface Category {
   id: string;
   name: string;
-  images: { url: string; shares: string; captions?: string }[];
+  images: { url: string; shares: string; captions?: string; postId?: string }[];
 }
 
 type PostRow = {
@@ -77,6 +78,7 @@ export default function DashboardScreen() {
   const dashParams = useLocalSearchParams();
   const { userInfo, setUserInfo } = useUser();
   const { t, lang } = useLang();
+  const { changeLanguage } = useLang();
   const [activeCategory, setActiveCategory] = useState<Category | null>(null);
   const [posts, setPosts] = useState<PostRow[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -127,12 +129,16 @@ export default function DashboardScreen() {
       const { data: profile } = await supabase
         .from('profiles')
         .select(
-          'state, district, constituency, loksabha_id, assembly_id, party, name, phone, avatar_url'
+          'state, language, loksabha_id, loksabha, assembly_id, assembly, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
         )
         .eq('id', userId)
         .single();
 
       if (profile) {
+        const langRaw = String((profile as { language?: string }).language ?? '').trim();
+        if (langRaw && (SUPPORTED_LANGS as readonly string[]).includes(langRaw)) {
+          changeLanguage(langRaw);
+        }
         const rawParty = String(profile.party ?? '').trim();
         const party = normalizePartyId(rawParty) || rawParty;
         const stateStr = String(profile.state ?? '').trim();
@@ -141,15 +147,24 @@ export default function DashboardScreen() {
         const avatarUrl = String((profile as { avatar_url?: string }).avatar_url ?? '').trim();
         setUserInfo((prev) => ({
           ...prev,
+          language: langRaw || prev.language,
           name: nameFromDb,
           phone: phoneFromDb,
           state: stateStr || prev.state,
-          district: String(profile.district ?? prev.district ?? ''),
-          constituency: String(profile.constituency ?? prev.constituency ?? ''),
           loksabha_id: profile.loksabha_id ?? prev.loksabha_id,
+          loksabha: String((profile as { loksabha?: string }).loksabha ?? prev.loksabha ?? ''),
           assembly_id: profile.assembly_id ?? prev.assembly_id,
+          assembly: String((profile as { assembly?: string }).assembly ?? prev.assembly ?? ''),
           partyName: party || prev.partyName,
           avatar_url: avatarUrl,
+          designation1: String((profile as { designation1?: string }).designation1 ?? prev.designation1 ?? ''),
+          designation2: String((profile as { designation2?: string }).designation2 ?? prev.designation2 ?? ''),
+          designation3: String((profile as { designation3?: string }).designation3 ?? prev.designation3 ?? ''),
+          designation4: String((profile as { designation4?: string }).designation4 ?? prev.designation4 ?? ''),
+          whatsapp: String((profile as { whatsapp?: string }).whatsapp ?? prev.whatsapp ?? ''),
+          facebook: String((profile as { facebook?: string }).facebook ?? prev.facebook ?? ''),
+          instagram: String((profile as { instagram?: string }).instagram ?? prev.instagram ?? ''),
+          twitter: String((profile as { twitter?: string }).twitter ?? prev.twitter ?? ''),
         }));
         return { state: stateStr, party };
       }
@@ -335,6 +350,7 @@ export default function DashboardScreen() {
         url: p.image_url,
         shares: '0',
         captions: postCaptionsForNavigation(p.captions),
+        postId: p.id,
       });
     }
     return Array.from(map.values());
@@ -478,8 +494,6 @@ export default function DashboardScreen() {
               style={styles.postImage}
               contentFit="contain"
               cachePolicy="disk"
-              placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
-              transition={200}
               onLoadStart={() => void ensureDailyCached(item.url)}
             />
             <View style={styles.catLabelBadge}>
@@ -514,8 +528,6 @@ export default function DashboardScreen() {
                   style={styles.postImage}
                   contentFit="contain"
                   cachePolicy="disk"
-                  placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
-                  transition={200}
                   onLoadStart={() => void ensureDailyCached(img.url)}
                 />
               </TouchableOpacity>
@@ -572,6 +584,7 @@ export default function DashboardScreen() {
                         currentIndex: idx,
                         category: cat.name,
                         captions: img.captions || '',
+                        postId: img.postId ?? '',
                       },
                     })
                   }
@@ -581,8 +594,6 @@ export default function DashboardScreen() {
                     style={styles.modernGridImg}
                     contentFit="contain"
                     cachePolicy="disk"
-                    placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
-                    transition={200}
                     onLoadStart={() => void ensureDailyCached(img.url)}
                   />
                   <View style={styles.modernShareLabel}>
@@ -616,11 +627,9 @@ export default function DashboardScreen() {
               {userInfo?.avatar_url ? (
                 <ExpoImage
                   source={{ uri: userInfo.avatar_url }}
-                  style={{ width: 45, height: 45, borderRadius: 22.5 }}
+                  style={{ width: 45, height: 45, borderRadius: 22.5, backgroundColor: IMAGE_SKELETON_BG }}
                   contentFit="cover"
                   cachePolicy="disk"
-                  placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
-                  transition={200}
                 />
               ) : (
                 <Ionicons name="person" size={24} color={Colors.accent} />
@@ -772,7 +781,7 @@ const styles = StyleSheet.create({
     ...Colors.cardShadow,
     elevation: Colors.cardElevation,
   },
-  postImage: { width: '100%', height: '100%', backgroundColor: Colors.borderLight },
+  postImage: { width: '100%', height: '100%', backgroundColor: IMAGE_SKELETON_BG },
   catLabelBadge: {
     position: 'absolute',
     top: 10,
@@ -815,7 +824,7 @@ const styles = StyleSheet.create({
     ...Colors.cardShadow,
     elevation: Colors.cardElevation,
   },
-  modernGridImg: { width: '100%', height: '100%' },
+  modernGridImg: { width: '100%', height: '100%', backgroundColor: IMAGE_SKELETON_BG },
   modernShareLabel: {
     position: 'absolute',
     bottom: 12,

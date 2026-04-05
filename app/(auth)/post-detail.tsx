@@ -29,9 +29,39 @@ const { width } = Dimensions.get('window');
 
 const FRAME_STATIC_COLOR = Colors.primary;
 
-const IMAGE_PLACEHOLDER_BLURHASH =
-  // Neutral shimmer-like placeholder (works on both light/dark)
-  'LGFFaXYk^6#M@-5c,1J5@[or[Q6.';
+/** Solid skeleton while graphics / frame URLs resolve (no blurhash placeholder). */
+const IMAGE_SKELETON_BG = '#E8E8E8';
+
+function routeParamStr(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'string') return v.trim();
+  if (Array.isArray(v)) return String(v[0] ?? '').trim();
+  return String(v).trim();
+}
+
+/** Normalize `posts.captions` / `events.captions` (jsonb, text JSON string, or plain string). */
+function parseCaptionsFromDb(raw: unknown): string[] {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map((x) => (typeof x === 'string' ? x.trim() : x != null ? String(x).trim() : ''))
+      .filter((s) => s.length > 0);
+  }
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s || s === '[]') return [];
+    try {
+      const p = JSON.parse(s) as unknown;
+      if (Array.isArray(p)) {
+        return p.map((x) => (typeof x === 'string' ? x.trim() : '')).filter((x) => x.length > 0);
+      }
+      if (typeof p === 'string' && p.trim()) return [p.trim()];
+    } catch {
+      return [s];
+    }
+  }
+  return [];
+}
 
 type MediaKind = 'daily' | 'frame';
 
@@ -79,16 +109,18 @@ function CachedMediaImage({
   contentFit?: 'cover' | 'contain';
 }) {
   const { uri, loading } = useCachedMediaUri({ kind, url });
+  // Frames are transparent PNG overlays; a grey skeleton behind them makes the poster look "greyed out".
+  const showSkeleton = kind !== 'frame';
   return (
-    <View style={style}>
-      {loading ? <View style={[StyleSheet.absoluteFillObject, { backgroundColor: Colors.borderLight }]} /> : null}
+    <View style={[style, { backgroundColor: showSkeleton ? IMAGE_SKELETON_BG : 'transparent' }]}>
+      {loading && showSkeleton ? (
+        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: IMAGE_SKELETON_BG }]} />
+      ) : null}
       <ExpoImage
         source={{ uri: String(uri || url) }}
         style={StyleSheet.absoluteFillObject}
         contentFit={contentFit ?? 'contain'}
         cachePolicy="disk"
-        placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
-        transition={200}
       />
     </View>
   );
@@ -335,6 +367,73 @@ export default function PostDetailScreen() {
     }
   }, [(params as any)?.captions, (params as any)?.caption]);
 
+  /**
+   * If route params lose/truncate `captions` (common with long JSON in URLs), load from DB.
+   * Prefer `postId` → `posts.image_url` → `events.name` (category).
+   */
+  useEffect(() => {
+    if (dynamicCaptions.length > 0) return;
+    const postId = routeParamStr((params as any)?.postId);
+    const imageUrl = routeParamStr((params as any)?.image);
+    const category = routeParamStr((params as any)?.category);
+    if (!postId && !imageUrl && !category) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (__DEV__) console.log('[PostDetail] captions fallback query', { postId, imageUrl, category });
+
+        if (postId) {
+          const { data, error } = await supabase.from('posts').select('captions').eq('id', postId).maybeSingle();
+          if (cancelled) return;
+          if (__DEV__) console.log('[PostDetail] Fetched post by id:', data);
+          if (error && __DEV__) console.warn('[PostDetail] postId captions error:', error.message);
+          if (!error && data) {
+            const list = parseCaptionsFromDb((data as { captions?: unknown }).captions);
+            if (list.length > 0) {
+              setDynamicCaptions(list);
+              return;
+            }
+          }
+        }
+
+        if (imageUrl) {
+          const { data, error } = await supabase.from('posts').select('captions').eq('image_url', imageUrl).maybeSingle();
+          if (cancelled) return;
+          if (__DEV__) console.log('[PostDetail] Fetched post by image_url:', data);
+          if (error && __DEV__) console.warn('[PostDetail] image_url captions error:', error.message);
+          if (!error && data) {
+            const list = parseCaptionsFromDb((data as { captions?: unknown }).captions);
+            if (list.length > 0) {
+              setDynamicCaptions(list);
+              return;
+            }
+          }
+        }
+
+        if (!category) return;
+        const { data: evRows, error: evErr } = await supabase
+          .from('events')
+          .select('captions')
+          .eq('name', category)
+          .limit(1);
+        if (cancelled) return;
+        if (__DEV__) console.log('[PostDetail] Fetched events row:', evRows?.[0]);
+        if (evErr) {
+          if (__DEV__) console.warn('[PostDetail] events captions error:', evErr.message);
+          return;
+        }
+        const evRaw = (evRows?.[0] as { captions?: unknown } | undefined)?.captions;
+        const list = parseCaptionsFromDb(evRaw);
+        if (list.length > 0) setDynamicCaptions(list);
+      } catch (e) {
+        if (__DEV__) console.warn('[PostDetail] captions fallback exception', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dynamicCaptions.length, params?.postId, params?.image, params?.category]);
+
   const handleCopyCaption = useCallback(
     async (text: string) => {
       if (!text?.trim()) return;
@@ -424,19 +523,17 @@ export default function PostDetailScreen() {
                             {userInfo?.name?.toUpperCase() || t('default_user_name').toUpperCase()}
                           </Text>
                           <Text style={styles.userDesignation} numberOfLines={1}>
-                            {userInfo?.designation || t('default_designation')}
+                            {userInfo?.designation1 || t('default_designation')}
                           </Text>
                         </View>
                         <View style={styles.photoContainer}>
                           {userInfo?.avatar_url?.trim() ? (
-                            <View style={styles.userPhotoActual}>
+                            <View style={[styles.userPhotoActual, { backgroundColor: IMAGE_SKELETON_BG }]}>
                               <ExpoImage
                                 source={{ uri: userInfo.avatar_url }}
                                 style={StyleSheet.absoluteFillObject}
                                 contentFit="cover"
                                 cachePolicy="disk"
-                                placeholder={{ blurhash: IMAGE_PLACEHOLDER_BLURHASH }}
-                                transition={200}
                               />
                             </View>
                           ) : (

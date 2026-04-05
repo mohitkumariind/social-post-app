@@ -23,7 +23,7 @@ import {
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { isPartyOtherId, LANGUAGE_OPTIONS, LANGUAGE_TO_STATES, PARTIES_DATA } from '@/lib/constants';
-import { captionsJsonForPostColumn, normalizeCaptionsFromDb } from '@/lib/captions';
+import { captionsJsonForPostColumn, isLikelyEventUuid, normalizeCaptionsFromDb } from '@/lib/captions';
 
 // --- TYPES ---
 interface Post {
@@ -194,6 +194,7 @@ export default function App() {
   const [assembliesLoading, setAssembliesLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState<CampaignEvent | null>(null);
   const [editingEvent, setEditingEvent] = useState<CampaignEvent | null>(null);
+  const [workerNotifyToast, setWorkerNotifyToast] = useState(false);
   const skipAutoStateRef = useRef(false);
   const skipLoksabhaResetCountRef = useRef(0);
 
@@ -226,19 +227,21 @@ export default function App() {
         setEvents([]);
         return;
       }
-      const mapped: CampaignEvent[] = (data || []).map((row: { id?: string; name: string; start?: string; end?: string; language?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; captions?: unknown }) => ({
-        id: row.id ?? row.name,
-        name: row.name,
-        start: row.start ?? '',
-        end: row.end ?? '',
-        language: row.language ?? undefined,
-        party: toStrArr(row.party),
-        state: toStrArr(row.state),
-        loksabha: toStrArr(row.loksabha),
-        assembly: toStrArr(row.assembly),
-        posts: [],
-        captions: normalizeCaptionsFromDb(row.captions),
-      }));
+      const mapped: CampaignEvent[] = (data || [])
+        .map((row: { id?: string; name: string; start?: string; end?: string; language?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; captions?: unknown }) => ({
+          id: String(row.id ?? '').trim(),
+          name: row.name,
+          start: row.start ?? '',
+          end: row.end ?? '',
+          language: row.language ?? undefined,
+          party: toStrArr(row.party),
+          state: toStrArr(row.state),
+          loksabha: toStrArr(row.loksabha),
+          assembly: toStrArr(row.assembly),
+          posts: [],
+          captions: normalizeCaptionsFromDb(row.captions),
+        }))
+        .filter((e) => e.id.length > 0);
       setEvents(mapped);
     };
     fetchEvents().finally(() => setEventsLoading(false));
@@ -356,17 +359,46 @@ export default function App() {
     return { id: 'done', label: 'Expired', color: 'bg-slate-100 text-slate-400' };
   };
 
-  /** Image posts for this campaign; excludes video posts (`is_video` true). Keeps `posts.captions` in sync with `events.captions`. */
+  const fetchEventByIdOrName = async (ev: Pick<CampaignEvent, 'id' | 'name'>, select: string) => {
+    const idStr = String(ev.id ?? '').trim();
+    if (isLikelyEventUuid(idStr)) {
+      const r = await supabase.from('events').select(select).eq('id', idStr).maybeSingle();
+      if (!r.error && r.data) return r;
+    }
+    return supabase.from('events').select(select).eq('name', ev.name).limit(1).maybeSingle();
+  };
+
+  const updateEventByIdOrName = async (ev: Pick<CampaignEvent, 'id' | 'name'>, patch: Record<string, unknown>) => {
+    const idStr = String(ev.id ?? '').trim();
+    if (isLikelyEventUuid(idStr)) {
+      const r = await supabase.from('events').update(patch).eq('id', idStr);
+      if (!r.error) return r;
+    }
+    return supabase.from('events').update(patch).eq('name', ev.name);
+  };
+
+  const deleteEventRowByIdOrName = async (ev: CampaignEvent) => {
+    const idStr = String(ev.id ?? '').trim();
+    if (isLikelyEventUuid(idStr)) {
+      const { error } = await supabase.from('events').delete().eq('id', idStr);
+      if (!error) return;
+    }
+    const { error } = await supabase.from('events').delete().eq('name', ev.name);
+    if (error) console.error('Events delete error:', error);
+  };
+
+  /**
+   * Push `events.captions` snapshot onto every post in this campaign (`posts.category` = event name).
+   * We intentionally match **category only** (no `is_video` / `language` filters): those filters were skipping
+   * rows (e.g. DB default `is_video = true`, or language mismatch) so captions never updated.
+   */
   const syncGraphicsPostCaptions = async (ev: CampaignEvent, captionsList: string[]) => {
-    const json = captionsJsonForPostColumn(captionsList);
-    let q = supabase
-      .from('posts')
-      .update({ captions: json })
-      .eq('category', ev.name)
-      .or('is_video.eq.false,is_video.is.null');
-    if (ev.language && ev.language.trim()) q = q.eq('language', ev.language);
-    const { error } = await q;
-    if (error) console.error('sync graphics captions to posts:', error);
+    const jsonStr = captionsJsonForPostColumn(captionsList);
+    let { error } = await supabase.from('posts').update({ captions: captionsList }).eq('category', ev.name);
+    if (error) {
+      ({ error } = await supabase.from('posts').update({ captions: jsonStr }).eq('category', ev.name));
+    }
+    if (error) console.error('sync graphics captions to posts:', error.message, error);
   };
 
   const createEvent = async () => {
@@ -393,8 +425,12 @@ export default function App() {
       alert('Error: ' + error.message);
       return;
     }
+    if (data.id == null || String(data.id).trim() === '') {
+      alert('Event created but no id was returned — check Supabase RLS and .select() on insert.');
+      return;
+    }
     const ev: CampaignEvent = {
-      id: data.id ?? data.name,
+      id: String(data.id).trim(),
       name: data.name,
       start: data.start ?? startVal,
       end: data.end ?? endVal,
@@ -418,16 +454,21 @@ export default function App() {
   };
 
   const openEvent = async (ev: CampaignEvent) => {
-    const eventsQuery = supabase.from('events').select('captions, party, state, language, loksabha, assembly').eq('id', ev.id).single();
     let postsQuery = supabase.from('posts').select('id, image_url, title').eq('category', ev.name);
     if (ev.language && ev.language.trim()) postsQuery = postsQuery.eq('language', ev.language);
-    const [eventsRes, postsRes] = await Promise.all([eventsQuery, postsQuery.order('created_at', { ascending: false })]);
-    const dbCaptions = normalizeCaptionsFromDb(eventsRes.data?.captions ?? ev.captions);
-    const evParty = toStrArr((eventsRes.data as { party?: string | string[] })?.party ?? ev.party);
-    const evState = toStrArr((eventsRes.data as { state?: string | string[] })?.state ?? ev.state);
-    const evLoksabha = toStrArr((eventsRes.data as { loksabha?: string | string[] })?.loksabha ?? ev.loksabha);
-    const evAssembly = toStrArr((eventsRes.data as { assembly?: string | string[] })?.assembly ?? ev.assembly);
-    const evLanguage = (eventsRes.data as { language?: string })?.language ?? ev.language ?? '';
+    const [eventsRes, postsRes] = await Promise.all([
+      fetchEventByIdOrName(ev, 'captions, party, state, language, loksabha, assembly'),
+      postsQuery.order('created_at', { ascending: false }),
+    ]);
+    if (eventsRes.error) console.error('openEvent events fetch:', eventsRes.error);
+    const eventRow =
+      !eventsRes.error && eventsRes.data != null ? (eventsRes.data as unknown as Record<string, unknown>) : null;
+    const dbCaptions = normalizeCaptionsFromDb(eventRow?.captions ?? ev.captions);
+    const evParty = toStrArr((eventRow?.party as string | string[] | undefined) ?? ev.party);
+    const evState = toStrArr((eventRow?.state as string | string[] | undefined) ?? ev.state);
+    const evLoksabha = toStrArr((eventRow?.loksabha as string | string[] | undefined) ?? ev.loksabha);
+    const evAssembly = toStrArr((eventRow?.assembly as string | string[] | undefined) ?? ev.assembly);
+    const evLanguage = (eventRow?.language as string | undefined) ?? ev.language ?? '';
     const evWithPartyState = { ...ev, language: evLanguage, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly };
     const postsFromDb: Post[] = (postsRes.data || []).map((p: { id: string; image_url: string; title: string }) => ({
       id: p.id,
@@ -455,8 +496,18 @@ export default function App() {
     );
     if (imageFiles.length === 0) return;
 
-    const { data: freshEv } = await supabase.from('events').select('captions').eq('id', selectedEvent.id).maybeSingle();
-    const batchCaptions = normalizeCaptionsFromDb(freshEv?.captions ?? selectedEvent.captions);
+    /** Always pull latest captions from `events` so new rows match DB (not stale React state). */
+    const evCaptionsRes = await fetchEventByIdOrName(selectedEvent, 'captions');
+    if (evCaptionsRes.error) {
+      console.error('[handleUpload] Failed to read events.captions:', evCaptionsRes.error.message, evCaptionsRes.error);
+    }
+    const capRow =
+      !evCaptionsRes.error && evCaptionsRes.data != null
+        ? (evCaptionsRes.data as unknown as Record<string, unknown>)
+        : null;
+    const fromDb = normalizeCaptionsFromDb(capRow?.captions);
+    const fromUi = normalizeCaptionsFromDb(selectedEvent.captions);
+    const batchCaptions = fromDb.length > 0 ? fromDb : fromUi;
 
     const newPosts: Post[] = [];
     for (const file of imageFiles) {
@@ -477,7 +528,13 @@ export default function App() {
       const imageUrl = urlData.publicUrl;
 
       /** category = event name (manual match; no FK). Use event's language, party, state, loksabha, assembly directly. */
-      const postPayload: Record<string, unknown> = { title: file.name.replace(ext, ''), image_url: imageUrl, category: selectedEvent.name };
+      const postPayload: Record<string, unknown> = {
+        title: file.name.replace(ext, ''),
+        image_url: imageUrl,
+        category: selectedEvent.name,
+        /** Must match app/dashboard graphics filter (`is_video` false or null); DB default true would hide posts + break caption sync filters. */
+        is_video: false,
+      };
       if (selectedEvent.language) postPayload.language = selectedEvent.language;
       const partyArr = toStrArr(selectedEvent.party);
       const stateArr = toStrArr(selectedEvent.state);
@@ -487,21 +544,21 @@ export default function App() {
       if (stateArr.length > 0) postPayload.state = stateArr;
       if (loksabhaArr.length > 0) postPayload.loksabha = loksabhaArr;
       if (assemblyArr.length > 0) postPayload.assembly = assemblyArr;
-      // `posts.captions` is TEXT storing a JSON string like '["A","B"]' (snapshot from DB so order: captions-first vs upload-first does not matter)
-      postPayload.captions = captionsJsonForPostColumn(batchCaptions);
-      const { data: insertData, error: insertErr } = await supabase
-        .from('posts')
-        .insert(postPayload)
-        .select('id')
-        .single();
+      postPayload.captions = batchCaptions;
+      let { data: insertData, error: insertErr } = await supabase.from('posts').insert(postPayload).select('id').single();
 
-      if (insertErr) {
-        console.error('DB insert error:', insertErr);
+      if (insertErr && batchCaptions.length > 0) {
+        postPayload.captions = captionsJsonForPostColumn(batchCaptions);
+        ({ data: insertData, error: insertErr } = await supabase.from('posts').insert(postPayload).select('id').single());
+      }
+
+      if (insertErr || !insertData) {
+        if (insertErr) console.error('DB insert error:', insertErr);
         continue;
       }
 
       newPosts.push({
-        id: insertData.id,
+        id: (insertData as { id: string }).id,
         url: imageUrl,
         type: 'image',
         name: file.name
@@ -514,6 +571,17 @@ export default function App() {
       );
       setEvents(updated);
       setSelectedEvent({ ...selectedEvent, posts: [...newPosts, ...selectedEvent.posts] });
+
+      /** Re-read `events.captions` and push to every graphics post (same merge as inserts). */
+      const evSnapRes = await fetchEventByIdOrName(selectedEvent, 'captions');
+      if (evSnapRes.error) console.error('[handleUpload] post-upload events read:', evSnapRes.error.message);
+      const snapRow =
+        !evSnapRes.error && evSnapRes.data != null
+          ? (evSnapRes.data as unknown as Record<string, unknown>)
+          : null;
+      const snapDb = normalizeCaptionsFromDb(snapRow?.captions);
+      const latestCaptions = snapDb.length > 0 ? snapDb : normalizeCaptionsFromDb(selectedEvent.captions);
+      await syncGraphicsPostCaptions(selectedEvent, latestCaptions);
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -521,7 +589,7 @@ export default function App() {
   const addCaptionToList = async () => {
     if (!selectedEvent || !newCaptionText.trim()) return;
     const updatedCaptions = [...selectedEvent.captions, newCaptionText.trim()];
-    await supabase.from('events').update({ captions: updatedCaptions }).eq('id', selectedEvent.id);
+    await updateEventByIdOrName(selectedEvent, { captions: updatedCaptions });
     await syncGraphicsPostCaptions(selectedEvent, updatedCaptions);
     const updatedEvents = events.map((ev) =>
       ev.id === selectedEvent.id ? { ...ev, captions: updatedCaptions } : ev
@@ -534,7 +602,7 @@ export default function App() {
   const confirmDeleteCaption = async () => {
     if (!selectedEvent || captionToDelete === null) return;
     const updatedCaptions = selectedEvent.captions.filter((_, i) => i !== captionToDelete);
-    await supabase.from('events').update({ captions: updatedCaptions }).eq('id', selectedEvent.id);
+    await updateEventByIdOrName(selectedEvent, { captions: updatedCaptions });
     await syncGraphicsPostCaptions(selectedEvent, updatedCaptions);
     const updatedEvents = events.map((ev) =>
       ev.id === selectedEvent.id ? { ...ev, captions: updatedCaptions } : ev
@@ -579,8 +647,7 @@ export default function App() {
       }
 
       try {
-        const { error: eventsErr } = await supabase.from('events').delete().eq('id', ev.id);
-        if (eventsErr) console.error('Events delete error:', eventsErr);
+        await deleteEventRowByIdOrName(ev);
       } catch (eventsEx) {
         console.error('Events delete exception:', eventsEx);
       }
@@ -656,7 +723,7 @@ export default function App() {
     setNewAssembly(toStrArr(ev.assembly));
   };
 
-  const updateEvent = async () => {
+  const handleSaveEvent = async () => {
     if (!newName || !startDate || !endDate || !editingEvent) return;
 
     const originalName = editingEvent.name;
@@ -676,10 +743,7 @@ export default function App() {
     if (stateArr.length > 0) updatePayload.state = stateArr;
     if (loksabhaArr.length > 0) updatePayload.loksabha = loksabhaArr;
     if (assemblyArr.length > 0) updatePayload.assembly = assemblyArr;
-    const { error: eventsErr } = await supabase
-      .from('events')
-      .update(updatePayload)
-      .eq('id', editingEvent.id);
+    const { error: eventsErr } = await updateEventByIdOrName(editingEvent, updatePayload);
 
     if (eventsErr) {
       console.error('Full Error Object:', eventsErr);
@@ -704,6 +768,15 @@ export default function App() {
       await pq;
     }
 
+    /** Edit Event "Save" updates `events.captions` but must also push to `posts.captions` (same as add/delete caption). */
+    const evForSync: CampaignEvent = {
+      ...editingEvent,
+      name: targetCategory,
+      language: newLanguage || editingEvent.language,
+    };
+    const captionsForPosts = normalizeCaptionsFromDb(updatePayload.captions);
+    await syncGraphicsPostCaptions(evForSync, captionsForPosts);
+
     const newStart = `${startDate}T00:00:00`;
     const newEnd = `${endDate}T23:59:59`;
     const updated: CampaignEvent = { ...editingEvent, name: targetCategory, start: newStart, end: newEnd, language: newLanguage || undefined, party: partyArr.length ? partyArr : undefined, state: stateArr.length ? stateArr : undefined, loksabha: loksabhaArr.length ? loksabhaArr : undefined, assembly: assemblyArr.length ? assemblyArr : undefined };
@@ -721,13 +794,39 @@ export default function App() {
     setNewState([]);
     setNewLoksabha([]);
     setNewAssembly([]);
-    alert('Event updated successfully.');
+
+    const { error: fnError } = await supabase.functions.invoke('notify-workers', {
+      body: {
+        title: 'Naya Graphic Aaya!',
+        body: targetCategory,
+        data: { id: String(editingEvent.id) },
+      },
+    });
+    if (fnError) {
+      console.error('notify-workers:', fnError);
+      alert(
+        'Event saved, but worker notification failed: ' +
+          ('message' in fnError && typeof fnError.message === 'string' ? fnError.message : String(fnError))
+      );
+    } else {
+      setWorkerNotifyToast(true);
+      window.setTimeout(() => setWorkerNotifyToast(false), 4000);
+    }
   };
 
   // --- VIEW 1: EVENT LIST ---
   if (view === 'list') {
     return (
       <div className="max-w-6xl mx-auto p-4 space-y-8 animate-in fade-in duration-500 text-slate-700">
+        {workerNotifyToast ? (
+          <div
+            className="fixed bottom-8 left-1/2 z-[200] max-w-md -translate-x-1/2 rounded-xl px-5 py-3 text-center text-sm font-bold text-white shadow-lg"
+            style={{ backgroundColor: '#25D366' }}
+            role="status"
+          >
+            Sabhi workers ko notification bhej di gayi hai!
+          </div>
+        ) : null}
         {isDeleting && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
             <div className="bg-white rounded-[40px] p-10 max-w-sm w-full text-center space-y-6 shadow-2xl animate-in zoom-in-95">
@@ -822,7 +921,7 @@ export default function App() {
               <div className="shrink-0 px-4 sm:px-5 py-4 border-t border-slate-100 bg-white">
                 <div className="flex gap-4">
                   <button onClick={() => { setEditingEvent(null); setNewName(''); setNewLanguage(''); setStartDate(''); setEndDate(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
-                  <button onClick={updateEvent} disabled={!newName.trim() || !startDate || !endDate} className="flex-1 py-3 sm:py-4 bg-blue-600 text-white rounded-2xl font-bold disabled:opacity-30">Save</button>
+                  <button onClick={handleSaveEvent} disabled={!newName.trim() || !startDate || !endDate} className="flex-1 py-3 sm:py-4 bg-blue-600 text-white rounded-2xl font-bold disabled:opacity-30">Save</button>
                 </div>
               </div>
             </div>

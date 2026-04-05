@@ -3,9 +3,11 @@
 import {
   LayoutDashboard,
   FileText,
+  Calendar,
   Building2,
   MapPin,
   Users,
+  Bell,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -13,9 +15,11 @@ import { usePathname } from 'next/navigation';
 const navItems = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/admin/posts', label: 'Posts', icon: FileText },
+  { href: '/admin/events', label: 'Events', icon: Calendar },
   { href: '/admin/parties', label: 'Parties', icon: Building2 },
   { href: '/admin/geography', label: 'Geography', icon: MapPin },
   { href: '/admin/users', label: 'Users', icon: Users },
+  { href: '/admin/notifications', label: 'Broadcast', icon: Bell },
 ];
 
 export default function Sidebar() {

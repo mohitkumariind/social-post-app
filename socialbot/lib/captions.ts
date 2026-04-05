@@ -24,7 +24,15 @@ export function normalizeCaptionsFromDb(raw: unknown): string[] {
   return [];
 }
 
-/** `posts.captions` is TEXT: JSON array string e.g. '["A","B"]' */
+/** JSON text form (legacy TEXT columns or clients that expect a string). */
 export function captionsJsonForPostColumn(captions: string[]): string {
   return JSON.stringify(captions);
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isLikelyEventUuid(id: unknown): boolean {
+  const s = String(id ?? '').trim();
+  return s.length > 0 && UUID_RE.test(s);
 }

@@ -15,14 +15,22 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
-import { useUser } from '../../context/UserContext';
+import { EMPTY_USER_INFO, useUser } from '../../context/UserContext';
+import { signOutApp } from '../../lib/supabase';
 
 const { width } = Dimensions.get('window');
 
 export default function ProfileScreen() {
   const router = useRouter();
   const { t } = useLang();
-  const { userInfo } = useUser();
+  const { userInfo, setUserInfo, setIsLoggedIn } = useUser();
+
+  const handleLogout = async () => {
+    await signOutApp(); // clears session + Google only; `profiles` row unchanged
+    setUserInfo({ ...EMPTY_USER_INFO });
+    setIsLoggedIn(false);
+    router.replace('/login');
+  };
 
   const currentPhoto = userInfo?.avatar_url?.trim() ?? '';
 
@@ -69,7 +77,7 @@ export default function ProfileScreen() {
               )}
             </View>
             <Text style={styles.userName}>{userInfo?.name || t('default_user_name')}</Text>
-            <Text style={styles.userRole}>{userInfo?.designation || t('default_designation_profile')}</Text>
+            <Text style={styles.userRole}>{userInfo?.designation1 || t('default_designation_profile')}</Text>
             <TouchableOpacity style={styles.editProfileBtn} onPress={() => router.push('/edit-profile')}>
               <Text style={styles.editBtnText}>{t('edit_profile')}</Text>
             </TouchableOpacity>
@@ -84,7 +92,7 @@ export default function ProfileScreen() {
           {renderMenuItem('shield-checkmark-outline', t('terms_conditions'), () => router.push('/terms'))}
           {renderMenuItem('star-outline', t('rate_app'), handleRateApp)}
           {renderMenuItem('help-circle-outline', t('help_support'), () => router.push('/support'))}
-          {renderMenuItem('log-out-outline', t('logout'), () => router.replace('/login'), true)}
+          {renderMenuItem('log-out-outline', t('logout'), () => void handleLogout(), true)}
         </View>
         <View style={{ height: 40 }} />
       </ScrollView>

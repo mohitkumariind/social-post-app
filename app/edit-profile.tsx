@@ -256,21 +256,22 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       const avatarUrl = String(p.avatar_url ?? '').trim();
 
       const next: ProfileFormData = {
+        language: String(p.language ?? '').trim(),
         name: String(p.name ?? '').trim(),
         phone: String(p.phone ?? p.phone_number ?? '').trim(),
         email: String(p.email ?? '').trim(),
-        designation: String(p.designation ?? '').trim(),
+        designation1: String(p.designation1 ?? p.designation ?? '').trim(),
         designation2: String(p.designation2 ?? p.designation_2 ?? '').trim(),
         designation3: String(p.designation3 ?? p.designation_3 ?? '').trim(),
         designation4: String(p.designation4 ?? p.designation_4 ?? '').trim(),
         avatar_url: avatarUrl,
         partyName: partyCanon,
         state: String(p.state ?? '').trim(),
-        district: String(p.district ?? '').trim(),
-        constituency: String(p.constituency ?? '').trim(),
         stateId: null,
         loksabha_id: typeof p.loksabha_id === 'number' ? p.loksabha_id : p.loksabha_id != null ? Number(p.loksabha_id) : null,
         assembly_id: typeof p.assembly_id === 'number' ? p.assembly_id : p.assembly_id != null ? Number(p.assembly_id) : null,
+        loksabha: String(p.loksabha ?? '').trim(),
+        assembly: String(p.assembly ?? '').trim(),
         whatsapp: String(p.whatsapp ?? '').trim(),
         facebook: String(p.facebook ?? '').trim(),
         twitter: String(p.twitter ?? '').trim(),
@@ -427,12 +428,20 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         phone: formData.phone.trim(),
         email: formData.email.trim(),
         party: formData.partyName,
+        designation1: (formData.designation1 ?? '').trim(),
+        designation2: (formData.designation2 ?? '').trim(),
+        designation3: (formData.designation3 ?? '').trim(),
+        designation4: (formData.designation4 ?? '').trim(),
         state: (formData.state ?? '').trim(),
-        district: (formData.district ?? '').trim(),
-        constituency: (formData.constituency ?? '').trim(),
         loksabha_id: formData.loksabha_id,
+        loksabha: (selectedLoksabha?.name ?? formData.loksabha ?? '').trim(),
         assembly_id: formData.assembly_id,
+        assembly: (selectedAssembly?.name ?? formData.assembly ?? '').trim(),
         avatar_url: resolvedAvatarUrl || null,
+        whatsapp: (formData.whatsapp ?? '').trim(),
+        facebook: (formData.facebook ?? '').trim(),
+        instagram: (formData.instagram ?? '').trim(),
+        twitter: (formData.twitter ?? '').trim(),
       };
       const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
       if (error) {
@@ -563,7 +572,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
             </View>
           </TouchableOpacity>
 
-          {renderInput(t('designation_1'), 'designation', 'ribbon-outline')}
+          {renderInput(t('designation_1'), 'designation1', 'ribbon-outline')}
           {renderInput(t('designation_2'), 'designation2', 'ribbon-outline')}
           {renderInput(t('designation_3'), 'designation3', 'ribbon-outline')}
           {renderInput(t('designation_4'), 'designation4', 'ribbon-outline')}
@@ -697,6 +706,8 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
                         stateId: s.id,
                         loksabha_id: null,
                         assembly_id: null,
+                        loksabha: '',
+                        assembly: '',
                       });
                       setStatePickerOpen(false);
                       setGeoSearch('');
@@ -737,7 +748,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
                     key={l.id}
                     style={[styles.pickerItem, isSelected && styles.pickerItemSelected]}
                     onPress={() => {
-                      setFormData({ ...formData, loksabha_id: l.id, assembly_id: null });
+                      setFormData({ ...formData, loksabha_id: l.id, loksabha: l.name, assembly_id: null, assembly: '' });
                       setLoksabhaPickerOpen(false);
                       setGeoSearch('');
                     }}
@@ -777,7 +788,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
                     key={a.id}
                     style={[styles.pickerItem, isSelected && styles.pickerItemSelected]}
                     onPress={() => {
-                      setFormData({ ...formData, assembly_id: a.id });
+                      setFormData({ ...formData, assembly_id: a.id, assembly: a.name });
                       setAssemblyPickerOpen(false);
                       setGeoSearch('');
                     }}

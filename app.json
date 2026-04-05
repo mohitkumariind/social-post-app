@@ -19,6 +19,7 @@
       }
     },
     "android": {
+      "versionCode": 1,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
@@ -38,6 +39,13 @@
       "favicon": "./assets/images/icon.png"
     },
     "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#25D366"
+        }
+      ],
       "@react-native-firebase/app",
       "expo-dev-client",
       "expo-font",

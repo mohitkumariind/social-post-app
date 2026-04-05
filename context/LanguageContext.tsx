@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import '../utils/i18n';
 
 const LANG_STORAGE_KEY = '@social_post_language';
-const SUPPORTED_LANGS = ['en', 'hi', 'pa', 'mr', 'gu'];
+/** Keep in sync with `languages` ids in `app/language.tsx`. */
+export const SUPPORTED_LANGS = ['en', 'hi', 'pa', 'mr', 'gu'] as const;
 
 interface LanguageContextType {
   t: (key: string) => string;
@@ -30,7 +31,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Restore saved language on app load / refresh
   useEffect(() => {
     AsyncStorage.getItem(LANG_STORAGE_KEY).then((savedLng) => {
-      if (savedLng && SUPPORTED_LANGS.includes(savedLng)) {
+      if (savedLng && (SUPPORTED_LANGS as readonly string[]).includes(savedLng)) {
         i18n.changeLanguage(savedLng);
         setLang(savedLng);
       }
@@ -38,7 +39,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [i18n]);
 
   const changeLanguage = (lng: string) => {
-    if (!SUPPORTED_LANGS.includes(lng)) return;
+    if (!(SUPPORTED_LANGS as readonly string[]).includes(lng)) return;
     AsyncStorage.setItem(LANG_STORAGE_KEY, lng);
     i18n.changeLanguage(lng);
     setLang(lng);
