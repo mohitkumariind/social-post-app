@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { Alert, Linking, Platform } from 'react-native';
 import { supabase } from './supabase';
 
 /**
@@ -51,6 +51,8 @@ export async function ensurePushTokenRegisteredAndSaved(): Promise<void> {
   if (token) await saveTokenToSupabase(token);
 }
 
+let didShowNotificationPermissionAlert = false;
+
 /**
  * Requests notification permission and returns the Expo push token, or `null` if unavailable.
  */
@@ -73,6 +75,22 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
   }
   if (finalStatus !== 'granted') {
     console.warn('[notifications] Notification permission not granted:', finalStatus);
+    if (!didShowNotificationPermissionAlert) {
+      didShowNotificationPermissionAlert = true;
+      Alert.alert(
+        'Notifications permission',
+        'Notifications are disabled. Enable permission to receive updates.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          {
+            text: 'Open Settings',
+            onPress: () => {
+              void Linking.openSettings().catch(() => undefined);
+            },
+          },
+        ]
+      );
+    }
     return null;
   }
 
