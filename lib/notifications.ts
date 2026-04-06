@@ -4,10 +4,51 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { supabase } from './supabase';
 
-/** EAS project id from app.json → `expo.extra.eas.projectId`. */
-export function getExpoProjectId(): string | undefined {
-  const id = Constants.expoConfig?.extra?.eas?.projectId;
-  return typeof id === 'string' && id.length > 0 ? id : undefined;
+/**
+ * Must match `expo.extra.eas.projectId` in app.json (fallback when Constants manifest is empty in some builds).
+ */
+const FALLBACK_EAS_PROJECT_ID = '8445ac4b-11a5-4ae5-bc3c-d60e3b921b40';
+
+function readProjectIdFromExtra(extra: unknown): string | undefined {
+  if (!extra || typeof extra !== 'object') return undefined;
+  const eas = (extra as Record<string, unknown>).eas as Record<string, unknown> | undefined;
+  const id = eas?.projectId;
+  return typeof id === 'string' && id.trim().length > 0 ? id.trim() : undefined;
+}
+
+/** Resolves EAS project id for Expo Push (release builds sometimes omit `expoConfig`). */
+export function getExpoProjectId(): string {
+  const fromExpoConfig = Constants.expoConfig?.extra?.eas?.projectId;
+  if (typeof fromExpoConfig === 'string' && fromExpoConfig.trim().length > 0) {
+    return fromExpoConfig.trim();
+  }
+
+  const m2 = Constants.manifest2 as Record<string, unknown> | null | undefined;
+  if (m2?.extra && typeof m2.extra === 'object') {
+    const ex = m2.extra as Record<string, unknown>;
+    const fromDirect = readProjectIdFromExtra(ex);
+    if (fromDirect) return fromDirect;
+    const expoClient = ex.expoClient as Record<string, unknown> | undefined;
+    if (expoClient?.extra) {
+      const fromClient = readProjectIdFromExtra(expoClient.extra);
+      if (fromClient) return fromClient;
+    }
+  }
+
+  const m1 = Constants.manifest as Record<string, unknown> | null | undefined;
+  if (m1?.extra) {
+    const fromM1 = readProjectIdFromExtra(m1.extra);
+    if (fromM1) return fromM1;
+  }
+
+  console.warn('[notifications] Using FALLBACK_EAS_PROJECT_ID — verify app.json extra.eas.projectId');
+  return FALLBACK_EAS_PROJECT_ID;
+}
+
+/** Register for push + upsert token (call after login when session is definitely set). */
+export async function ensurePushTokenRegisteredAndSaved(): Promise<void> {
+  const token = await registerForPushNotificationsAsync();
+  if (token) await saveTokenToSupabase(token);
 }
 
 /**
@@ -19,8 +60,9 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
   }
 
   if (!Device.isDevice) {
-    if (__DEV__) console.warn('[notifications] Expo push token requires a physical device');
-    return null;
+    console.warn(
+      '[notifications] Device.isDevice is false (emulator/simulator?). Expo push often needs a real device; still attempting token…'
+    );
   }
 
   const { status: existing } = await Notifications.getPermissionsAsync();
@@ -30,23 +72,26 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     finalStatus = status;
   }
   if (finalStatus !== 'granted') {
-    if (__DEV__) console.warn('[notifications] Notification permission not granted');
+    console.warn('[notifications] Notification permission not granted:', finalStatus);
     return null;
   }
 
   const projectId = getExpoProjectId();
-  if (!projectId) {
-    if (__DEV__) console.warn('[notifications] Missing expo.extra.eas.projectId (app.json)');
-    return null;
+
+  const delays = [0, 800, 2000];
+  for (const ms of delays) {
+    if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+    try {
+      const push = await Notifications.getExpoPushTokenAsync({ projectId });
+      if (push?.data && typeof push.data === 'string' && push.data.length > 0) {
+        return push.data;
+      }
+    } catch (e) {
+      console.warn('[notifications] getExpoPushTokenAsync attempt failed:', e);
+    }
   }
 
-  try {
-    const push = await Notifications.getExpoPushTokenAsync({ projectId });
-    return push.data;
-  } catch (e) {
-    if (__DEV__) console.warn('[notifications] getExpoPushTokenAsync failed:', e);
-    return null;
-  }
+  return null;
 }
 
 /**

@@ -18,6 +18,7 @@ import { Colors } from '../../constants/Colors';
 import { normalizePartyId } from '../../constants/Parties';
 import { SUPPORTED_LANGS, useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
+import { ensurePushTokenRegisteredAndSaved } from '../../lib/notifications';
 import { supabase } from '../../lib/supabase';
 import { getGoogleSignInConfigureParams, getGoogleWebClientId } from '../../src/utils/googleSignInConfig';
 
@@ -186,6 +187,7 @@ export default function LoginScreen() {
           twitter: String(row.twitter ?? '').trim() || prev.twitter,
         }));
         setIsLoggedIn(true);
+        void ensurePushTokenRegisteredAndSaved();
         router.replace('/(tabs)/dashboard');
         return;
       }
@@ -195,6 +197,7 @@ export default function LoginScreen() {
         ...baseUser,
       }));
       setIsLoggedIn(true);
+      void ensurePushTokenRegisteredAndSaved();
       router.replace({ pathname: '/language', params: { next: '/party' } });
     } catch (e: unknown) {
       const err = e as { code?: string; message?: string };
