@@ -4,9 +4,10 @@
     "slug": "social-post-new",
     "scheme": "socialbot",
     "version": "1.0.0",
+    "jsEngine": "hermes",
     "icon": "./assets/images/icon.png",
     "splash": {
-      "image": "./assets/images/splash-logo.png",
+      "image": "./assets/images/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#FFFFFF"
     },
@@ -25,15 +26,6 @@
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#FFFFFF"
       },
-      "permissions": [
-        "android.permission.POST_NOTIFICATIONS",
-        "android.permission.INTERNET",
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.CAMERA",
-        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
-        "android.permission.READ_MEDIA_IMAGES"
-      ],
       "package": "com.mohit.socialpost.app"
     },
     "web": {
@@ -43,8 +35,17 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
+          "icon": "./assets/images/icon.png",
           "color": "#25D366"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          }
         }
       ],
       "@react-native-firebase/app",
@@ -56,7 +57,9 @@
         {
           "photosPermission": "Save and share your posters to the photo library",
           "savePhotosPermission": "Save posters to the photo library",
-          "granularPermissions": ["photo"]
+          "granularPermissions": [
+            "photo"
+          ]
         }
       ],
       "@react-native-google-signin/google-signin"

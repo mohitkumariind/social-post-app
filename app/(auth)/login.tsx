@@ -222,7 +222,7 @@ export default function LoginScreen() {
           <View style={styles.logoContainer}>
             <Image 
               // Logo path bhi root assets folder ke hisab se set kiya hai
-              source={require('../../assets/images/splash-logo.png')} 
+              source={require('../../assets/images/icon.png')} 
               style={styles.logo}
               resizeMode="contain"
             />

@@ -308,7 +308,7 @@ export default function RootLayout() {
         >
           <View style={styles.loaderCenter}>
             <Image
-              source={require('../assets/images/splash-logo.png')}
+              source={require('../assets/images/icon.png')}
               style={styles.loaderLogo}
               resizeMode="contain"
             />
