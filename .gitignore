@@ -50,3 +50,12 @@ app-example
 
 # Firebase Android config (do not commit; use EAS secrets / local copy)
 google-services.json
+**/google-services.json
+
+# Android local build / signing (prebuild or bare) — do not blanket-ignore *.json (breaks app.json)
+**/android/app/build/
+**/android/build/
+**/android/.gradle/
+**/android/local.properties
+*.keystore
+!debug.keystore

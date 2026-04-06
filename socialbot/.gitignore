@@ -30,11 +30,13 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files (keep examples committed)
 .env*
+!.env.example
 
 # Firebase Android config (keep out of repo)
 google-services.json
+**/google-services.json
 
 # vercel
 .vercel
