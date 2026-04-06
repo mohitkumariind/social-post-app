@@ -98,18 +98,40 @@ function PushNotificationLayer() {
     });
   }, []);
 
+  /** Save Expo token whenever session exists — not only via `isLoggedIn` (avoids race after OAuth). */
   useEffect(() => {
-    if (!isLoggedIn) return;
     let cancelled = false;
-    void (async () => {
+
+    const registerAndSave = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (cancelled || !session?.user) return;
       const token = await registerForPushNotificationsAsync();
       if (cancelled || !token) return;
       await saveTokenToSupabase(token);
-    })();
+    };
+
+    void registerAndSave();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!session?.user) return;
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
+        void (async () => {
+          const token = await registerForPushNotificationsAsync();
+          if (cancelled || !token) return;
+          await saveTokenToSupabase(token);
+        })();
+      }
+    });
+
     return () => {
       cancelled = true;
+      subscription.unsubscribe();
     };
-  }, [isLoggedIn]);
+  }, []);
 
   useEffect(() => {
     const sub = Notifications.addNotificationReceivedListener((notification) => {

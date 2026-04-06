@@ -51,35 +51,47 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
 
 /**
  * Upserts the push token for `auth.uid()` into `public.push_tokens`.
+ * Retries when the session is not ready yet (common right after Google login).
  */
-export async function saveTokenToSupabase(token: string): Promise<void> {
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
-  if (userError || !user) {
-    if (__DEV__) console.warn('[notifications] saveTokenToSupabase: no session', userError?.message);
-    return;
-  }
-
+export async function saveTokenToSupabase(token: string): Promise<boolean> {
+  const delaysMs = [0, 250, 500, 800, 1200, 2000];
   const parts = [Device.modelName, Device.deviceName].filter(
     (x): x is string => typeof x === 'string' && x.length > 0
   );
   const deviceName = parts.length > 0 ? parts.join(' · ') : null;
 
-  const { error } = await supabase.from('push_tokens').upsert(
-    {
-      user_id: user.id,
-      token,
-      device_name: deviceName,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'user_id,token' }
-  );
+  for (let i = 0; i < delaysMs.length; i++) {
+    if (delaysMs[i] > 0) {
+      await new Promise((r) => setTimeout(r, delaysMs[i]));
+    }
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+    if (userError || !user) {
+      continue;
+    }
 
-  if (error && __DEV__) {
-    console.warn('[notifications] push_tokens upsert failed:', error.message);
+    const { error } = await supabase.from('push_tokens').upsert(
+      {
+        user_id: user.id,
+        token,
+        device_name: deviceName,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'user_id,token' }
+    );
+
+    if (!error) {
+      return true;
+    }
+
+    console.warn('[notifications] push_tokens upsert failed:', error.message, error.code ?? '');
+    return false;
   }
+
+  console.warn('[notifications] saveTokenToSupabase: no session after retries');
+  return false;
 }
 
 /**
