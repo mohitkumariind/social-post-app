@@ -799,20 +799,35 @@ export default function App() {
     setNewLoksabha([]);
     setNewAssembly([]);
 
-    const { error: fnError } = await supabase.functions.invoke('notify-workers', {
-      body: {
-        title: 'Naya Graphic Aaya!',
-        body: targetCategory,
-        data: { id: String(editingEvent.id) },
-      },
-    });
-    if (fnError) {
-      console.error('notify-workers:', fnError);
+    let workerNotifyOk = false;
+    try {
+      const res = await fetch('/api/notifications/send', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Naya Graphic Aaya!',
+          body: targetCategory,
+          data: { id: String(editingEvent.id) },
+          all_workers: true,
+        }),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok || payload.error) {
+        console.error('worker notify:', payload.error ?? res.status);
+        alert(
+          'Event saved, but worker notification failed: ' + (payload.error || `HTTP ${res.status}`)
+        );
+      } else {
+        workerNotifyOk = true;
+      }
+    } catch (e) {
+      console.error('worker notify:', e);
       alert(
-        'Event saved, but worker notification failed: ' +
-          ('message' in fnError && typeof fnError.message === 'string' ? fnError.message : String(fnError))
+        'Event saved, but worker notification failed: ' + (e instanceof Error ? e.message : String(e))
       );
-    } else {
+    }
+    if (workerNotifyOk) {
       setWorkerNotifyToast(true);
       window.setTimeout(() => setWorkerNotifyToast(false), 4000);
     }

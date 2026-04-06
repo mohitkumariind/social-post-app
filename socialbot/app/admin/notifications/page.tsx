@@ -261,23 +261,38 @@ export default function NotificationBroadcastCenterPage() {
       loksabha_id: loksabhaId ? Number(loksabhaId) : null,
       assembly_id: assemblyId ? Number(assemblyId) : null,
     };
-    const { data, error } = await supabase.functions.invoke('notify-workers', {
-      body: {
-        preview_only: true,
-        all_workers: allWorkers,
-        filters,
-      },
-    });
-    setPreviewLoading(false);
-    if (error) {
-      console.error('preview:', error);
+    try {
+      const res = await fetch('/api/notifications/send', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preview_only: true,
+          all_workers: allWorkers,
+          filters,
+        }),
+      });
+      const d = (await res.json()) as {
+        profile_count?: number;
+        token_count?: number;
+        worker_count?: number;
+        error?: string;
+      };
+      if (!res.ok) {
+        console.error('preview:', d.error ?? res.status);
+        setPreviewCount(0);
+        setPreviewTokens(0);
+        return;
+      }
+      setPreviewCount(typeof d.profile_count === 'number' ? d.profile_count : 0);
+      setPreviewTokens(typeof d.token_count === 'number' ? d.token_count : 0);
+    } catch (e) {
+      console.error('preview:', e);
       setPreviewCount(0);
       setPreviewTokens(0);
-      return;
+    } finally {
+      setPreviewLoading(false);
     }
-    const d = data as { profile_count?: number; token_count?: number; worker_count?: number } | null;
-    setPreviewCount(typeof d?.profile_count === 'number' ? d.profile_count : 0);
-    setPreviewTokens(typeof d?.token_count === 'number' ? d.token_count : 0);
   }, [allWorkers, partyId, selectedState?.name, loksabhaId, assemblyId]);
 
   useEffect(() => {
@@ -314,30 +329,39 @@ export default function NotificationBroadcastCenterPage() {
       loksabha: selectedLoksabha?.name ?? null,
       assembly: selectedAssembly?.name ?? null,
     };
-    const { data, error } = await supabase.functions.invoke('notify-workers', {
-      body: {
-        title: title.trim(),
-        body: body.trim(),
-        image_url: imageUrl.trim() || null,
-        all_workers: allWorkers,
-        filters,
-        filter_labels,
-        data: { type: 'broadcast' },
-      },
-    });
-    setSendLoading(false);
-    if (error) {
-      alert(
-        'Send failed: ' +
-          ('message' in error && typeof error.message === 'string' ? error.message : String(error))
-      );
+    let sendOk = false;
+    try {
+      const res = await fetch('/api/notifications/send', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: title.trim(),
+          body: body.trim(),
+          image_url: imageUrl.trim() || null,
+          all_workers: allWorkers,
+          filters,
+          filter_labels,
+          data: { type: 'broadcast' },
+        }),
+      });
+      const data = (await res.json()) as { error?: string; ok?: boolean };
+      if (!res.ok) {
+        alert('Send failed: ' + (data.error || `HTTP ${res.status}`));
+        return;
+      }
+      if (data.error) {
+        alert('Send failed: ' + data.error);
+        return;
+      }
+      sendOk = true;
+    } catch (e) {
+      alert('Send failed: ' + (e instanceof Error ? e.message : String(e)));
       return;
+    } finally {
+      setSendLoading(false);
     }
-    const errMsg = (data as { error?: string } | null)?.error;
-    if (errMsg) {
-      alert('Send failed: ' + errMsg);
-      return;
-    }
+    if (!sendOk) return;
     setConfirmOpen(false);
     setTitle('');
     setBody('');
