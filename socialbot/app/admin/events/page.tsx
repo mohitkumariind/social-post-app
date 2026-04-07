@@ -1,4 +1,1245 @@
-'use client';
+"use client";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Calendar,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Filter,
+  Folder,
+  Image as ImageIcon,
+  Layers,
+  MessageSquare,
+  Pencil,
+  Plus,
+  PlusCircle,
+  Trash2,
+  Users,
+  Video,
+  X
+} from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
+import { supabase } from '@/lib/supabase';
+import { isPartyOtherId, LANGUAGE_OPTIONS, LANGUAGE_TO_STATES, PARTIES_DATA } from '@/lib/constants';
+import { captionsJsonForPostColumn, isLikelyEventUuid, normalizeCaptionsFromDb } from '@/lib/captions';
 
-/** Events are managed in the shared Posts admin UI (list + edit modal + Save). */
-export { default } from '../posts/page';
+// --- TYPES ---
+interface Post {
+  id: string;
+  url: string;
+  type: 'video' | 'image';
+  name: string;
+}
+
+interface CampaignEvent {
+  id: string | number;
+  name: string;
+  start: string;
+  end: string;
+  language?: string;
+  party?: string[];
+  state?: string[];
+  loksabha?: string[];
+  assembly?: string[];
+  posts: Post[];
+  captions: string[];
+}
+
+/** Normalize party/state from DB: string | string[] -> string[] */
+function toStrArr(v: string | string[] | null | undefined): string[] {
+  if (!v) return [];
+  return Array.isArray(v) ? v : [v].filter(Boolean);
+}
+
+/** Multi-select dropdown with checkboxes, ALL option, and tag display */
+function MultiSelectDropdown<T extends { id: string | number }>({
+  label,
+  options,
+  selected,
+  onSelect,
+  getValue,
+  getLabel,
+  allLabel = 'ALL',
+  loading = false,
+  optionLeading,
+}: {
+  label: string;
+  options: T[];
+  selected: string[];
+  onSelect: (vals: string[]) => void;
+  getValue: (o: T) => string;
+  getLabel: (o: T) => string;
+  allLabel?: string;
+  loading?: boolean;
+  /** e.g. neutral icon for special parties like "Other" */
+  optionLeading?: (o: T) => React.ReactNode;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+  const isAll = selected.includes('ALL');
+  const displayItems = isAll ? [{ val: 'ALL', lbl: allLabel }] : selected.map((v) => {
+    const vStr = String(v);
+    const opt = options.find((o) => String(getValue(o)) === vStr);
+    return { val: vStr, lbl: opt ? getLabel(opt) : vStr };
+  });
+
+  React.useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('click', h);
+    return () => document.removeEventListener('click', h);
+  }, []);
+
+  const toggle = (val: string) => {
+    if (val === 'ALL') {
+      onSelect(isAll ? [] : ['ALL']);
+      return;
+    }
+    const valStr = String(val);
+    const next = selected.some((x) => String(x) === valStr) ? selected.filter((x) => String(x) !== valStr) : [...selected, valStr];
+    onSelect(next.length ? next : []);
+  };
+
+  const removeTag = (val: string) => {
+    if (val === 'ALL') onSelect([]);
+    else onSelect(selected.filter((x) => String(x) !== val));
+  };
+
+  return (
+    <div className="flex flex-col flex-1 min-w-[140px]" ref={ref}>
+      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{label}</span>
+      <div className="relative">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => !loading && setOpen((o) => !o)}
+          onKeyDown={(e) => { if (!loading && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpen((o) => !o); } }}
+          className={`w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm text-left flex items-center justify-between min-h-[40px] ${loading ? 'cursor-wait opacity-70' : 'cursor-pointer'}`}
+        >
+          <div className="flex flex-wrap gap-1 flex-1">
+            {loading ? (
+              <span className="text-slate-400">Loading…</span>
+            ) : displayItems.length === 0 ? (
+              <span className="text-slate-400">Select…</span>
+            ) : (
+              displayItems.map(({ val, lbl }) => (
+                <span key={val} className="inline-flex items-center gap-0.5 bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded-md">
+                  {lbl}
+                  <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); removeTag(val); }} className="hover:bg-blue-200 rounded p-0.5">
+                    <X size={10} />
+                  </button>
+                </span>
+              ))
+            )}
+          </div>
+          <ChevronDown size={14} className="text-slate-400 shrink-0 ml-1" />
+        </div>
+        {open && (
+          <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-48 overflow-y-auto py-2">
+            <label className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer">
+              <input type="checkbox" checked={isAll} onChange={() => toggle('ALL')} className="rounded" />
+              <span className="text-sm font-bold">{allLabel}</span>
+            </label>
+            {options.map((o) => {
+              const v = String(getValue(o));
+              const checked = isAll || selected.some((s) => String(s) === v);
+              const disabled = isAll;
+              return (
+                <label key={String(o.id)} className={`flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <input type="checkbox" checked={checked} disabled={disabled} onChange={() => !disabled && toggle(v)} className="rounded" />
+                  {optionLeading?.(o)}
+                  <span className="text-sm font-bold">{getLabel(o)}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [view, setView] = useState<'list' | 'gallery'>('list');
+  const [selectedEvent, setSelectedEvent] = useState<CampaignEvent | null>(null);
+  const [postToDelete, setPostToDelete] = useState<Post | null>(null);
+  const [captionToDelete, setCaptionToDelete] = useState<number | null>(null); 
+  const [newCaptionText, setNewCaptionText] = useState(''); 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 10000); 
+    return () => clearInterval(timer);
+  }, []);
+
+  const [events, setEvents] = useState<CampaignEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(true);
+  const [newName, setNewName] = useState('');
+  const [newLanguage, setNewLanguage] = useState<string>('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [newParty, setNewParty] = useState<string[]>([]);
+  const [newState, setNewState] = useState<string[]>([]);
+  const [newLoksabha, setNewLoksabha] = useState<string[]>([]);
+  const [newAssembly, setNewAssembly] = useState<string[]>([]);
+  const [filterParty, setFilterParty] = useState<string>('ALL');
+  const [filterState, setFilterState] = useState<string>('ALL');
+  const [availableStates, setAvailableStates] = useState<{ id: string; name: string }[]>([]);
+  const [availableLoksabhas, setAvailableLoksabhas] = useState<{ id: string; name: string; state_id: string }[]>([]);
+  const [availableAssemblies, setAvailableAssemblies] = useState<{ id: string; name: string; loksabha_id: string }[]>([]);
+  const [statesLoading, setStatesLoading] = useState(true);
+  const [loksabhasLoading, setLoksabhasLoading] = useState(false);
+  const [assembliesLoading, setAssembliesLoading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<CampaignEvent | null>(null);
+  const [editingEvent, setEditingEvent] = useState<CampaignEvent | null>(null);
+  const [workerNotifyToast, setWorkerNotifyToast] = useState(false);
+  const skipAutoStateRef = useRef(false);
+  const skipLoksabhaResetCountRef = useRef(0);
+
+  /** Fetch states from Supabase on mount. No fallback - empty on error or no rows. */
+  useEffect(() => {
+    const fetchStates = async () => {
+      setStatesLoading(true);
+      const { data, error } = await supabase.from('states').select('*');
+      if (error) {
+        console.error('fetchStates error:', error.message);
+        setAvailableStates([]);
+      } else {
+        const raw = data ?? [];
+        const mapped = raw.map((r: Record<string, unknown>) => ({
+          id: String(r.id ?? ''),
+          name: String(r.name ?? r.state_name ?? r.state ?? ''),
+        })).filter((s) => s.id && s.name);
+        setAvailableStates(mapped);
+      }
+      setStatesLoading(false);
+    };
+    fetchStates();
+  }, []);
+
+  useEffect(() => {
+    const fetchEvents = async () => {
+      const { data, error } = await supabase.from('events').select('*').order('created_at', { ascending: false });
+      if (error) {
+        console.error('fetchEvents error:', error);
+        setEvents([]);
+        return;
+      }
+      const mapped: CampaignEvent[] = (data || [])
+        .map((row: { id?: string; name: string; start?: string; end?: string; language?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; captions?: unknown }) => ({
+          id: String(row.id ?? '').trim(),
+          name: row.name,
+          start: row.start ?? '',
+          end: row.end ?? '',
+          language: row.language ?? undefined,
+          party: toStrArr(row.party),
+          state: toStrArr(row.state),
+          loksabha: toStrArr(row.loksabha),
+          assembly: toStrArr(row.assembly),
+          posts: [],
+          captions: normalizeCaptionsFromDb(row.captions),
+        }))
+        .filter((e) => e.id.length > 0);
+      setEvents(mapped);
+    };
+    fetchEvents().finally(() => setEventsLoading(false));
+  }, []);
+
+  /** Language-to-State auto-select: map LANGUAGE_TO_STATES names to numeric IDs from availableStates */
+  useEffect(() => {
+    if (skipAutoStateRef.current) {
+      skipAutoStateRef.current = false;
+      return;
+    }
+    if (newLanguage && availableStates.length > 0) {
+      const matchedIds = availableStates
+        .filter((s) => LANGUAGE_TO_STATES[newLanguage]?.includes(s.name))
+        .map((s) => String(s.id));
+      setNewState(matchedIds);
+    } else if (!newLanguage) {
+      setNewState([]);
+    }
+  }, [newLanguage, availableStates]);
+
+  /** When newState changes, reset newLoksabha and newAssembly. Skip when restoring from edit. */
+  useEffect(() => {
+    if (skipLoksabhaResetCountRef.current > 0) {
+      skipLoksabhaResetCountRef.current -= 1;
+      return;
+    }
+    setNewLoksabha([]);
+    setNewAssembly([]);
+  }, [newState]);
+
+  /** When newLoksabha changes, reset newAssembly. Skip when restoring from edit. */
+  useEffect(() => {
+    if (skipLoksabhaResetCountRef.current > 0) {
+      skipLoksabhaResetCountRef.current -= 1;
+      return;
+    }
+    setNewAssembly([]);
+  }, [newLoksabha]);
+
+  /** Fetch Lok Sabha when state selection changes. Uses integer IDs for Supabase query. */
+  useEffect(() => {
+    const selectedStateIds = newState.includes('ALL') ? availableStates.map((s) => s.id) : newState.filter((v) => v !== 'ALL');
+    if (selectedStateIds.length === 0) {
+      setAvailableLoksabhas([]);
+      setLoksabhasLoading(false);
+      return;
+    }
+    const fetchLoksabhas = async () => {
+      setLoksabhasLoading(true);
+      const idsAsNumbers = selectedStateIds.map((id) => Number(id)).filter((n) => !Number.isNaN(n));
+      if (idsAsNumbers.length === 0) {
+        setAvailableLoksabhas([]);
+        setLoksabhasLoading(false);
+        return;
+      }
+      const { data, error } = await supabase.from('loksabha').select('*').in('state_id', idsAsNumbers);
+      if (error) {
+        console.error('fetchLoksabhas error:', error.message);
+        setAvailableLoksabhas([]);
+      } else {
+        const raw = data ?? [];
+        const mapped = raw.map((r: Record<string, unknown>) => ({
+          id: String(r.id ?? ''),
+          name: String(r.name ?? r.loksabha_name ?? ''),
+          state_id: String(r.state_id ?? r.state ?? ''),
+        })).filter((l) => l.id && l.name);
+        setAvailableLoksabhas(mapped);
+      }
+      setLoksabhasLoading(false);
+    };
+    fetchLoksabhas();
+  }, [newState, availableStates]);
+
+  /** Fetch Assembly when Lok Sabha selection changes. Uses integer IDs for Supabase query. */
+  useEffect(() => {
+    const selectedLoksabhaIds = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => l.id) : newLoksabha.filter((v) => v !== 'ALL');
+    if (selectedLoksabhaIds.length === 0) {
+      setAvailableAssemblies([]);
+      setAssembliesLoading(false);
+      return;
+    }
+    const fetchAssemblies = async () => {
+      setAssembliesLoading(true);
+      const idsAsNumbers = selectedLoksabhaIds.map((id) => Number(id)).filter((n) => !Number.isNaN(n));
+      if (idsAsNumbers.length === 0) {
+        setAvailableAssemblies([]);
+        setAssembliesLoading(false);
+        return;
+      }
+      const { data, error } = await supabase.from('assembly').select('*').in('loksabha_id', idsAsNumbers);
+      if (error) {
+        console.error('fetchAssemblies error:', error.message);
+        setAvailableAssemblies([]);
+      } else {
+        const raw = data ?? [];
+        const mapped = raw.map((r: Record<string, unknown>) => ({
+          id: String(r.id ?? ''),
+          name: String(r.name ?? r.assembly_name ?? ''),
+          loksabha_id: String(r.loksabha_id ?? r.loksabhaId ?? r.loksabha ?? ''),
+        })).filter((a) => a.id && a.name);
+        setAvailableAssemblies(mapped);
+      }
+      setAssembliesLoading(false);
+    };
+    fetchAssemblies();
+  }, [newLoksabha, availableLoksabhas]);
+
+  const getStatus = (sDate: string, eDate: string) => {
+    const now = currentTime.getTime();
+    const s = new Date(sDate).getTime();
+    const e = new Date(eDate).getTime();
+    if (now < s) return { id: 'soon', label: 'Upcoming', color: 'bg-blue-50 text-blue-600' };
+    if (now >= s && now <= e) return { id: 'live', label: 'Live Now', color: 'bg-green-50 text-green-600', pulse: true };
+    return { id: 'done', label: 'Expired', color: 'bg-slate-100 text-slate-400' };
+  };
+
+  const fetchEventByIdOrName = async (ev: Pick<CampaignEvent, 'id' | 'name'>, select: string) => {
+    const idStr = String(ev.id ?? '').trim();
+    if (isLikelyEventUuid(idStr)) {
+      const r = await supabase.from('events').select(select).eq('id', idStr).maybeSingle();
+      if (!r.error && r.data) return r;
+    }
+    return supabase.from('events').select(select).eq('name', ev.name).limit(1).maybeSingle();
+  };
+
+  const updateEventByIdOrName = async (ev: Pick<CampaignEvent, 'id' | 'name'>, patch: Record<string, unknown>) => {
+    const idStr = String(ev.id ?? '').trim();
+    if (isLikelyEventUuid(idStr)) {
+      const r = await supabase.from('events').update(patch).eq('id', idStr);
+      if (!r.error) return r;
+    }
+    return supabase.from('events').update(patch).eq('name', ev.name);
+  };
+
+  const deleteEventRowByIdOrName = async (ev: CampaignEvent) => {
+    const idStr = String(ev.id ?? '').trim();
+    if (isLikelyEventUuid(idStr)) {
+      const { error } = await supabase.from('events').delete().eq('id', idStr);
+      if (!error) return;
+    }
+    const { error } = await supabase.from('events').delete().eq('name', ev.name);
+    if (error) console.error('Events delete error:', error);
+  };
+
+  /**
+   * Push `events.captions` snapshot onto every post in this campaign (`posts.category` = event name).
+   * We intentionally match **category only** (no `is_video` / `language` filters): those filters were skipping
+   * rows (e.g. DB default `is_video = true`, or language mismatch) so captions never updated.
+   */
+  const syncGraphicsPostCaptions = async (ev: CampaignEvent, captionsList: string[]) => {
+    const jsonStr = captionsJsonForPostColumn(captionsList);
+    let { error } = await supabase.from('posts').update({ captions: captionsList }).eq('category', ev.name);
+    if (error) {
+      ({ error } = await supabase.from('posts').update({ captions: jsonStr }).eq('category', ev.name));
+    }
+    if (error) console.error('sync graphics captions to posts:', error.message, error);
+  };
+
+  const createEvent = async () => {
+    if (!newName || !startDate || !endDate) return;
+    const startVal = `${startDate}T00:00:00`;
+    const endVal = `${endDate}T23:59:59`;
+    const payload: Record<string, unknown> = { name: newName, start: startVal, end: endVal, captions: [] };
+    if (newLanguage) payload.language = newLanguage;
+    const partyArr = newParty.includes('ALL') ? PARTIES_DATA.map((p) => p.id) : newParty.filter(Boolean);
+    const stateArr = newState.includes('ALL') ? availableStates.map((s) => s.id) : newState.filter(Boolean);
+    const loksabhaArr = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => l.id) : newLoksabha.filter(Boolean);
+    const assemblyArr = newAssembly.includes('ALL') ? availableAssemblies.map((a) => a.id) : newAssembly.filter(Boolean);
+    if (partyArr.length > 0) payload.party = partyArr;
+    if (stateArr.length > 0) payload.state = stateArr;
+    if (loksabhaArr.length > 0) payload.loksabha = loksabhaArr;
+    if (assemblyArr.length > 0) payload.assembly = assemblyArr;
+    const { data, error } = await supabase
+      .from('events')
+      .insert(payload)
+      .select()
+      .single();
+    if (error) {
+      console.error('Insert Error:', error.message, error.details, error.hint);
+      alert('Error: ' + error.message);
+      return;
+    }
+    if (data.id == null || String(data.id).trim() === '') {
+      alert('Event created but no id was returned — check Supabase RLS and .select() on insert.');
+      return;
+    }
+    const ev: CampaignEvent = {
+      id: String(data.id).trim(),
+      name: data.name,
+      start: data.start ?? startVal,
+      end: data.end ?? endVal,
+      language: newLanguage || undefined,
+      party: partyArr.length ? partyArr : undefined,
+      state: stateArr.length ? stateArr : undefined,
+      loksabha: loksabhaArr.length ? loksabhaArr : undefined,
+      assembly: assemblyArr.length ? assemblyArr : undefined,
+      posts: [],
+      captions: normalizeCaptionsFromDb(data.captions),
+    };
+    setEvents((prev) => [ev, ...prev]);
+    setNewName('');
+    setNewLanguage('');
+    setStartDate('');
+    setEndDate('');
+    setNewParty([]);
+    setNewState([]);
+    setNewLoksabha([]);
+    setNewAssembly([]);
+  };
+
+  const openEvent = async (ev: CampaignEvent) => {
+    let postsQuery = supabase.from('posts').select('id, image_url, title').eq('category', ev.name);
+    if (ev.language && ev.language.trim()) postsQuery = postsQuery.eq('language', ev.language);
+    const [eventsRes, postsRes] = await Promise.all([
+      fetchEventByIdOrName(ev, 'captions, party, state, language, loksabha, assembly'),
+      postsQuery.order('created_at', { ascending: false }),
+    ]);
+    if (eventsRes.error) console.error('openEvent events fetch:', eventsRes.error);
+    const eventRow =
+      !eventsRes.error && eventsRes.data != null ? (eventsRes.data as unknown as Record<string, unknown>) : null;
+    const dbCaptions = normalizeCaptionsFromDb(eventRow?.captions ?? ev.captions);
+    const evParty = toStrArr((eventRow?.party as string | string[] | undefined) ?? ev.party);
+    const evState = toStrArr((eventRow?.state as string | string[] | undefined) ?? ev.state);
+    const evLoksabha = toStrArr((eventRow?.loksabha as string | string[] | undefined) ?? ev.loksabha);
+    const evAssembly = toStrArr((eventRow?.assembly as string | string[] | undefined) ?? ev.assembly);
+    const evLanguage = (eventRow?.language as string | undefined) ?? ev.language ?? '';
+    const evWithPartyState = { ...ev, language: evLanguage, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly };
+    const postsFromDb: Post[] = (postsRes.data || []).map((p: { id: string; image_url: string; title: string }) => ({
+      id: p.id,
+      url: p.image_url,
+      type: 'image' as const,
+      name: p.title || '',
+    }));
+    const evWithData = { ...evWithPartyState, captions: dbCaptions, posts: postsFromDb };
+    setEvents((prev) => prev.map((e) => (e.id === ev.id ? { ...e, language: evLanguage, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly, captions: dbCaptions, posts: postsFromDb } : e)));
+    setSelectedEvent(evWithData);
+    setView('gallery');
+  };
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || !selectedEvent) return;
+
+    const imageFiles = Array.from(files).filter(
+      (f) =>
+        f.type === 'image/jpeg' ||
+        f.type === 'image/png' ||
+        f.name.toLowerCase().endsWith('.jpg') ||
+        f.name.toLowerCase().endsWith('.jpeg') ||
+        f.name.toLowerCase().endsWith('.png')
+    );
+    if (imageFiles.length === 0) return;
+
+    /** Always pull latest captions from `events` so new rows match DB (not stale React state). */
+    const evCaptionsRes = await fetchEventByIdOrName(selectedEvent, 'captions');
+    if (evCaptionsRes.error) {
+      console.error('[handleUpload] Failed to read events.captions:', evCaptionsRes.error.message, evCaptionsRes.error);
+    }
+    const capRow =
+      !evCaptionsRes.error && evCaptionsRes.data != null
+        ? (evCaptionsRes.data as unknown as Record<string, unknown>)
+        : null;
+    const fromDb = normalizeCaptionsFromDb(capRow?.captions);
+    const fromUi = normalizeCaptionsFromDb(selectedEvent.captions);
+    const batchCaptions = fromDb.length > 0 ? fromDb : fromUi;
+
+    const newPosts: Post[] = [];
+    for (const file of imageFiles) {
+      const ext = file.name.toLowerCase().endsWith('.jpeg')
+        ? '.jpeg'
+        : file.name.toLowerCase().endsWith('.png')
+          ? '.png'
+          : '.jpg';
+      const storagePath = `public/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+
+      let imageUrl: string;
+      try {
+        const up = await adminStorageUpload('post-images', storagePath, file);
+        imageUrl = up.publicUrl;
+      } catch (uploadErr) {
+        console.error('Upload error:', uploadErr);
+        continue;
+      }
+
+      /** category = event name (manual match; no FK). Use event's language, party, state, loksabha, assembly directly. */
+      const postPayload: Record<string, unknown> = {
+        title: file.name.replace(ext, ''),
+        image_url: imageUrl,
+        category: selectedEvent.name,
+        /** Must match app/dashboard graphics filter (`is_video` false or null); DB default true would hide posts + break caption sync filters. */
+        is_video: false,
+      };
+      if (selectedEvent.language) postPayload.language = selectedEvent.language;
+      const partyArr = toStrArr(selectedEvent.party);
+      const stateArr = toStrArr(selectedEvent.state);
+      const loksabhaArr = toStrArr(selectedEvent.loksabha);
+      const assemblyArr = toStrArr(selectedEvent.assembly);
+      if (partyArr.length > 0) postPayload.party = partyArr;
+      if (stateArr.length > 0) postPayload.state = stateArr;
+      if (loksabhaArr.length > 0) postPayload.loksabha = loksabhaArr;
+      if (assemblyArr.length > 0) postPayload.assembly = assemblyArr;
+      postPayload.captions = batchCaptions;
+      let { data: insertData, error: insertErr } = await supabase.from('posts').insert(postPayload).select('id').single();
+
+      if (insertErr && batchCaptions.length > 0) {
+        postPayload.captions = captionsJsonForPostColumn(batchCaptions);
+        ({ data: insertData, error: insertErr } = await supabase.from('posts').insert(postPayload).select('id').single());
+      }
+
+      if (insertErr || !insertData) {
+        if (insertErr) console.error('DB insert error:', insertErr);
+        continue;
+      }
+
+      newPosts.push({
+        id: (insertData as { id: string }).id,
+        url: imageUrl,
+        type: 'image',
+        name: file.name
+      });
+    }
+
+    if (newPosts.length > 0) {
+      const updated = events.map((ev) =>
+        ev.id === selectedEvent.id ? { ...ev, posts: [...newPosts, ...ev.posts] } : ev
+      );
+      setEvents(updated);
+      setSelectedEvent({ ...selectedEvent, posts: [...newPosts, ...selectedEvent.posts] });
+
+      /** Re-read `events.captions` and push to every graphics post (same merge as inserts). */
+      const evSnapRes = await fetchEventByIdOrName(selectedEvent, 'captions');
+      if (evSnapRes.error) console.error('[handleUpload] post-upload events read:', evSnapRes.error.message);
+      const snapRow =
+        !evSnapRes.error && evSnapRes.data != null
+          ? (evSnapRes.data as unknown as Record<string, unknown>)
+          : null;
+      const snapDb = normalizeCaptionsFromDb(snapRow?.captions);
+      const latestCaptions = snapDb.length > 0 ? snapDb : normalizeCaptionsFromDb(selectedEvent.captions);
+      await syncGraphicsPostCaptions(selectedEvent, latestCaptions);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const addCaptionToList = async () => {
+    if (!selectedEvent || !newCaptionText.trim()) return;
+    const updatedCaptions = [...selectedEvent.captions, newCaptionText.trim()];
+    await updateEventByIdOrName(selectedEvent, { captions: updatedCaptions });
+    await syncGraphicsPostCaptions(selectedEvent, updatedCaptions);
+    const updatedEvents = events.map((ev) =>
+      ev.id === selectedEvent.id ? { ...ev, captions: updatedCaptions } : ev
+    );
+    setEvents(updatedEvents);
+    setSelectedEvent({ ...selectedEvent, captions: updatedCaptions });
+    setNewCaptionText('');
+  };
+
+  const confirmDeleteCaption = async () => {
+    if (!selectedEvent || captionToDelete === null) return;
+    const updatedCaptions = selectedEvent.captions.filter((_, i) => i !== captionToDelete);
+    await updateEventByIdOrName(selectedEvent, { captions: updatedCaptions });
+    await syncGraphicsPostCaptions(selectedEvent, updatedCaptions);
+    const updatedEvents = events.map((ev) =>
+      ev.id === selectedEvent.id ? { ...ev, captions: updatedCaptions } : ev
+    );
+    setEvents(updatedEvents);
+    setSelectedEvent({ ...selectedEvent, captions: updatedCaptions });
+    setCaptionToDelete(null);
+  };
+
+  const getStoragePathFromUrl = (url: string): string | null => {
+    const match = url.match(/\/post-images\/(.+)$/);
+    return match ? decodeURIComponent(match[1]) : null;
+  };
+
+  const deleteEvent = async (ev: CampaignEvent) => {
+    try {
+      let postsQuery = supabase.from('posts').select('id, image_url').eq('category', ev.name);
+      if (ev.language && ev.language.trim()) postsQuery = postsQuery.eq('language', ev.language);
+      const { data: postsData } = await postsQuery;
+      const postsToClean = postsData || [];
+
+      const filePaths: string[] = [];
+      for (const p of postsToClean) {
+        const path = getStoragePathFromUrl(p.image_url);
+        if (path) filePaths.push(path);
+      }
+
+      if (filePaths.length > 0) {
+        try {
+          await adminStorageRemove('post-images', filePaths);
+        } catch (storageEx) {
+          console.error('Storage delete exception:', storageEx);
+        }
+      }
+
+      try {
+        const { error: postsErr } = await supabase.from('posts').delete().eq('category', ev.name);
+        if (postsErr) console.error('Posts delete error:', postsErr);
+      } catch (postsEx) {
+        console.error('Posts delete exception:', postsEx);
+      }
+
+      try {
+        await deleteEventRowByIdOrName(ev);
+      } catch (eventsEx) {
+        console.error('Events delete exception:', eventsEx);
+      }
+
+      setEvents((prev) => prev.filter((e) => e.id !== ev.id));
+      if (selectedEvent?.id === ev.id) {
+        setView('list');
+        setSelectedEvent(null);
+      }
+    } catch (err) {
+      console.error('deleteEvent exception:', err);
+    } finally {
+      setIsDeleting(null);
+    }
+  };
+
+  const removePost = async () => {
+    if (!selectedEvent || !postToDelete) return;
+
+    const postId = postToDelete.id;
+    const postUrl = postToDelete.url;
+    const ev = selectedEvent;
+
+    if (!postId || typeof postId !== 'string') {
+      console.error('removePost: invalid postToDelete.id', postToDelete);
+      return;
+    }
+
+    const { error: dbError } = await supabase.from('posts').delete().eq('id', postId);
+    if (dbError) {
+      console.error('posts table delete error:', dbError);
+    }
+
+    const filePath = getStoragePathFromUrl(postUrl);
+    if (filePath) {
+      try {
+        await adminStorageRemove('post-images', [filePath]);
+      } catch (e) {
+        console.error('removePost storage:', e);
+      }
+    }
+
+    const filtered = ev.posts.filter((p) => p.id !== postId);
+    const updated = events.map((e) => (e.id === ev.id ? { ...e, posts: filtered } : e));
+    setEvents(updated);
+    setSelectedEvent({ ...ev, posts: filtered });
+    setPostToDelete(null);
+  };
+
+  const formatDate = (d: string) => new Date(d).toLocaleDateString('en-US', { day: '2-digit', month: 'short' });
+
+  const toDateInputValue = (iso: string) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toISOString().slice(0, 10);
+  };
+
+  const openEditModal = (ev: CampaignEvent) => {
+    setEditingEvent(ev);
+    setNewName(ev.name);
+    skipAutoStateRef.current = true;
+    skipLoksabhaResetCountRef.current = 2;
+    setNewLanguage(ev.language ?? '');
+    setStartDate(toDateInputValue(ev.start));
+    setEndDate(toDateInputValue(ev.end));
+    const partyArr = toStrArr(ev.party);
+    setNewParty(partyArr.length === 0 || (partyArr.length === 1 && partyArr[0] === 'ALL') ? ['ALL'] : partyArr);
+    const evStates = toStrArr(ev.state);
+    const stateIds = evStates.map((v) => {
+      const byId = availableStates.find((s) => s.id === v);
+      if (byId) return byId.id;
+      const byName = availableStates.find((s) => s.name === v);
+      return byName?.id ?? v;
+    }).filter(Boolean);
+    setNewState(stateIds);
+    setNewLoksabha(toStrArr(ev.loksabha));
+    setNewAssembly(toStrArr(ev.assembly));
+  };
+
+  const handleSaveEvent = async () => {
+    if (!newName || !startDate || !endDate || !editingEvent) return;
+
+    const originalName = editingEvent.name;
+
+    const updatePayload: Record<string, unknown> = {
+      name: newName.trim(),
+      start: `${startDate}T00:00:00`,
+      end: `${endDate}T23:59:59`,
+      captions: editingEvent.captions,
+    };
+    if (newLanguage) updatePayload.language = newLanguage;
+    const partyArr = newParty.includes('ALL') ? PARTIES_DATA.map((p) => p.id) : newParty.filter(Boolean);
+    const stateArr = newState.includes('ALL') ? availableStates.map((s) => s.id) : newState.filter(Boolean);
+    const loksabhaArr = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => l.id) : newLoksabha.filter(Boolean);
+    const assemblyArr = newAssembly.includes('ALL') ? availableAssemblies.map((a) => a.id) : newAssembly.filter(Boolean);
+    if (partyArr.length > 0) updatePayload.party = partyArr;
+    if (stateArr.length > 0) updatePayload.state = stateArr;
+    if (loksabhaArr.length > 0) updatePayload.loksabha = loksabhaArr;
+    if (assemblyArr.length > 0) updatePayload.assembly = assemblyArr;
+    const { error: eventsErr } = await updateEventByIdOrName(editingEvent, updatePayload);
+
+    if (eventsErr) {
+      console.error('Full Error Object:', eventsErr);
+      alert('Error: ' + eventsErr.message);
+      return;
+    }
+
+    const targetCategory = newName.trim();
+    if (targetCategory !== originalName) {
+      let catQ = supabase.from('posts').update({ category: targetCategory }).eq('category', originalName);
+      if (editingEvent.language) catQ = catQ.eq('language', editingEvent.language);
+      await catQ;
+    }
+    const postUpdatePayload: Record<string, unknown> = {};
+    if (partyArr.length > 0) postUpdatePayload.party = partyArr;
+    if (stateArr.length > 0) postUpdatePayload.state = stateArr;
+    if (loksabhaArr.length > 0) postUpdatePayload.loksabha = loksabhaArr;
+    if (assemblyArr.length > 0) postUpdatePayload.assembly = assemblyArr;
+    if (Object.keys(postUpdatePayload).length > 0) {
+      let pq = supabase.from('posts').update(postUpdatePayload).eq('category', targetCategory);
+      if (editingEvent.language) pq = pq.eq('language', editingEvent.language);
+      await pq;
+    }
+
+    /** Edit Event "Save" updates `events.captions` but must also push to `posts.captions` (same as add/delete caption). */
+    const evForSync: CampaignEvent = {
+      ...editingEvent,
+      name: targetCategory,
+      language: newLanguage || editingEvent.language,
+    };
+    const captionsForPosts = normalizeCaptionsFromDb(updatePayload.captions);
+    await syncGraphicsPostCaptions(evForSync, captionsForPosts);
+
+    const newStart = `${startDate}T00:00:00`;
+    const newEnd = `${endDate}T23:59:59`;
+    const updated: CampaignEvent = { ...editingEvent, name: targetCategory, start: newStart, end: newEnd, language: newLanguage || undefined, party: partyArr.length ? partyArr : undefined, state: stateArr.length ? stateArr : undefined, loksabha: loksabhaArr.length ? loksabhaArr : undefined, assembly: assemblyArr.length ? assemblyArr : undefined };
+    setEvents((prev) => prev.map((ev) => (ev.id === editingEvent.id ? updated : ev)));
+    if (selectedEvent?.id === editingEvent.id) {
+      setSelectedEvent(updated);
+    }
+
+    setEditingEvent(null);
+    setNewName('');
+    setNewLanguage('');
+    setStartDate('');
+    setEndDate('');
+    setNewParty([]);
+    setNewState([]);
+    setNewLoksabha([]);
+    setNewAssembly([]);
+
+    let workerNotifyOk = false;
+    try {
+      const res = await fetch('/api/notifications/send', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Naya Graphic Aaya!',
+          body: targetCategory,
+          data: { id: String(editingEvent.id) },
+          all_workers: true,
+        }),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok || payload.error) {
+        console.error('worker notify:', payload.error ?? res.status);
+        alert(
+          'Event saved, but worker notification failed: ' + (payload.error || `HTTP ${res.status}`)
+        );
+      } else {
+        workerNotifyOk = true;
+      }
+    } catch (e) {
+      console.error('worker notify:', e);
+      alert(
+        'Event saved, but worker notification failed: ' + (e instanceof Error ? e.message : String(e))
+      );
+    }
+    if (workerNotifyOk) {
+      setWorkerNotifyToast(true);
+      window.setTimeout(() => setWorkerNotifyToast(false), 4000);
+    }
+  };
+
+  // --- VIEW 1: EVENT LIST ---
+  if (view === 'list') {
+    return (
+      <div className="max-w-6xl mx-auto p-4 space-y-8 animate-in fade-in duration-500 text-slate-700">
+        {workerNotifyToast ? (
+          <div
+            className="fixed bottom-8 left-1/2 z-[200] max-w-md -translate-x-1/2 rounded-xl px-5 py-3 text-center text-sm font-bold text-white shadow-lg"
+            style={{ backgroundColor: '#25D366' }}
+            role="status"
+          >
+            Sabhi workers ko notification bhej di gayi hai!
+          </div>
+        ) : null}
+        {isDeleting && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-[40px] p-10 max-w-sm w-full text-center space-y-6 shadow-2xl animate-in zoom-in-95">
+              <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto shadow-inner"><AlertTriangle size={40} /></div>
+              <p className="font-black text-xl text-slate-900">Delete Event?</p>
+              <div className="flex gap-4">
+                <button onClick={() => setIsDeleting(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold">Cancel</button>
+                <button onClick={() => deleteEvent(isDeleting)} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold">Delete</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {editingEvent && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-3 sm:p-4">
+            <div className="bg-white rounded-[40px] max-w-md w-full max-h-[85vh] shadow-2xl animate-in zoom-in-95 border border-slate-100 flex flex-col overflow-hidden">
+              <div className="shrink-0 px-4 pt-4 sm:px-5 sm:pt-5 pb-2">
+                <div className="w-12 h-12 sm:w-14 sm:h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-3"><Pencil size={28} /></div>
+                <p className="font-black text-xl text-slate-900">Edit Event</p>
+              </div>
+              <div className="flex-1 overflow-y-auto min-h-0 px-4 sm:px-5 py-2">
+                <div className="space-y-4 text-left">
+                  <div className="flex flex-col">
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</label>
+                    <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30" />
+                  </div>
+                  <div className="flex flex-col">
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Language</label>
+                    <select value={newLanguage} onChange={(e) => setNewLanguage(e.target.value)} className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30">
+                      <option value="">Select…</option>
+                      {LANGUAGE_OPTIONS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex gap-3 flex-wrap">
+                    <MultiSelectDropdown
+                      label="State"
+                      options={availableStates}
+                      selected={newState}
+                      onSelect={setNewState}
+                      getValue={(s) => s.id}
+                      getLabel={(s) => s.name}
+                      allLabel="All States"
+                      loading={statesLoading}
+                    />
+                    <MultiSelectDropdown
+                      label="Party"
+                      options={PARTIES_DATA}
+                      selected={newParty}
+                      onSelect={setNewParty}
+                      getValue={(p) => p.id}
+                      getLabel={(p) => p.shortName}
+                      allLabel="All Parties"
+                      optionLeading={(p) =>
+                        isPartyOtherId(String(p.id)) ? (
+                          <Users size={16} className="text-slate-500 shrink-0" aria-hidden />
+                        ) : null
+                      }
+                    />
+                    <MultiSelectDropdown
+                      label="Lok Sabha"
+                      options={availableLoksabhas}
+                      selected={newLoksabha}
+                      onSelect={setNewLoksabha}
+                      getValue={(l) => l.id}
+                      getLabel={(l) => l.name}
+                      allLabel="All LS Seats"
+                      loading={loksabhasLoading}
+                    />
+                    <MultiSelectDropdown
+                      label="Assembly"
+                      options={availableAssemblies}
+                      selected={newAssembly}
+                      onSelect={setNewAssembly}
+                      getValue={(a) => a.id}
+                      getLabel={(a) => a.name}
+                      allLabel="All Assembly Seats"
+                      loading={assembliesLoading}
+                    />
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="flex flex-col flex-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Activation</label>
+                      <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30" />
+                    </div>
+                    <div className="flex flex-col flex-1">
+                      <label className="text-[9px] font-black text-rose-400 uppercase tracking-widest mb-1">Expiry</label>
+                      <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="shrink-0 px-4 sm:px-5 py-4 border-t border-slate-100 bg-white">
+                <div className="flex gap-4">
+                  <button onClick={() => { setEditingEvent(null); setNewName(''); setNewLanguage(''); setStartDate(''); setEndDate(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
+                  <button onClick={handleSaveEvent} disabled={!newName.trim() || !startDate || !endDate} className="flex-1 py-3 sm:py-4 bg-blue-600 text-white rounded-2xl font-bold disabled:opacity-30">Save</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Professional Header Card */}
+        <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-xl">
+              <Layers size={28} />
+            </div>
+            <div>
+              <h1 className="text-3xl font-black text-slate-900 tracking-tight leading-none">Campaign Hub</h1>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mt-2">Manage events and Captions</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Global Filter */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 text-slate-600">
+            <Filter size={18} className="text-slate-400" />
+            <span className="text-xs font-bold uppercase tracking-widest">Global Filter</span>
+          </div>
+          <select value={filterParty} onChange={e => setFilterParty(e.target.value)} className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
+            <option value="ALL">All Parties</option>
+            {PARTIES_DATA.map(p => <option key={p.id} value={p.id}>{p.shortName}</option>)}
+          </select>
+          <select value={filterState} onChange={e => setFilterState(e.target.value)} className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
+            <option value="ALL">All States</option>
+            {availableStates.map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+          </select>
+        </div>
+
+        {/* Create Event Strip - Language-First: Language → State (auto) → Party */}
+        <div className="bg-white p-4 rounded-[35px] border border-slate-200 shadow-lg">
+          <div className="flex flex-wrap lg:flex-nowrap items-end gap-3">
+            <div className="flex flex-col flex-1 min-w-[120px]">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</span>
+              <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm" />
+            </div>
+            <div className="flex flex-col flex-1 min-w-[100px]">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Language</span>
+              <select value={newLanguage} onChange={e => setNewLanguage(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
+                <option value="">Select…</option>
+                {LANGUAGE_OPTIONS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+              </select>
+            </div>
+            <MultiSelectDropdown
+              label="State"
+              options={availableStates}
+              selected={newState}
+              onSelect={setNewState}
+              getValue={(s) => s.id}
+              getLabel={(s) => s.name}
+              allLabel="All States"
+              loading={statesLoading}
+            />
+            <MultiSelectDropdown
+              label="Party"
+              options={PARTIES_DATA}
+              selected={newParty}
+              onSelect={setNewParty}
+              getValue={(p) => p.id}
+              getLabel={(p) => p.shortName}
+              allLabel="All Parties"
+              optionLeading={(p) =>
+                isPartyOtherId(String(p.id)) ? (
+                  <Users size={16} className="text-slate-500 shrink-0" aria-hidden />
+                ) : null
+              }
+            />
+            <MultiSelectDropdown
+              label="Lok Sabha"
+              options={availableLoksabhas}
+              selected={newLoksabha}
+              onSelect={setNewLoksabha}
+              getValue={(l) => l.id}
+              getLabel={(l) => l.name}
+              allLabel="All LS Seats"
+              loading={loksabhasLoading}
+            />
+            <MultiSelectDropdown
+              label="Assembly"
+              options={availableAssemblies}
+              selected={newAssembly}
+              onSelect={setNewAssembly}
+              getValue={(a) => a.id}
+              getLabel={(a) => a.name}
+              allLabel="All Assembly Seats"
+              loading={assembliesLoading}
+            />
+            <div className="flex flex-col flex-1 min-w-[120px]">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Activation</span>
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
+            </div>
+            <div className="flex flex-col flex-1 min-w-[120px]">
+              <span className="text-[9px] font-black text-rose-400 uppercase tracking-widest mb-1">Expiry</span>
+              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
+            </div>
+            <button onClick={createEvent} disabled={!newName || !startDate || !endDate} className="bg-blue-600 text-white px-8 py-2.5 rounded-2xl font-black text-xs hover:bg-slate-900 disabled:opacity-30 transition-all uppercase tracking-widest shrink-0">Add</button>
+          </div>
+        </div>
+
+        <div className="space-y-12 pb-20">
+          {eventsLoading ? (
+            <div className="py-20 text-center text-slate-400 font-bold text-sm">Loading events…</div>
+          ) : (
+          <>
+          {['live', 'soon', 'done'].map(st => {
+            const items = events.filter(e => {
+              const statusMatch = getStatus(e.start, e.end).id === st;
+              const evParties = toStrArr(e.party);
+              const evStates = toStrArr(e.state);
+              const partyMatch = filterParty === 'ALL' || evParties.length === 0 || evParties.some((p) => String(p) === filterParty);
+              const stateMatch = filterState === 'ALL' || evStates.length === 0 || evStates.some((s) => String(s) === filterState);
+              return statusMatch && partyMatch && stateMatch;
+            });
+            if (items.length === 0) return null;
+            return (
+              <div key={st} className="space-y-6">
+                <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] flex items-center gap-3 px-2">
+                  <div className={`w-2 h-2 rounded-full ${st === 'live' ? 'bg-green-500 animate-ping' : st === 'soon' ? 'bg-blue-500' : 'bg-slate-300'}`} />
+                  {st === 'live' ? 'Active Now' : st === 'soon' ? 'Upcoming' : 'Historical'} ({items.length})
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                  {items.map(ev => {
+                    const status = getStatus(ev.start, ev.end);
+                    return (
+                      <div key={ev.id} className="bg-white p-7 rounded-[40px] border border-slate-100 shadow-sm hover:shadow-2xl transition-all group flex flex-col">
+                        <div className="flex justify-between items-start mb-6">
+                          <span className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest border ${status.color}`}>
+                            {status.label}
+                          </span>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                            <button onClick={() => openEditModal(ev)} className="p-2 text-slate-200 hover:text-blue-600"><Pencil size={16}/></button>
+                            <button onClick={() => setIsDeleting(ev)} className="p-2 text-slate-200 hover:text-red-500"><Trash2 size={16}/></button>
+                          </div>
+                        </div>
+                        <h4 className="font-black text-slate-900 text-xl mb-1 flex items-center gap-2 flex-wrap">
+                          {ev.name}
+                          {ev.language && (
+                            <span className="text-slate-500 font-bold text-sm px-2.5 py-0.5 rounded-lg bg-slate-100 border border-slate-200">
+                              [{LANGUAGE_OPTIONS.find(l => l.id === ev.language)?.label ?? ev.language}]
+                            </span>
+                          )}
+                        </h4>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-8 flex items-center gap-1.5"><Folder size={12} className="text-blue-500" /> {ev.posts.length} Assets • {ev.captions.length} Captions</p>
+                        <button 
+                          onClick={() => openEvent(ev)}
+                          className="w-full py-4 bg-slate-900 text-white rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] hover:bg-blue-600 transition-all flex items-center justify-center gap-2 shadow-lg"
+                        >
+                          Manage <ChevronRight size={16} />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+          </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // --- VIEW 2: GALLERY & CAPTION MANAGER ---
+  return (
+    <div className="max-w-6xl mx-auto p-4 space-y-8 animate-in slide-in-from-bottom-4 text-slate-700 pb-20">
+      <input type="file" ref={fileInputRef} onChange={handleUpload} multiple accept="image/jpeg,image/png,.jpg,.jpeg,.png" className="hidden" />
+
+      {/* Media Delete Popup */}
+      {postToDelete && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
+          <div className="bg-white rounded-[40px] p-10 max-w-sm w-full text-center space-y-6 shadow-2xl animate-in zoom-in-95">
+            <div className="w-20 h-20 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center mx-auto shadow-inner"><Trash2 size={40} /></div>
+            <p className="font-black text-2xl text-slate-900">Remove Asset?</p>
+            <div className="flex gap-4">
+              <button onClick={() => setPostToDelete(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold">Cancel</button>
+              <button onClick={removePost} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold shadow-xl">Remove</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Caption Delete Popup */}
+      {captionToDelete !== null && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
+          <div className="bg-white rounded-[40px] p-10 max-w-sm w-full text-center space-y-6 shadow-2xl animate-in zoom-in-95">
+            <div className="w-20 h-20 bg-amber-50 text-amber-500 rounded-full flex items-center justify-center mx-auto shadow-inner"><AlertTriangle size={40} /></div>
+            <p className="font-black text-xl text-slate-900">Delete Caption?</p>
+            <p className="text-slate-400 text-sm font-medium italic">This caption will be removed from the app.</p>
+            <div className="flex gap-4 pt-2">
+              <button onClick={() => setCaptionToDelete(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold">Cancel</button>
+              <button onClick={confirmDeleteCaption} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold shadow-xl shadow-red-200">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <button onClick={() => setView('list')} className="flex items-center gap-2 text-slate-400 hover:text-blue-600 font-black uppercase text-[10px] tracking-[0.2em] transition-all">
+          <ArrowLeft size={20} /> Back
+        </button>
+        <div className="md:text-right">
+          <h2 className="text-3xl font-black text-slate-900 tracking-tight leading-none flex items-center gap-3 flex-wrap">
+            {selectedEvent?.name}
+            {selectedEvent?.language && (
+              <span className="text-slate-500 font-bold text-base px-3 py-1 rounded-xl bg-slate-100 border border-slate-200">
+                [{LANGUAGE_OPTIONS.find(l => l.id === selectedEvent.language)?.label ?? selectedEvent.language}]
+              </span>
+            )}
+          </h2>
+          <p className="text-[10px] font-bold text-blue-600 uppercase mt-3 flex md:justify-end items-center gap-2">
+            <Calendar size={14} /> {selectedEvent && formatDate(selectedEvent.start)} — {selectedEvent && formatDate(selectedEvent.end)}
+          </p>
+        </div>
+      </div>
+
+      {/* --- ASSET SECTION (TOP) --- */}
+      <div className="space-y-6">
+        <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] px-2 flex items-center gap-2">
+            <ImageIcon size={14} className="text-blue-500" /> Media ({selectedEvent?.posts.length})
+        </h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
+            <div onClick={() => fileInputRef.current?.click()} className="aspect-[9/16] bg-white border-4 border-dashed border-slate-200 rounded-[45px] flex flex-col items-center justify-center text-slate-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50/30 transition-all group active:scale-95">
+                <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all mb-4 shadow-inner"><Plus size={32} strokeWidth={3} /></div>
+                <p className="font-black uppercase text-[10px] tracking-widest group-hover:text-blue-600">Upload Media</p>
+            </div>
+
+            {selectedEvent?.posts.map((post: Post) => (
+            <div key={post.id} className="group animate-in zoom-in-95 relative aspect-[9/16] bg-slate-900 rounded-[45px] overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-500">
+                {post.type === 'video' ? <video src={post.url} className="w-full h-full object-cover opacity-80" /> : <img src={post.url} className="w-full h-full object-cover opacity-80" alt="asset" />}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60" />
+                <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
+                    <button onClick={() => setPostToDelete(post)} className="w-10 h-10 bg-rose-500 text-white rounded-2xl flex items-center justify-center shadow-2xl hover:bg-rose-600 active:scale-90 transition-all"><Trash2 size={18} /></button>
+                </div>
+                <div className="absolute bottom-6 left-6 w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-xl ring-4 ring-blue-600/20">
+                    {post.type === 'video' ? <Video size={14} /> : <ImageIcon size={14} />}
+                </div>
+            </div>
+            ))}
+        </div>
+      </div>
+
+      {/* --- CAPTION MANAGER (BOTTOM) --- */}
+      <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm space-y-8">
+        <div className="flex items-center justify-between">
+            <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] flex items-center gap-2">
+                <MessageSquare size={14} className="text-blue-500" /> Captions
+            </h3>
+        </div>
+
+        <div className="flex flex-col md:flex-row gap-4">
+            <div className="flex-1 flex items-center gap-4 bg-slate-50 p-4 rounded-[25px] border border-slate-100">
+                <FileText size={20} className="text-slate-400" />
+                <input 
+                    type="text" 
+                    value={newCaptionText}
+                    onChange={(e) => setNewCaptionText(e.target.value)}
+                    placeholder="Enter a new caption or slogan…" 
+                    className="w-full bg-transparent outline-none font-bold text-slate-800 placeholder:text-slate-300"
+                />
+            </div>
+            <button 
+                onClick={addCaptionToList}
+                disabled={!newCaptionText.trim()}
+                className="bg-slate-900 text-white px-12 rounded-[25px] font-black text-xs hover:bg-blue-600 transition-all uppercase tracking-widest flex items-center justify-center gap-2 disabled:opacity-20 h-[56px]"
+            >
+                <PlusCircle size={18} /> Add
+            </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {selectedEvent?.captions.map((cap, idx) => (
+                <div key={idx} className="flex items-center justify-between bg-white border border-slate-100 p-5 rounded-[25px] group hover:border-blue-200 transition-all shadow-sm">
+                    <div className="flex items-start gap-4">
+                        <span className="w-6 h-6 bg-slate-100 rounded-full flex items-center justify-center text-[10px] font-bold text-slate-400 shrink-0">{idx + 1}</span>
+                        <p className="font-bold text-slate-700 text-sm leading-relaxed">{cap}</p>
+                    </div>
+                    <button onClick={() => setCaptionToDelete(idx)} className="p-2.5 text-slate-200 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all opacity-0 group-hover:opacity-100">
+                        <Trash2 size={16} />
+                    </button>
+                </div>
+            ))}
+            {selectedEvent?.captions.length === 0 && (
+                <div className="col-span-full py-10 text-center bg-slate-50/50 rounded-[30px] border border-dashed border-slate-200">
+                    <p className="text-slate-300 font-bold text-xs uppercase tracking-widest">No captions added</p>
+                </div>
+            )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 justify-center py-10 text-slate-300 font-bold text-[11px] uppercase tracking-[0.4em]">
+        <CheckCircle2 size={14} className="text-emerald-500" /> Active & Synced
+      </div>
+    </div>
+  );
+}

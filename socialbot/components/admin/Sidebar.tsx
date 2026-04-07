@@ -2,7 +2,6 @@
 
 import {
   LayoutDashboard,
-  FileText,
   Calendar,
   Building2,
   MapPin,
@@ -14,7 +13,6 @@ import { usePathname } from 'next/navigation';
 
 const navItems = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/admin/posts', label: 'Posts', icon: FileText },
   { href: '/admin/events', label: 'Events', icon: Calendar },
   { href: '/admin/parties', label: 'Parties', icon: Building2 },
   { href: '/admin/geography', label: 'Geography', icon: MapPin },
