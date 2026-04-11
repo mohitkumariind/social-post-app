@@ -7,7 +7,7 @@ export default function PostsRedirect() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace('/admin/events');
+    router.replace('/admin');
   }, [router]);
 
   return null;
