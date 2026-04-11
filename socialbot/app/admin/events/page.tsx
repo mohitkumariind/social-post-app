@@ -44,6 +44,8 @@ interface CampaignEvent {
   state?: string[];
   loksabha?: string[];
   assembly?: string[];
+  /** Precomputed for list cards; `posts` are only loaded on Manage. */
+  assetsCount: number;
   posts: Post[];
   captions: string[];
 }
@@ -228,7 +230,7 @@ export default function App() {
         setEvents([]);
         return;
       }
-      const mapped: CampaignEvent[] = (data || [])
+      const base: CampaignEvent[] = (data || [])
         .map((row: { id?: string; name: string; start?: string; end?: string; language?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; captions?: unknown }) => ({
           id: String(row.id ?? '').trim(),
           name: row.name,
@@ -239,11 +241,28 @@ export default function App() {
           state: toStrArr(row.state),
           loksabha: toStrArr(row.loksabha),
           assembly: toStrArr(row.assembly),
+          assetsCount: 0,
           posts: [],
           captions: normalizeCaptionsFromDb(row.captions),
         }))
         .filter((e) => e.id.length > 0);
-      setEvents(mapped);
+
+      // Card counts must be correct even before clicking "Manage".
+      const withCounts: CampaignEvent[] = await Promise.all(
+        base.map(async (ev) => {
+          const { count, error: cntErr } = await supabase
+            .from('posts')
+            .select('id', { count: 'exact', head: true })
+            .eq('category', ev.name);
+          if (cntErr) {
+            console.error('[fetchEvents] posts count error:', cntErr.message);
+            return ev;
+          }
+          return { ...ev, assetsCount: count ?? 0 };
+        })
+      );
+
+      setEvents(withCounts);
     };
     fetchEvents().finally(() => setEventsLoading(false));
   }, []);
@@ -477,8 +496,14 @@ export default function App() {
       type: 'image' as const,
       name: p.title || '',
     }));
-    const evWithData = { ...evWithPartyState, captions: dbCaptions, posts: postsFromDb };
-    setEvents((prev) => prev.map((e) => (e.id === ev.id ? { ...e, language: evLanguage, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly, captions: dbCaptions, posts: postsFromDb } : e)));
+    const evWithData = { ...evWithPartyState, captions: dbCaptions, posts: postsFromDb, assetsCount: postsFromDb.length };
+    setEvents((prev) =>
+      prev.map((e) =>
+        e.id === ev.id
+          ? { ...e, language: evLanguage, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly, captions: dbCaptions, posts: postsFromDb, assetsCount: postsFromDb.length }
+          : e
+      )
+    );
     setSelectedEvent(evWithData);
     setView('gallery');
   };
@@ -568,10 +593,10 @@ export default function App() {
 
     if (newPosts.length > 0) {
       const updated = events.map((ev) =>
-        ev.id === selectedEvent.id ? { ...ev, posts: [...newPosts, ...ev.posts] } : ev
+        ev.id === selectedEvent.id ? { ...ev, posts: [...newPosts, ...ev.posts], assetsCount: (ev.assetsCount ?? ev.posts.length) + newPosts.length } : ev
       );
       setEvents(updated);
-      setSelectedEvent({ ...selectedEvent, posts: [...newPosts, ...selectedEvent.posts] });
+      setSelectedEvent({ ...selectedEvent, posts: [...newPosts, ...selectedEvent.posts], assetsCount: (selectedEvent.assetsCount ?? selectedEvent.posts.length) + newPosts.length });
 
       /** Re-read `events.captions` and push to every graphics post (same merge as inserts). */
       const evSnapRes = await fetchEventByIdOrName(selectedEvent, 'captions');
@@ -693,7 +718,7 @@ export default function App() {
     const filtered = ev.posts.filter((p) => p.id !== postId);
     const updated = events.map((e) => (e.id === ev.id ? { ...e, posts: filtered } : e));
     setEvents(updated);
-    setSelectedEvent({ ...ev, posts: filtered });
+    setSelectedEvent({ ...ev, posts: filtered, assetsCount: filtered.length });
     setPostToDelete(null);
   };
 
@@ -1089,7 +1114,7 @@ export default function App() {
                             </span>
                           )}
                         </h4>
-                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-8 flex items-center gap-1.5"><Folder size={12} className="text-blue-500" /> {ev.posts.length} Assets • {ev.captions.length} Captions</p>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-8 flex items-center gap-1.5"><Folder size={12} className="text-blue-500" /> {ev.assetsCount} Assets • {ev.captions.length} Captions</p>
                         <button 
                           onClick={() => openEvent(ev)}
                           className="w-full py-4 bg-slate-900 text-white rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] hover:bg-blue-600 transition-all flex items-center justify-center gap-2 shadow-lg"

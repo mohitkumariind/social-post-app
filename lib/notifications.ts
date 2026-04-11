@@ -4,6 +4,8 @@ import * as Notifications from 'expo-notifications';
 import { Alert, Linking, Platform } from 'react-native';
 import { supabase } from './supabase';
 
+export { ANDROID_NOTIFICATION_CHANNEL_ID } from './pushChannel';
+
 /**
  * Must match `expo.extra.eas.projectId` in app.json (fallback when Constants manifest is empty in some builds).
  */
@@ -114,6 +116,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
 
 /**
  * Upserts the push token for `auth.uid()` into `public.push_tokens`.
+ * One row per user (unique `user_id`): a new device token replaces the previous token.
  * Retries when the session is not ready yet (common right after Google login).
  */
 export async function saveTokenToSupabase(token: string): Promise<boolean> {
@@ -142,7 +145,7 @@ export async function saveTokenToSupabase(token: string): Promise<boolean> {
         device_name: deviceName,
         updated_at: new Date().toISOString(),
       },
-      { onConflict: 'user_id,token' }
+      { onConflict: 'user_id' }
     );
 
     if (!error) {

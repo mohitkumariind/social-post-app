@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import Expo, { type ExpoPushMessage } from 'expo-server-sdk';
+import { ANDROID_NOTIFICATION_CHANNEL_ID } from '../../lib/pushChannel';
 
 const HISTORY_INSERT_CHUNK = 500;
 
@@ -212,6 +213,8 @@ export async function runBroadcast(
       title,
       body,
       sound: 'default',
+      priority: 'high',
+      channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
       data: dataPayload,
     };
     if (imageUrl) {

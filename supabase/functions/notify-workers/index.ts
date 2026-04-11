@@ -4,6 +4,9 @@ const EXPO_PUSH_SEND_URL = 'https://exp.host/--/api/v2/push/send';
 const EXPO_PUSH_CHUNK_SIZE = 100;
 const HISTORY_INSERT_CHUNK = 500;
 
+/** Must match `ANDROID_NOTIFICATION_CHANNEL_ID` in repo `lib/pushChannel.ts`. */
+const ANDROID_NOTIFICATION_CHANNEL_ID = 'default';
+
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -245,6 +248,8 @@ Deno.serve(async (req) => {
       title,
       body,
       sound: 'default',
+      priority: 'high',
+      channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
       data: dataPayload,
     };
 

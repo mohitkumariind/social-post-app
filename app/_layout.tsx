@@ -10,6 +10,7 @@ import { LanguageProvider } from '../context/LanguageContext';
 import { UserProvider, useUser } from '../context/UserContext';
 import { cleanupDailyContentCache } from '../lib/mediaCache';
 import {
+  ANDROID_NOTIFICATION_CHANNEL_ID,
   recordBroadcastOpenFromNotificationResponse,
   registerForPushNotificationsAsync,
   saveTokenToSupabase,
@@ -234,7 +235,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
-    void Notifications.setNotificationChannelAsync('default', {
+    void Notifications.setNotificationChannelAsync(ANDROID_NOTIFICATION_CHANNEL_ID, {
       name: 'Default',
       importance: Notifications.AndroidImportance.MAX,
       vibrationPattern: [0, 250, 250, 250],

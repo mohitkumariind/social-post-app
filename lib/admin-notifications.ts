@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { ANDROID_NOTIFICATION_CHANNEL_ID } from './pushChannel';
 import { supabaseUrl } from './supabase';
 
 const EXPO_PUSH_SEND_URL = 'https://exp.host/--/api/v2/push/send';
@@ -60,6 +61,8 @@ export async function sendGlobalNotification(
     title,
     body,
     sound: 'default' as const,
+    priority: 'high' as const,
+    channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
     ...(data !== undefined ? { data } : {}),
   };
 
