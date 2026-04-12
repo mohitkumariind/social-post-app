@@ -5,9 +5,11 @@ import { NextResponse, type NextRequest } from 'next/server';
 export type CookieToSet = { name: string; value: string; options?: CookieOptions };
 
 /**
- * Supabase SSR client for middleware. Mutates `response` when auth refreshes cookies.
+ * Supabase SSR client for Next.js `proxy.ts` (formerly `middleware.ts`).
+ * Uses `createServerClient` from `@supabase/ssr` (not a separate `createMiddlewareClient` API).
+ * Mutates the wrapped `response` when auth refreshes cookies.
  */
-export function createSupabaseMiddlewareClient(request: NextRequest) {
+export function createSupabaseProxyClient(request: NextRequest) {
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -66,7 +68,7 @@ export async function fetchProfileRole(
 
   if (error || data == null) {
     if (process.env.NODE_ENV === 'development' && error?.code !== 'PGRST116') {
-      console.warn('[middleware] profiles.role fetch (anon):', error?.message ?? 'no row');
+      console.warn('[proxy] profiles.role fetch (anon):', error?.message ?? 'no row');
     }
     return null;
   }
@@ -84,6 +86,7 @@ export type ProfileRoleResult = {
 /**
  * Prefer service role so RLS cannot hide `profiles.role`. Falls back to anon client if key missing.
  * `userId` must be `auth.users.id` (same as `profiles.id`).
+ * Used from root `proxy.ts` (admin gate) and anywhere else that needs the same role resolution.
  */
 export async function fetchProfileRoleForMiddleware(
   userId: string,

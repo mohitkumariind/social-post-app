@@ -459,6 +459,7 @@ export default function App() {
       state: stateArr.length ? stateArr : undefined,
       loksabha: loksabhaArr.length ? loksabhaArr : undefined,
       assembly: assemblyArr.length ? assemblyArr : undefined,
+      assetsCount: 0,
       posts: [],
       captions: normalizeCaptionsFromDb(data.captions),
     };

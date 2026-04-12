@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 
 const PAGE_TITLES: Record<string, string> = {
   '/admin': 'Dashboard',
+  '/admin/events': 'Events',
   '/admin/parties': 'Parties',
   '/admin/geography': 'Geography',
   '/admin/users': 'Users',
@@ -14,6 +15,7 @@ const PAGE_TITLES: Record<string, string> = {
 
 function getTitle(pathname: string): string {
   if (PAGE_TITLES[pathname]) return PAGE_TITLES[pathname];
+  if (pathname.startsWith('/admin/events')) return 'Events';
   if (pathname.startsWith('/admin/notifications')) return 'Notification Broadcast Center';
   return 'Admin';
 }

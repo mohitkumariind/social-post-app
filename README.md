@@ -2,9 +2,13 @@
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
-## Environment variables (mobile app)
+## Environment variables (Supabase)
 
-The Expo app needs **`EXPO_PUBLIC_SUPABASE_URL`** and **`EXPO_PUBLIC_SUPABASE_ANON_KEY`** (copy from `.env.example` into `.env` or set them in EAS for production builds).
+- **Expo app (repo root):** create `.env` with **`EXPO_PUBLIC_SUPABASE_URL`** and **`EXPO_PUBLIC_SUPABASE_ANON_KEY`** (see `.env.example`). For EAS builds, set the same names as [EAS secrets](https://docs.expo.dev/build-reference/variables/).
+- **Admin (`socialbot/`):** create `socialbot/.env.local` with **`NEXT_PUBLIC_SUPABASE_URL`**, **`NEXT_PUBLIC_SUPABASE_ANON_KEY`**, and **`SUPABASE_SERVICE_ROLE_KEY`** (see `socialbot/.env.example`). The URL and anon key must match the Expo app.
+- **Edge Function `notify-workers`:** Supabase injects **`SUPABASE_URL`** and **`SUPABASE_SERVICE_ROLE_KEY`** when deployed; no hardcoding in code.
+
+Never commit `.env` / `.env.local` or paste **service_role** keys into client code.
 
 ## Get started
 

@@ -2,6 +2,7 @@
 
 import {
   LayoutDashboard,
+  Calendar,
   Building2,
   MapPin,
   Users,
@@ -12,6 +13,7 @@ import { usePathname } from 'next/navigation';
 
 const navItems = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/admin/events', label: 'Events', icon: Calendar },
   { href: '/admin/parties', label: 'Parties', icon: Building2 },
   { href: '/admin/geography', label: 'Geography', icon: MapPin },
   { href: '/admin/users', label: 'Users', icon: Users },
