@@ -12,6 +12,7 @@ import {
   Info,
   Mail,
   MapPin,
+  MessageCircle,
   Phone,
   Plus,
   Search,
@@ -34,6 +35,7 @@ interface UserFrame {
 
 interface AppUser {
   id: string | number;
+  avatar_url: string;
   name: string;
   phone: string;
   email: string;
@@ -42,6 +44,9 @@ interface AppUser {
   state: string;
   district: string;
   constituency: string;
+  loksabha: string;
+  loksabha_id: number | null;
+  assembly_id: number | null;
   joinDate: string;
   dob: string;
   gender: string;
@@ -56,9 +61,12 @@ export default function UserManagement() {
 
   const [users, setUsers] = useState<AppUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
+  const [framesSearchQuery, setFramesSearchQuery] = useState('');
+  const [framesSearchDebounced, setFramesSearchDebounced] = useState('');
 
   const mapProfileToAppUser = (row: Record<string, unknown>): AppUser => ({
     id: typeof row.id === 'string' || typeof row.id === 'number' ? row.id : String(row.id ?? row.user_id ?? ''),
+    avatar_url: String(row.avatar_url ?? ''),
     name: String(row.name ?? ''),
     phone: String(row.phone ?? row.phone_number ?? ''),
     email: String(row.email ?? ''),
@@ -67,6 +75,19 @@ export default function UserManagement() {
     state: String(row.state ?? ''),
     district: String(row.district ?? ''),
     constituency: String(row.constituency ?? row.assembly ?? ''),
+    loksabha: String(row.loksabha ?? ''),
+    loksabha_id:
+      typeof row.loksabha_id === 'number'
+        ? row.loksabha_id
+        : row.loksabha_id != null && String(row.loksabha_id).trim()
+          ? Number(row.loksabha_id)
+          : null,
+    assembly_id:
+      typeof row.assembly_id === 'number'
+        ? row.assembly_id
+        : row.assembly_id != null && String(row.assembly_id).trim()
+          ? Number(row.assembly_id)
+          : null,
     joinDate: (row.join_date ?? row.created_at) ? new Date(String(row.join_date ?? row.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
     dob: row.dob ? new Date(String(row.dob)).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '',
     gender: String(row.gender ?? ''),
@@ -74,10 +95,47 @@ export default function UserManagement() {
     personalFrames: [],
   });
 
-  useEffect(() => {
-    const fetchProfiles = async () => {
-      try {
-        const res = await fetch('/api/admin/profiles', { credentials: 'same-origin' });
+  const fmt = (v: unknown): string => {
+    const s = String(v ?? '').trim();
+    return s ? s : 'N/A';
+  };
+
+  const waDigits = (v: unknown): string => String(v ?? '').replace(/[^\d]/g, '');
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterParty, setFilterParty] = useState('All');
+  const [filterState, setFilterState] = useState('All');
+  const [filterLoksabhaId, setFilterLoksabhaId] = useState('All');
+  const [filterAssemblyId, setFilterAssemblyId] = useState('All');
+  const [filterNewUsers, setFilterNewUsers] = useState('All');
+
+  const buildProfilesUrl = (params: {
+    party?: string;
+    state?: string;
+    loksabha_id?: string;
+    assembly_id?: string;
+    search_query?: string;
+  }) => {
+    const usp = new URLSearchParams();
+    if (params.party && params.party !== 'All') usp.set('party', params.party);
+    if (params.state && params.state !== 'All') usp.set('state', params.state);
+    if (params.loksabha_id && params.loksabha_id !== 'All') usp.set('loksabha_id', params.loksabha_id);
+    if (params.assembly_id && params.assembly_id !== 'All') usp.set('assembly_id', params.assembly_id);
+    if (params.search_query && params.search_query.trim()) usp.set('search_query', params.search_query.trim());
+    const qs = usp.toString();
+    return `/api/admin/profiles${qs ? `?${qs}` : ''}`;
+  };
+
+  const fetchProfiles = async (signal?: AbortSignal) => {
+    try {
+      const url = buildProfilesUrl({
+        party: filterParty,
+        state: filterState,
+        loksabha_id: filterLoksabhaId,
+        assembly_id: filterAssemblyId,
+        search_query: searchQuery,
+      });
+      const res = await fetch(url, { credentials: 'same-origin', signal });
         if (!res.ok) {
           if (process.env.NODE_ENV === 'development') {
             console.error('[users] /api/admin/profiles', res.status, await res.text());
@@ -89,72 +147,129 @@ export default function UserManagement() {
         const rows = json.profiles || [];
         const mapped = rows.map((row) => mapProfileToAppUser(row));
         setUsers(mapped);
-      } catch (err) {
-        console.error('fetchProfiles exception:', err);
-        setUsers([]);
-      } finally {
-        setUsersLoading(false);
-      }
-    };
-    fetchProfiles();
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+      console.error('fetchProfiles exception:', err);
+      setUsers([]);
+    } finally {
+      setUsersLoading(false);
+    }
+  };
 
+  // Initial + filter-driven refetch (debounced for search).
+  useEffect(() => {
+    const ac = new AbortController();
+    setUsersLoading(true);
+    const t = window.setTimeout(() => {
+      void fetchProfiles(ac.signal);
+    }, 250);
+    return () => {
+      ac.abort();
+      window.clearTimeout(t);
+    };
+  }, [filterParty, filterState, filterLoksabhaId, filterAssemblyId, searchQuery]);
+
+  // Realtime: refetch with current filters.
+  useEffect(() => {
     const channel = supabase
       .channel('profiles-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
-        fetchProfiles();
+        void fetchProfiles();
       })
       .subscribe();
-
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
-
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterParty, setFilterParty] = useState('All');
-  const [filterState, setFilterState] = useState('All');
-  const [filterDistrict, setFilterDistrict] = useState('All');
-  const [filterConstituency, setFilterConstituency] = useState('All');
-  const [filterNewUsers, setFilterNewUsers] = useState('All');
+  }, [filterParty, filterState, filterLoksabhaId, filterAssemblyId, searchQuery]);
 
   const [selectedUser, setSelectedUser] = useState<AppUser | null>(null);
   const [isDeleting, setIsDeleting] = useState<AppUser | null>(null);
 
-  // --- DYNAMIC FILTER OPTIONS ---
-  const states = Array.from(new Set(users.map(u => u.state)));
-  const districts = Array.from(new Set(users.filter(u => filterState === 'All' || u.state === filterState).map(u => u.district)));
-  const constituencies = Array.from(new Set(users.filter(u => filterDistrict === 'All' || u.district === filterDistrict).map(u => u.constituency)));
+  // --- FILTER OPTIONS (derived from current dataset) ---
+  const states = Array.from(new Set(users.map((u) => u.state).filter(Boolean)));
+  const loksabhaOptions = Array.from(
+    new Map(
+      users
+        .filter((u) => u.loksabha_id != null && !Number.isNaN(u.loksabha_id))
+        .map((u) => [String(u.loksabha_id), u.loksabha || `Lok Sabha #${u.loksabha_id}`])
+    ).entries()
+  ).map(([id, label]) => ({ id, label }));
+  const assemblyOptions = Array.from(
+    new Map(
+      users
+        .filter((u) => u.assembly_id != null && !Number.isNaN(u.assembly_id))
+        .map((u) => [String(u.assembly_id), u.constituency?.trim() ? u.constituency : `Assembly #${u.assembly_id}`])
+    ).entries()
+  ).map(([id, label]) => ({ id, label }));
 
   // --- FILTER LOGIC ---
-  const filteredUsers = users
-    .filter(u => {
-      const matchesSearch = u.name.toLowerCase().includes(searchQuery.toLowerCase()) || u.phone.includes(searchQuery);
-      const matchesParty = filterParty === 'All' || u.party === filterParty;
-      const matchesState = filterState === 'All' || u.state === filterState;
-      const matchesDistrict = filterDistrict === 'All' || u.district === filterDistrict;
-      const matchesConstituency = filterConstituency === 'All' || u.constituency === filterConstituency;
-      const todayStr = new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
-      const matchesNewUsers = filterNewUsers === 'All' || u.joinDate === todayStr;
-      return matchesSearch && matchesParty && matchesState && matchesDistrict && matchesConstituency && matchesNewUsers;
-    });
+  // Most filters now run on the API query. Keep only "New users" locally (date label logic).
+  const filteredUsers = users.filter((u) => {
+    const todayStr = new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+    const matchesNewUsers = filterNewUsers === 'All' || u.joinDate === todayStr;
+    return matchesNewUsers;
+  });
 
   const totalPages = Math.ceil(filteredUsers.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const paginatedUsers = filteredUsers.slice(startIndex, startIndex + ITEMS_PER_PAGE);
 
-  useEffect(() => { setCurrentPage(1); }, [searchQuery, filterParty, filterState, filterDistrict, filterConstituency, filterNewUsers]);
+  useEffect(() => { setCurrentPage(1); }, [searchQuery, filterParty, filterState, filterLoksabhaId, filterAssemblyId, filterNewUsers]);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setFramesSearchDebounced(framesSearchQuery.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [framesSearchQuery]);
 
   const openUserProfile = async (user: AppUser) => {
     setSelectedUser(user);
-    const { data } = await supabase.from('user_frames').select('id, url, created_at').eq('user_id', user.id).order('created_at', { ascending: false });
-    const frames: UserFrame[] = (data || []).map((row: { id: string; url: string; created_at: string }) => ({
-      id: row.id,
-      url: row.url,
-      uploadDate: row.created_at ? new Date(row.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
-    }));
-    setSelectedUser((prev) => (prev ? { ...prev, personalFrames: frames } : null));
-    setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, personalFrames: frames } : u)));
+    setFramesSearchQuery('');
+    setFramesSearchDebounced('');
+    try {
+      const id = encodeURIComponent(String(user.id));
+      const res = await fetch(`/api/admin/user-frames?user_id=${id}`, { credentials: 'same-origin' });
+      const json = (await res.json().catch(() => ({}))) as { frames?: Array<{ id: string | number; url: string; created_at: string | null }> };
+      const frames: UserFrame[] = (json.frames || []).map((row) => ({
+        id: row.id,
+        url: row.url,
+        uploadDate: row.created_at ? new Date(String(row.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
+      }));
+      setSelectedUser((prev) => (prev ? { ...prev, personalFrames: frames } : null));
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, personalFrames: frames } : u)));
+    } catch (e) {
+      console.error('[users] fetch user-frames failed', e);
+    }
   };
+
+  useEffect(() => {
+    if (!selectedUser) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const id = encodeURIComponent(String(selectedUser.id));
+        const q = encodeURIComponent(framesSearchDebounced);
+        const url = framesSearchDebounced
+          ? `/api/admin/user-frames?user_id=${id}&search_query=${q}`
+          : `/api/admin/user-frames?user_id=${id}`;
+        const res = await fetch(url, { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const json = (await res.json().catch(() => ({}))) as { frames?: Array<{ id: string | number; url: string; created_at: string | null }> };
+        if (cancelled) return;
+        const frames: UserFrame[] = (json.frames || []).map((row) => ({
+          id: row.id,
+          url: row.url,
+          uploadDate: row.created_at ? new Date(String(row.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
+        }));
+        setSelectedUser((prev) => (prev ? { ...prev, personalFrames: frames } : null));
+        setUsers((prev) => prev.map((u) => (u.id === selectedUser.id ? { ...u, personalFrames: frames } : u)));
+      } catch (e) {
+        if (process.env.NODE_ENV === 'development') console.warn('[users] frames search fetch failed');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedUser?.id, framesSearchDebounced]);
 
   const handleBulkUploadFrames = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -287,6 +402,29 @@ export default function UserManagement() {
                         <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><History size={14} className="text-blue-500" /> User Frames</h3>
                         <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{selectedUser.personalFrames.length} Frames</p>
                     </div>
+
+                    <div className="px-2">
+                      <div className="flex items-center gap-3 bg-white border border-slate-200 rounded-2xl px-4 py-3 shadow-sm">
+                        <Search size={16} className="text-slate-400" />
+                        <input
+                          value={framesSearchQuery}
+                          onChange={(e) => setFramesSearchQuery(e.target.value)}
+                          placeholder="Search Frames..."
+                          className="w-full bg-transparent outline-none font-bold text-slate-800 text-sm placeholder:text-slate-300"
+                        />
+                        {framesSearchQuery ? (
+                          <button
+                            type="button"
+                            onClick={() => setFramesSearchQuery('')}
+                            className="text-slate-400 hover:text-slate-700"
+                            aria-label="Clear frames search"
+                          >
+                            <X size={16} />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-6 pb-4">
                         {/* UPLOAD FRAME BOX */}
                         <div onClick={() => fileInputRef.current?.click()} className="aspect-[4/5] bg-white border-4 border-dashed border-slate-200 rounded-[40px] flex flex-col items-center justify-center cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition-all active:scale-95 group shadow-sm">
@@ -360,7 +498,7 @@ export default function UserManagement() {
             <Globe size={18} className="text-purple-600" />
             <div className="flex-1 text-xs">
               <span className="text-[9px] font-black text-slate-400 uppercase block">State Jurisdiction</span>
-              <select value={filterState} onChange={e => {setFilterState(e.target.value); setFilterDistrict('All');}} className="w-full bg-transparent outline-none font-bold text-slate-800">
+              <select value={filterState} onChange={e => setFilterState(e.target.value)} className="w-full bg-transparent outline-none font-bold text-slate-800">
                 <option value="All">All States</option>
                 {states.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
@@ -369,20 +507,24 @@ export default function UserManagement() {
           <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 flex items-center gap-3">
             <MapPin size={18} className="text-orange-500" />
             <div className="flex-1 text-xs">
-              <span className="text-[9px] font-black text-slate-400 uppercase block">District / Unit</span>
-              <select value={filterDistrict} onChange={e => {setFilterDistrict(e.target.value); setFilterConstituency('All');}} className="w-full bg-transparent outline-none font-bold text-slate-800">
-                <option value="All">All Districts</option>
-                {districts.map(d => <option key={d} value={d}>{d}</option>)}
+              <span className="text-[9px] font-black text-slate-400 uppercase block">Lok Sabha</span>
+              <select value={filterLoksabhaId} onChange={e => setFilterLoksabhaId(e.target.value)} className="w-full bg-transparent outline-none font-bold text-slate-800">
+                <option value="All">All Lok Sabha</option>
+                {loksabhaOptions.map((l) => (
+                  <option key={l.id} value={l.id}>{l.label}</option>
+                ))}
               </select>
             </div>
           </div>
           <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 flex items-center gap-3">
             <Filter size={18} className="text-slate-600" />
             <div className="flex-1 text-xs">
-              <span className="text-[9px] font-black text-slate-400 uppercase block">Assembly Seat</span>
-              <select value={filterConstituency} onChange={e => setFilterConstituency(e.target.value)} className="w-full bg-transparent outline-none font-bold text-slate-800">
-                <option value="All">All Constituencies</option>
-                {constituencies.map(c => <option key={c} value={c}>{c}</option>)}
+              <span className="text-[9px] font-black text-slate-400 uppercase block">Assembly</span>
+              <select value={filterAssemblyId} onChange={e => setFilterAssemblyId(e.target.value)} className="w-full bg-transparent outline-none font-bold text-slate-800">
+                <option value="All">All Assembly</option>
+                {assemblyOptions.map((a) => (
+                  <option key={a.id} value={a.id}>{a.label}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -395,22 +537,72 @@ export default function UserManagement() {
       ) : (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
         {paginatedUsers.map((user) => (
-          <div key={user.id} className="bg-white p-7 rounded-[45px] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group flex flex-col relative overflow-hidden border-b-4 border-b-transparent hover:border-b-blue-600">
+          <div
+            key={user.id}
+            className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm hover:shadow-md transition-all duration-300 group flex flex-col relative overflow-hidden"
+          >
             <div className="absolute top-6 right-6">
               <button onClick={() => setIsDeleting(user)} className="p-2 text-slate-200 hover:text-red-500 transition-all"><Trash2 size={18} /></button>
             </div>
-            <div className="flex items-center gap-4 mb-6">
-              <div className="w-14 h-14 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-400 group-hover:bg-blue-600 group-hover:text-white transition-all shadow-inner"><User size={24} /></div>
-              <div>
-                <h4 className="font-black text-slate-900 text-base leading-tight tracking-tight">{user.name}</h4>
-                <p className="text-[9px] font-black text-blue-600 uppercase tracking-widest mt-1">{getPartyLabel(user.party)}</p>
+
+            <div className="flex flex-col items-center text-center pt-3">
+              {String(user.avatar_url ?? '').trim() ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={String(user.avatar_url).trim()}
+                  alt={fmt(user.name)}
+                  className="h-16 w-16 rounded-full object-cover border border-slate-200 shadow-sm"
+                />
+              ) : (
+                <div className="h-16 w-16 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 border border-slate-200">
+                  <User size={26} />
+                </div>
+              )}
+
+              <h4 className="mt-3 text-sm font-semibold text-slate-900 leading-tight">{fmt(user.name)}</h4>
+              <p className="mt-1 text-[9px] font-black text-slate-500 uppercase tracking-widest">
+                {fmt(getPartyLabel(user.party))}
+              </p>
+            </div>
+
+            <div className="mt-5 space-y-2 text-xs font-semibold text-slate-700">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Mobile</span>
+                <span className="flex items-center gap-2">
+                  <span className="font-bold text-slate-800">{fmt(user.phone)}</span>
+                  {waDigits(user.phone) ? (
+                    <a
+                      href={`https://wa.me/${waDigits(user.phone)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center justify-center text-emerald-600 hover:text-emerald-700"
+                      aria-label="WhatsApp"
+                      title="WhatsApp"
+                    >
+                      <MessageCircle size={16} />
+                    </a>
+                  ) : (
+                    <span className="inline-flex items-center justify-center text-slate-300" aria-label="WhatsApp unavailable" title="WhatsApp unavailable">
+                      <MessageCircle size={16} />
+                    </span>
+                  )}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">State</span>
+                <span className="font-bold text-slate-800">{fmt(user.state)}</span>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Lok Sabha</span>
+                <span className="font-bold text-slate-800">{fmt(user.loksabha)}</span>
               </div>
             </div>
-            <div className="space-y-2 mb-6 text-xs font-bold text-slate-500">
-              <div className="flex items-center gap-3"><Phone size={14} className="text-slate-300" /> {user.phone}</div>
-              <div className="flex items-center gap-3"><MapPin size={14} className="text-slate-300" /> {user.district}</div>
-            </div>
-            <button onClick={() => openUserProfile(user)} className="mt-auto w-full py-4 bg-slate-50 rounded-2xl text-[9px] font-black uppercase tracking-widest text-blue-600 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center gap-2 active:scale-95 shadow-inner">Profile & Frames <ExternalLink size={14} /></button>
+
+            <button onClick={() => openUserProfile(user)} className="mt-6 w-full py-3 bg-slate-50 rounded-2xl text-[9px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-100 transition-all flex items-center justify-center gap-2 active:scale-95">
+              Profile & Frames <ExternalLink size={14} />
+            </button>
           </div>
         ))}
       </div>

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) {
@@ -12,12 +12,56 @@ export async function GET() {
   const admin = createServiceRoleClient();
   const db = admin ?? supabase;
 
-  // Avoid .order('created_at'): many projects only have join_date / no created_at on profiles
-  // (PostgREST errors → 500 → empty User Management). Prefer id (always present on profiles).
-  const { data, error } = await db.from('profiles').select('*').order('id', { ascending: false });
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  const sp = request.nextUrl.searchParams;
+  const party = (sp.get('party') ?? '').trim();
+  const state = (sp.get('state') ?? '').trim();
+  const loksabhaIdRaw = (sp.get('loksabha_id') ?? '').trim();
+  const assemblyIdRaw = (sp.get('assembly_id') ?? '').trim();
+  const searchQueryRaw = (sp.get('search_query') ?? '').trim();
+
+  const loksabha_id = loksabhaIdRaw ? Number(loksabhaIdRaw) : null;
+  const assembly_id = assemblyIdRaw ? Number(assemblyIdRaw) : null;
+
+  const buildQuery = (orderBy: 'created_at' | 'id') => {
+    let q = db.from('profiles').select('*');
+
+    if (party) q = q.eq('party', party);
+    if (state) q = q.eq('state', state);
+    if (loksabha_id != null && !Number.isNaN(loksabha_id)) q = q.eq('loksabha_id', loksabha_id);
+    if (assembly_id != null && !Number.isNaN(assembly_id)) q = q.eq('assembly_id', assembly_id);
+
+    if (searchQueryRaw) {
+      const s = searchQueryRaw.replace(/[%]/g, '\\%');
+      q = q.or(`name.ilike.%${s}%,phone.ilike.%${s}%,phone_number.ilike.%${s}%`);
+    }
+
+    return q.order(orderBy, { ascending: false });
+  };
+
+  // Prefer created_at desc. If schema lacks created_at, fall back to id desc.
+  let data: unknown[] | null = null;
+  let error: { message?: string } | null = null;
+
+  {
+    const res = await buildQuery('created_at');
+    data = (res as any).data ?? null;
+    error = (res as any).error ?? null;
   }
+
+  if (error) {
+    const msg = String(error.message ?? '');
+    const looksLikeMissingCreatedAt =
+      msg.toLowerCase().includes('created_at') ||
+      msg.toLowerCase().includes('column') ||
+      msg.toLowerCase().includes('does not exist');
+    if (looksLikeMissingCreatedAt) {
+      const res2 = await buildQuery('id');
+      data = (res2 as any).data ?? null;
+      error = (res2 as any).error ?? null;
+    }
+  }
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   return NextResponse.json(
     { profiles: data ?? [], usedServiceRole: !!admin },

@@ -382,8 +382,8 @@ export default function NotificationBroadcastCenterPage() {
             <Bell className="h-3.5 w-3.5" style={{ color: ACCENT }} />
             Admin
           </div>
-          <h1 className="text-3xl font-black tracking-tight text-slate-900">Notification Broadcast Center</h1>
-          <p className="mt-2 max-w-xl text-sm font-medium text-slate-500">
+          <h1 className="text-3xl font-black tracking-tight text-white">Notification Broadcast Center</h1>
+          <p className="mt-2 max-w-xl text-sm font-medium text-zinc-400">
             Target workers, compose your message, and send push notifications with full delivery analytics.
           </p>
         </div>

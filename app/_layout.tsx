@@ -23,6 +23,17 @@ void SplashScreen.preventAutoHideAsync().catch(() => {
   // ignore: may already be prevented in dev / fast refresh
 });
 
+/** True when refresh failed because the stored refresh token is invalid (not network blips). */
+function isRefreshTokenFatalError(err: { message?: string; status?: number } | null): boolean {
+  if (!err?.message) return false;
+  const m = err.message.toLowerCase();
+  return (
+    m.includes('invalid refresh token') ||
+    m.includes('refresh token not found') ||
+    m.includes('already used')
+  );
+}
+
 /** Supabase session ↔ `isLoggedIn` (AsyncStorage) on cold start + auth events */
 function SessionSync({ children }: { children: React.ReactNode }) {
   const { setIsLoggedIn } = useUser();
@@ -43,20 +54,25 @@ function SessionSync({ children }: { children: React.ReactNode }) {
     };
 
     (async () => {
-      const { error: refreshError } = await supabase.auth.refreshSession();
-      if (refreshError) {
-        if (__DEV__) console.warn('[SessionSync] refreshSession failed:', refreshError.message);
-        await forceLogoutToLogin();
-        return;
-      }
-
+      // Restore session from AsyncStorage first. Do NOT refresh-before-getSession: a failed
+      // refresh (offline / slow network) would previously call signOut and wipe a valid session.
       const { data, error } = await supabase.auth.getSession();
+      if (cancelled) return;
       if (error) {
         if (__DEV__) console.warn('[SessionSync] getSession failed:', error.message);
-        await forceLogoutToLogin();
+        setIsLoggedIn(false);
         return;
       }
-      if (!cancelled) setIsLoggedIn(!!data.session?.user);
+      if (data.session?.user) {
+        setIsLoggedIn(true);
+        void supabase.auth.refreshSession().then(({ error: refErr }) => {
+          if (cancelled || !refErr) return;
+          if (__DEV__) console.warn('[SessionSync] background refreshSession:', refErr.message);
+          if (isRefreshTokenFatalError(refErr)) void forceLogoutToLogin();
+        });
+        return;
+      }
+      setIsLoggedIn(false);
     })();
 
     const {

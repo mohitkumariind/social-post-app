@@ -232,7 +232,11 @@ export default function PostDetailScreen() {
           return;
         }
 
-        const { data, error } = await supabase.from('user_frames').select('*').eq('user_id', uid);
+        const { data, error } = await supabase
+          .from('user_frames')
+          .select('*')
+          .eq('user_id', uid)
+          .order('created_at', { ascending: false });
         if (cancelled) return;
         if (error) {
           if (!cancelled && __DEV__) console.warn('[PostDetail] fetchFrames error:', error.message);

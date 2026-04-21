@@ -5,8 +5,23 @@ import React, { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const SESSION_RESOLVE_TIMEOUT_MS = 3000;
 const MIN_SPLASH_MS = 1500;
+const GET_SESSION_RETRIES = 5;
+const GET_SESSION_RETRY_DELAY_MS = 120;
+
+async function getSessionWithHydrationRetries(): Promise<
+  Awaited<ReturnType<typeof supabase.auth.getSession>>
+> {
+  let last: Awaited<ReturnType<typeof supabase.auth.getSession>> | null = null;
+  for (let i = 0; i < GET_SESSION_RETRIES; i++) {
+    last = await supabase.auth.getSession();
+    if (last.data?.session?.user || last.error) return last;
+    if (i < GET_SESSION_RETRIES - 1) {
+      await new Promise<void>((r) => setTimeout(r, GET_SESSION_RETRY_DELAY_MS));
+    }
+  }
+  return last ?? { data: { session: null }, error: null };
+}
 
 /**
  * Entry: Supabase session check → logged in → dashboard; else → login (Google Sign-In + Supabase).
@@ -21,15 +36,9 @@ export default function Index() {
     (async () => {
       const start = Date.now();
 
-      const sessionResult = await Promise.race([
-        supabase.auth.getSession(),
-        new Promise<Awaited<ReturnType<typeof supabase.auth.getSession>>>((resolve) =>
-          setTimeout(
-            () => resolve({ data: { session: null }, error: null }),
-            SESSION_RESOLVE_TIMEOUT_MS
-          )
-        ),
-      ]);
+      // Do not race getSession with a timeout that treats "slow" as "logged out" — AsyncStorage
+      // hydration can exceed a few seconds on cold start.
+      const sessionResult = await getSessionWithHydrationRetries();
 
       const elapsed = Date.now() - start;
       if (elapsed < MIN_SPLASH_MS) {

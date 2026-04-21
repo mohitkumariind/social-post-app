@@ -1,17 +1,11 @@
 "use client";
-import { BarChart3, Calendar, ChevronRight, Layout, Users } from 'lucide-react';
+import { BarChart3, Calendar, ChevronRight, Users } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
 
 interface PostRow {
   id: string;
   title: string;
   date: string;
-}
-
-interface GeoReport {
-  label: string;
-  value: string;
-  sub: string;
 }
 
 interface UpcomingEvent {
@@ -27,7 +21,6 @@ export default function Dashboard() {
   const [postsCount, setPostsCount] = useState<number | null>(null);
   const [eventsCount, setEventsCount] = useState<number | null>(null);
   const [recentPosts, setRecentPosts] = useState<PostRow[]>([]);
-  const [geoReport, setGeoReport] = useState<GeoReport[]>([]);
   const [upcomingEvents, setUpcomingEvents] = useState<UpcomingEvent[]>([]);
 
   const fmtDateShort = (iso: string | null | undefined) => {
@@ -55,7 +48,6 @@ export default function Dashboard() {
         eventsCount: number | null;
         recentPosts: Array<{ id: string; title: string | null; created_at?: string | null }>;
         upcomingEvents: Array<{ id: string; name: string; end?: string | null }>;
-        geoReport: GeoReport[];
       };
 
       if (cancelled) return;
@@ -81,8 +73,6 @@ export default function Dashboard() {
           color: idx % 3 === 0 ? 'border-orange-500' : idx % 3 === 1 ? 'border-red-500' : 'border-blue-500',
         }))
       );
-
-      setGeoReport(payload.geoReport || []);
     })();
 
     return () => {
@@ -101,12 +91,12 @@ export default function Dashboard() {
   );
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in duration-500 pb-20 text-slate-700">
+    <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in duration-500 pb-20 text-slate-200">
 
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-black text-slate-900 tracking-tight">SocialBot Dashboard</h1>
-          <p className="text-sm font-bold text-slate-400 uppercase tracking-widest mt-3 leading-none">Live Performance Metrics</p>
+          <h1 className="text-3xl font-black text-white tracking-tight">SocialBot Dashboard</h1>
+          <p className="text-sm font-bold text-zinc-400 uppercase tracking-widest mt-3 leading-none">Live Performance Metrics</p>
         </div>
         <div className="hidden md:flex bg-white px-6 py-3 rounded-2xl border border-slate-100 shadow-sm items-center gap-3">
           <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
@@ -150,24 +140,6 @@ export default function Dashboard() {
               ))}
             </tbody>
           </table>
-        </div>
-
-        <div className="bg-slate-900 rounded-[40px] p-8 text-white shadow-2xl flex flex-col">
-          <div className="flex items-center gap-3 mb-8">
-            <Layout className="text-blue-400" size={20} />
-            <h3 className="font-black text-lg uppercase tracking-tight leading-none">Geography Report</h3>
-          </div>
-          <div className="space-y-4 flex-1">
-            {geoReport.map((item) => (
-              <div key={item.label} className="bg-white/5 p-5 rounded-[25px] border border-white/5 transition-all hover:bg-white/10">
-                <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] mb-1">{item.label}</p>
-                <div className="flex justify-between items-center">
-                  <span className="font-bold text-slate-200">{item.value}</span>
-                  <span className="bg-blue-500/10 text-blue-400 px-3 py-1 rounded-lg text-[10px] font-black">{item.sub}</span>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       </div>
 
