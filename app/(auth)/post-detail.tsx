@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
@@ -37,6 +38,30 @@ function routeParamStr(v: unknown): string {
   if (typeof v === 'string') return v.trim();
   if (Array.isArray(v)) return String(v[0] ?? '').trim();
   return String(v).trim();
+}
+
+function slugifyFilenamePart(input: string): string {
+  const base = String(input ?? '').trim();
+  if (!base) return 'event';
+  // Keep it filesystem/share-sheet friendly across Android/iOS.
+  const cleaned = base
+    .replace(/[^\p{L}\p{N}]+/gu, '-') // non letters/digits -> dash
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80);
+  return cleaned || 'event';
+}
+
+function buildSnapshotFilename(params: Record<string, unknown>): string {
+  const category = routeParamStr(params?.category);
+  const eventPart = slugifyFilenamePart(category || 'event');
+  const d = new Date();
+  const yyyy = String(d.getFullYear());
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${eventPart}-${yyyy}${mm}${dd}-${hh}${mi}`;
 }
 
 /** Normalize `posts.captions` / `events.captions` (jsonb, text JSON string, or plain string). */
@@ -236,7 +261,7 @@ export default function PostDetailScreen() {
           .from('user_frames')
           .select('*')
           .eq('user_id', uid)
-          .order('created_at', { ascending: false });
+          .order('file_name', { ascending: true });
         if (cancelled) return;
         if (error) {
           if (!cancelled && __DEV__) console.warn('[PostDetail] fetchFrames error:', error.message);
@@ -257,6 +282,26 @@ export default function PostDetailScreen() {
       ? (frames[selectedFrame - 2]?.url || frames[selectedFrame - 2]?.frame_url || null)
       : null;
 
+  const captureSnapshotToNamedFile = async (): Promise<{ uri: string; filename: string } | null> => {
+    const shotRef = viewShotRef.current;
+    if (!shotRef) return null;
+    const filename = buildSnapshotFilename(params as unknown as Record<string, unknown>);
+    const ext = 'jpg';
+    const dir = `${FileSystem.cacheDirectory}snapshots/`;
+    const dest = `${dir}${filename}.${ext}`;
+
+    try {
+      const rawUri: string = await shotRef.capture();
+      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+      // Create a stable, user-friendly filename for share sheets / downloads.
+      await FileSystem.copyAsync({ from: rawUri, to: dest });
+      return { uri: dest, filename: `${filename}.${ext}` };
+    } catch (e) {
+      if (__DEV__) console.warn('[PostDetail] captureSnapshotToNamedFile failed', e);
+      return null;
+    }
+  };
+
   const handleDownload = async () => {
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync();
@@ -264,13 +309,12 @@ export default function PostDetailScreen() {
         Alert.alert(t('permission_required'), t('permission_message'));
         return;
       }
-      const shotRef = viewShotRef.current;
-      if (!shotRef) {
+      const named = await captureSnapshotToNamedFile();
+      if (!named) {
         Alert.alert(t('save_error_title'), t('save_error_message'));
         return;
       }
-      const uri = await shotRef.capture();
-      await MediaLibrary.saveToLibraryAsync(uri);
+      await MediaLibrary.saveToLibraryAsync(named.uri);
       Alert.alert(t('save_success_title'), t('save_success_message'));
     } catch (err) {
       if (__DEV__) console.warn('save poster failed');
@@ -280,11 +324,10 @@ export default function PostDetailScreen() {
 
   const handleShare = async () => {
     try {
-      const shotRef = viewShotRef.current;
-      if (!shotRef) return;
-      const uri = await shotRef.capture();
+      const named = await captureSnapshotToNamedFile();
+      if (!named) return;
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri);
+        await Sharing.shareAsync(named.uri, { dialogTitle: named.filename });
       } else {
         Share.share({ message: t('share_message') });
       }

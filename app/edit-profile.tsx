@@ -1,13 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Modal,
   Platform,
   ScrollView,
@@ -527,7 +527,12 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         <View style={styles.imageSection}>
           <View style={styles.previewBox}>
             {formData.avatar_url ? (
-              <Image source={{ uri: formData.avatar_url }} style={styles.previewImage} />
+              <ExpoImage
+                source={{ uri: formData.avatar_url }}
+                style={styles.previewImage}
+                contentFit="cover"
+                cachePolicy="disk"
+              />
             ) : (
               <Ionicons name="person" size={40} color="#CCC" />
             )}

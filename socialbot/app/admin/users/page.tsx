@@ -228,6 +228,12 @@ export default function UserManagement() {
     try {
       const id = encodeURIComponent(String(user.id));
       const res = await fetch(`/api/admin/user-frames?user_id=${id}`, { credentials: 'same-origin' });
+      if (!res.ok) {
+        if (process.env.NODE_ENV === 'development') {
+          console.warn('[users] /api/admin/user-frames failed', res.status);
+        }
+        return;
+      }
       const json = (await res.json().catch(() => ({}))) as { frames?: Array<{ id: string | number; url: string; created_at: string | null }> };
       const frames: UserFrame[] = (json.frames || []).map((row) => ({
         id: row.id,

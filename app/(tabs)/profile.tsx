@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
   Dimensions,
-  Image,
   Linking,
   Platform,
   ScrollView,
@@ -69,7 +69,12 @@ export default function ProfileScreen() {
           <View style={styles.profileInfo}>
             <View style={styles.avatarWrapper}>
               {currentPhoto ? (
-                <Image source={{ uri: currentPhoto }} style={styles.mainAvatar} />
+                <ExpoImage
+                  source={{ uri: currentPhoto }}
+                  style={styles.mainAvatar}
+                  contentFit="cover"
+                  cachePolicy="disk"
+                />
               ) : (
                 <View style={[styles.mainAvatar, styles.avatarPlaceholderInner]}>
                   <Ionicons name="person" size={48} color={Colors.textMuted} />
