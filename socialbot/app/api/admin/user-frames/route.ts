@@ -26,18 +26,31 @@ export async function GET(request: NextRequest) {
       .eq('user_id', userId)
       .order('created_at', { ascending: false }) as any;
 
+  const baseWithoutFileName = () =>
+    db
+      .from('user_frames')
+      .select('id,url,created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false }) as any;
+
+  const isMissingColumnErr = (err: { message?: string } | null | undefined, columnName: string) => {
+    const msg = String(err?.message ?? '').toLowerCase();
+    return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column'));
+  };
+
   // If file_name column doesn't exist in this project, fall back to URL search.
   if (!searchQuery) {
-    const { data, error } = await base();
+    let { data, error } = await base();
+    if (error && isMissingColumnErr(error, 'file_name')) {
+      ({ data, error } = await baseWithoutFileName());
+    }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ frames: data ?? [], usedServiceRole: !!admin }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
   let res: any = await base().ilike('file_name', `%${searchQuery}%`);
   if (res.error) {
-    const msg = String(res.error.message ?? '').toLowerCase();
-    const missingColumn = msg.includes('file_name') && (msg.includes('does not exist') || msg.includes('column'));
-    if (missingColumn) {
+    if (isMissingColumnErr(res.error, 'file_name')) {
       res = (await db
         .from('user_frames')
         .select('id,url,created_at')
