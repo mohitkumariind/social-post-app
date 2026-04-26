@@ -1,11 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Image as ExpoImage } from 'expo-image';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system';
+import { Image as ExpoImage } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import { downloadMediaToCache } from '../../lib/mediaCache';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -24,6 +23,7 @@ import ViewShot from "react-native-view-shot";
 import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
+import { downloadMediaToCache } from '../../lib/mediaCache';
 import { supabase } from '../../lib/supabase';
 
 const { width } = Dimensions.get('window');
@@ -64,18 +64,32 @@ function buildSnapshotFilename(params: Record<string, unknown>): string {
   return `${eventPart}-${yyyy}${mm}${dd}-${hh}${mi}`;
 }
 
-function sortFramesByFileName<T extends { file_name?: unknown; url?: unknown; created_at?: unknown }>(rows: T[]): T[] {
-  // Numeric-aware compare so `_2` < `_10`. Works well for `_001`, `_002`...
+function sortFramesByFileName<T extends { file_name?: unknown; url?: unknown }>(rows: T[]): T[] {
+  // Numeric-aware collator (14 > 2)
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
   const key = (r: T) => {
+    // Trim sabse zaruri hai taaki hidden spaces " 14" na aaye
     const fn = String(r?.file_name ?? '').trim();
-    if (fn) return fn;
-    // Fallback: derive last URL path segment if file_name missing.
+    if (fn !== '') return fn;
+
+    // Fallback: Agar file_name missing hai
     const u = String(r?.url ?? '').split('?')[0];
     const last = u ? u.split('/').pop() ?? '' : '';
     return last.trim();
   };
-  return [...rows].sort((a, b) => collator.compare(key(a), key(b)));
+
+  const sorted = [...rows].sort((a, b) => {
+    const keyA = key(a);
+    const keyB = key(b);
+    
+    // DEBUG: Terminal mein check karo ki kya compare ho raha hai
+    // console.log(`Sorting: Comparing "${keyA}" vs "${keyB}"`);
+    
+    return collator.compare(keyA, keyB);
+  });
+
+  return sorted;
 }
 
 /** Normalize `posts.captions` / `events.captions` (jsonb, text JSON string, or plain string). */
@@ -301,7 +315,7 @@ export default function PostDetailScreen() {
     if (!shotRef) return null;
     const filename = buildSnapshotFilename(params as unknown as Record<string, unknown>);
     const ext = 'jpg';
-    const dir = `${FileSystem.cacheDirectory}snapshots/`;
+    const dir = `${(FileSystem as any).cacheDirectory}snapshots/`;
     const dest = `${dir}${filename}.${ext}`;
 
     try {
