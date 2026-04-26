@@ -64,6 +64,20 @@ function buildSnapshotFilename(params: Record<string, unknown>): string {
   return `${eventPart}-${yyyy}${mm}${dd}-${hh}${mi}`;
 }
 
+function sortFramesByFileName<T extends { file_name?: unknown; url?: unknown; created_at?: unknown }>(rows: T[]): T[] {
+  // Numeric-aware compare so `_2` < `_10`. Works well for `_001`, `_002`...
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  const key = (r: T) => {
+    const fn = String(r?.file_name ?? '').trim();
+    if (fn) return fn;
+    // Fallback: derive last URL path segment if file_name missing.
+    const u = String(r?.url ?? '').split('?')[0];
+    const last = u ? u.split('/').pop() ?? '' : '';
+    return last.trim();
+  };
+  return [...rows].sort((a, b) => collator.compare(key(a), key(b)));
+}
+
 /** Normalize `posts.captions` / `events.captions` (jsonb, text JSON string, or plain string). */
 function parseCaptionsFromDb(raw: unknown): string[] {
   if (raw == null) return [];
@@ -267,7 +281,7 @@ export default function PostDetailScreen() {
           if (!cancelled && __DEV__) console.warn('[PostDetail] fetchFrames error:', error.message);
           return;
         }
-        if (data) setFrames(data);
+        if (data) setFrames(sortFramesByFileName(data as any[]));
       } catch (e) {
         if (!cancelled && __DEV__) console.warn('fetchFrames exception');
       }
