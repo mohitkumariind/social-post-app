@@ -298,8 +298,8 @@ export default function UserManagement() {
 
       const { data: insertData, error: insertErr } = await supabase
         .from('user_frames')
-        .insert({ user_id: selectedUser.id, url: imageUrl })
-        .select('id, url, created_at')
+        .insert({ user_id: selectedUser.id, url: imageUrl, file_name: file.name })
+        .select('id, url, created_at, file_name')
         .single();
 
       if (insertErr) {

@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
       // `file_name` is optional across projects; keep response typing loose.
       .select('id,url,created_at,file_name')
       .eq('user_id', userId)
+      .order('file_name', { ascending: true })
       .order('created_at', { ascending: false }) as any;
 
   const baseWithoutFileName = () =>
