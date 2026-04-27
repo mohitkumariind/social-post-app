@@ -246,7 +246,6 @@ const styles = StyleSheet.create({
   },
   chooseBtn: { 
     backgroundColor: Colors.primary,
-    borderRadius: 12, 
     paddingVertical: 18, 
     borderRadius: 18, 
     alignItems: 'center' 

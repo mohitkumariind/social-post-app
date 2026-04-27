@@ -5,9 +5,7 @@
     "scheme": "socialbot",
     "version": "1.0.0",
     "jsEngine": "hermes",
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
+    "runtimeVersion": "1.0.0",
     "icon": "./assets/images/icon.png",
     "splash": {
       "image": "./assets/images/icon.png",
@@ -42,9 +40,7 @@
         "android.permission.READ_MEDIA_IMAGES"
       ],
       "package": "com.mohit.socialpost.app",
-      "runtimeVersion": {
-        "policy": "appVersion"
-      }
+      "runtimeVersion": "1.0.0"
     },
     "web": {
       "favicon": "./assets/images/icon.png"

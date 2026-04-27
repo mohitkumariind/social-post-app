@@ -87,8 +87,13 @@ export async function downloadMediaToCache(opts: {
     // ignore
   }
 
-  // 2) Download once
-  const res = await FileSystem.downloadAsync(url, localPath);
+  // 2) Download once (guard against transient FS errors)
+  let res: FileSystem.FileSystemDownloadResult;
+  try {
+    res = await FileSystem.downloadAsync(url, localPath);
+  } catch {
+    return null;
+  }
   if (res.status < 200 || res.status >= 300) return null;
 
   // 3) Track only daily-content in manifest (48h expiry)

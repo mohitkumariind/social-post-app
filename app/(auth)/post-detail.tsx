@@ -24,6 +24,7 @@ import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { downloadMediaToCache } from '../../lib/mediaCache';
+import { getProfessionalFileName } from '../../lib/professionalFileName';
 import { supabase } from '../../lib/supabase';
 
 const { width } = Dimensions.get('window');
@@ -40,28 +41,9 @@ function routeParamStr(v: unknown): string {
   return String(v).trim();
 }
 
-function slugifyFilenamePart(input: string): string {
-  const base = String(input ?? '').trim();
-  if (!base) return 'event';
-  // Keep it filesystem/share-sheet friendly across Android/iOS.
-  const cleaned = base
-    .replace(/[^\p{L}\p{N}]+/gu, '-') // non letters/digits -> dash
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80);
-  return cleaned || 'event';
-}
-
 function buildSnapshotFilename(params: Record<string, unknown>): string {
   const category = routeParamStr(params?.category);
-  const eventPart = slugifyFilenamePart(category || 'event');
-  const d = new Date();
-  const yyyy = String(d.getFullYear());
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  return `${eventPart}-${yyyy}${mm}${dd}-${hh}${mi}`;
+  return getProfessionalFileName({ category, ext: 'jpg' }).replace(/\.jpg$/i, '');
 }
 
 function sortFramesByFileName<T extends { file_name?: unknown; url?: unknown; frame_url?: unknown }>(rows: T[]): T[] {
@@ -268,7 +250,7 @@ export default function PostDetailScreen() {
         const img = String(params.image).trim();
         if (img.length > 0) return [img];
       }
-    } catch (e) {
+    } catch {
       if (__DEV__) console.warn('PostDetail originalData parse error');
     }
     return [];
@@ -288,7 +270,7 @@ export default function PostDetailScreen() {
         try {
           scrollRef.current?.scrollTo({ x: jumpTo * width, animated: false });
           setIsReady(true);
-        } catch (e) {
+        } catch {
           setIsReady(true);
         }
       }, 400);
@@ -332,7 +314,7 @@ export default function PostDetailScreen() {
         }
         if (data) setFrames(sortFramesByFileName(data as any[]));
       } catch (e) {
-        if (!cancelled && __DEV__) console.warn('fetchFrames exception');
+      if (!cancelled && __DEV__) console.warn('fetchFrames exception');
       }
     };
     fetchFrames();
@@ -348,17 +330,17 @@ export default function PostDetailScreen() {
   const captureSnapshotToNamedFile = async (): Promise<{ uri: string; filename: string } | null> => {
     const shotRef = viewShotRef.current;
     if (!shotRef) return null;
-    const filename = buildSnapshotFilename(params as unknown as Record<string, unknown>);
+    const filenameBase = buildSnapshotFilename(params as unknown as Record<string, unknown>);
     const ext = 'jpg';
     const dir = `${(FileSystem as any).cacheDirectory}snapshots/`;
-    const dest = `${dir}${filename}.${ext}`;
+    const dest = `${dir}${filenameBase}.${ext}`;
 
     try {
       const rawUri: string = await shotRef.capture();
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
       // Create a stable, user-friendly filename for share sheets / downloads.
       await FileSystem.copyAsync({ from: rawUri, to: dest });
-      return { uri: dest, filename: `${filename}.${ext}` };
+      return { uri: dest, filename: `${filenameBase}.${ext}` };
     } catch (e) {
       if (__DEV__) console.warn('[PostDetail] captureSnapshotToNamedFile failed', e);
       return null;
@@ -379,7 +361,7 @@ export default function PostDetailScreen() {
       }
       await MediaLibrary.saveToLibraryAsync(named.uri);
       Alert.alert(t('save_success_title'), t('save_success_message'));
-    } catch (err) {
+    } catch {
       if (__DEV__) console.warn('save poster failed');
       Alert.alert(t('save_error_title'), t('save_error_message'));
     }
@@ -394,7 +376,7 @@ export default function PostDetailScreen() {
       } else {
         Share.share({ message: t('share_message') });
       }
-    } catch (err) {
+    } catch {
       if (__DEV__) console.warn('share failed');
     }
   };

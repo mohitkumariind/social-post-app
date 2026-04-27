@@ -3,8 +3,10 @@ import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { useRouter } from 'expo-router';
+import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import React, { useRef } from 'react';
+import { getProfessionalFileName } from '../../lib/professionalFileName';
 import {
     Alert,
     Dimensions,
@@ -53,9 +55,16 @@ export default function RewardsScreen() {
       return;
     }
     try {
-      const uri = await viewShotRef.current.capture();
-      await Sharing.shareAsync(uri);
-    } catch (error) {
+      const shotRef = viewShotRef.current;
+      if (!shotRef) throw new Error('capture not ready');
+      const rawUri: string = await shotRef.capture();
+      const filename = getProfessionalFileName({ category: 'rewards', ext: 'png' });
+      const dir = `${(FileSystem as any).cacheDirectory}snapshots/`;
+      const dest = `${dir}${filename}`;
+      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+      await FileSystem.copyAsync({ from: rawUri, to: dest });
+      await Sharing.shareAsync(dest, { dialogTitle: filename });
+    } catch {
       Alert.alert("Error", "Share nahi ho paya!");
     }
   };
@@ -84,7 +93,7 @@ export default function RewardsScreen() {
                 <Text style={styles.userName}>{displayName}</Text>
                 <Text style={styles.userRankText}>{ALL_RANKS[currentLevel-1].name} - Social Media</Text>
                 <View style={styles.divider} />
-                <Text style={styles.certQuote}>"Serving on the Digital Frontline"</Text>
+                <Text style={styles.certQuote}>&quot;Serving on the Digital Frontline&quot;</Text>
               </View>
             </View>
           </ViewShot>
