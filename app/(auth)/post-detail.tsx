@@ -79,14 +79,33 @@ function sortFramesByFileName<T extends { file_name?: unknown; url?: unknown }>(
     return last.trim();
   };
 
+  const extractLastNumber = (s: string): number | null => {
+    // Examples:
+    // "frame_12.png" -> 12
+    // "12.png" -> 12
+    // "frame-final.png" -> null
+    const m = s.match(/(\d+)(?!.*\d)/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+  };
+
   const sorted = [...rows].sort((a, b) => {
     const keyA = key(a);
     const keyB = key(b);
-    
-    // DEBUG: Terminal mein check karo ki kya compare ho raha hai
-    // console.log(`Sorting: Comparing "${keyA}" vs "${keyB}"`);
-    
-    return collator.compare(keyA, keyB);
+
+    // Prefer numeric ordering when a frame number exists.
+    const numA = extractLastNumber(keyA);
+    const numB = extractLastNumber(keyB);
+    if (numA != null && numB != null && numA !== numB) return numA - numB;
+    if (numA != null && numB == null) return -1;
+    if (numA == null && numB != null) return 1;
+
+    // Fallback to collator (handles "14" vs "2" and general string order)
+    const c = collator.compare(keyA, keyB);
+    if (c !== 0) return c;
+    // Stable-ish tie-breaker to avoid random flips
+    return collator.compare(String(a?.url ?? ''), String(b?.url ?? ''));
   });
 
   return sorted;
