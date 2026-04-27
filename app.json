@@ -5,6 +5,9 @@
     "scheme": "socialbot",
     "version": "1.0.0",
     "jsEngine": "hermes",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "icon": "./assets/images/icon.png",
     "splash": {
       "image": "./assets/images/icon.png",
@@ -17,9 +20,6 @@
         "NSPhotoLibraryUsageDescription": "Save and share your posts to the photo library",
         "NSPhotoLibraryAddUsageDescription": "Save posters to your photo library",
         "NSCameraUsageDescription": "Use camera for profile and content"
-      },
-      "runtimeVersion": {
-        "policy": "appVersion"
       }
     },
     "android": {
@@ -42,7 +42,9 @@
         "android.permission.READ_MEDIA_IMAGES"
       ],
       "package": "com.mohit.socialpost.app",
-      "runtimeVersion": "1.0.0"
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "web": {
       "favicon": "./assets/images/icon.png"
@@ -89,7 +91,9 @@
     },
     "owner": "poojamohit",
     "updates": {
-      "url": "https://u.expo.dev/8445ac4b-11a5-4ae5-bc3c-d60e3b921b40"
+      "url": "https://u.expo.dev/8445ac4b-11a5-4ae5-bc3c-d60e3b921b40",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
     }
   }
 }

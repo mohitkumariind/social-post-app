@@ -70,6 +70,7 @@
     "@babel/core": "^7.20.0",
     "@types/react": "~19.1.10",
     "@types/react-dom": "~19.1.7",
+    "eas-cli": "^18.8.1",
     "patch-package": "^8.0.0",
     "typescript": "~5.9.2"
   },

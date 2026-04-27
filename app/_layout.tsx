@@ -1,6 +1,7 @@
 import { Stack, useRouter } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
+import * as Updates from 'expo-updates';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Image, LogBox, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -244,6 +245,31 @@ export default function RootLayout() {
   const opacity = useRef(new Animated.Value(0)).current;
   const hideNativeSplashOnce = useRef(false);
   const insets = useSafeAreaInsets();
+
+  useEffect(() => {
+    // OTA audit logs (shows if the installed build is checking the right channel and why updates may not apply).
+    // These logs are safe in production and do not change UI.
+    void (async () => {
+      try {
+        if (__DEV__) {
+          console.log('[updates] channel:', Updates.channel);
+          console.log('[updates] runtimeVersion:', Updates.runtimeVersion);
+          console.log('[updates] updateId:', Updates.updateId);
+          console.log('[updates] isEmbeddedLaunch:', Updates.isEmbeddedLaunch);
+        }
+        const result = await Updates.checkForUpdateAsync();
+        if (__DEV__) console.log('[updates] checkForUpdateAsync:', result);
+        if (result.isAvailable) {
+          const fetched = await Updates.fetchUpdateAsync();
+          if (__DEV__) console.log('[updates] fetchUpdateAsync:', fetched);
+          // Apply immediately on next tick.
+          await Updates.reloadAsync();
+        }
+      } catch (e) {
+        if (__DEV__) console.warn('[updates] error', e);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     LogBox.ignoreLogs(['Unable to activate keep awake']);
