@@ -203,6 +203,7 @@ export default function PostDetailScreen() {
   const { userInfo } = useUser();
   const viewShotRefs = useRef<Record<number, any>>({});
   const captureIndexRef = useRef<number>(0);
+  const lastCaptureDiagRef = useRef<string>('');
 
   const initialIndex = params?.currentIndex != null ? parseInt(String(params.currentIndex), 10) : 0;
 
@@ -375,18 +376,28 @@ export default function PostDetailScreen() {
   };
 
   const captureSnapshotToNamedFile = async (): Promise<{ uri: string; filename: string } | null> => {
+    lastCaptureDiagRef.current = '';
     const shotRef = getBestViewShot();
-    if (!shotRef) return null;
+    if (!shotRef) {
+      lastCaptureDiagRef.current = 'step=getBestViewShot\nerror=no ViewShot ref (not mounted yet)';
+      return null;
+    }
     const filenameBase = buildSnapshotFilename(params as unknown as Record<string, unknown>);
     const ext = 'jpg';
     const cacheDir: string | null =
       (FileSystem as any).cacheDirectory ?? (FileSystem as any).documentDirectory ?? null;
-    if (!cacheDir) return null;
+    if (!cacheDir) {
+      lastCaptureDiagRef.current = 'step=FileSystem.cacheDirectory\nerror=cache directory unavailable';
+      return null;
+    }
     const dir = `${cacheDir}snapshots/`;
 
     try {
       const rawUri: string = await shotRef.capture();
-      if (!rawUri || typeof rawUri !== 'string') return null;
+      if (!rawUri || typeof rawUri !== 'string') {
+        lastCaptureDiagRef.current = `step=ViewShot.capture\nerror=invalid capture uri (${String(rawUri)})`;
+        return null;
+      }
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
       const { dest, filename } = await resolveUniqueSnapshotDest({ dir, filenameBase, ext });
       // Create a stable, user-friendly filename for share sheets / downloads.
@@ -406,6 +417,13 @@ export default function PostDetailScreen() {
       }
     } catch (e) {
       if (__DEV__) console.warn('[PostDetail] captureSnapshotToNamedFile failed', e);
+      const details =
+        e instanceof Error
+          ? `${e.name}: ${e.message}`
+          : typeof e === 'object' && e != null
+            ? JSON.stringify(e)
+            : String(e ?? '');
+      lastCaptureDiagRef.current = `step=captureSnapshotToNamedFile\nerror=${details || 'unknown'}`;
       return null;
     }
   };
@@ -421,7 +439,8 @@ export default function PostDetailScreen() {
       }
       const named = await captureSnapshotToNamedFile();
       if (!named) {
-        alertSafe(t('save_error_title'), t('save_error_message'));
+        const diag = lastCaptureDiagRef.current;
+        alertSafe(t('save_error_title') || 'Save failed', diag || t('save_error_message') || 'Something went wrong while saving.');
         return;
       }
       lastUri = named.uri;
@@ -446,7 +465,8 @@ export default function PostDetailScreen() {
     try {
       const named = await captureSnapshotToNamedFile();
       if (!named) {
-        alertSafe(t('save_error_title'), t('save_error_message'));
+        const diag = lastCaptureDiagRef.current;
+        alertSafe(t('save_error_title') || 'Share failed', diag || t('save_error_message') || 'Something went wrong while sharing.');
         return;
       }
       lastUri = named.uri;
