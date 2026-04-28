@@ -434,33 +434,52 @@ export default function PostDetailScreen() {
   };
 
   const handleDownload = async () => {
-    let lastUri: string | null = null;
-    let lastFilename: string | null = null;
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
-        alertSafe(t('permission_required'), t('permission_message'));
+        alertSafe(t('permission_required') || 'Permission required', t('permission_message') || 'Please allow access to save images.');
         return;
       }
+
       const named = await captureSnapshotToNamedFile();
       if (!named) {
         const diag = lastCaptureDiagRef.current;
         alertSafe(t('save_error_title') || 'Save failed', diag || t('save_error_message') || 'Something went wrong while saving.');
         return;
       }
-      lastUri = named.uri;
-      lastFilename = named.filename;
-      await MediaLibrary.saveToLibraryAsync(named.uri);
+
+      // Move/copy into a stable, app-accessible location first.
+      const baseDir: string | null =
+        (FileSystem as any).documentDirectory ?? (FileSystem as any).cacheDirectory ?? null;
+      if (!baseDir) {
+        Alert.alert('DEBUG', JSON.stringify({ step: 'FileSystem.documentDirectory', error: 'unavailable', uri: named.uri }));
+        return;
+      }
+      const tempPath = `${baseDir}temp_image.jpg`;
+
+      // Try move first (requested), but fall back to copy for providers that don't support move.
+      try {
+        await FileSystem.deleteAsync(tempPath, { idempotent: true });
+      } catch {
+        // ignore
+      }
+      try {
+        await FileSystem.moveAsync({ from: named.uri, to: tempPath });
+      } catch (moveErr) {
+        await FileSystem.copyAsync({ from: named.uri, to: tempPath });
+      }
+
+      await MediaLibrary.saveToLibraryAsync(tempPath);
       alertSafe(t('save_success_title') || 'Saved', t('save_success_message') || 'Saved to gallery.');
-    } catch (e) {
-      if (__DEV__) console.warn('save poster failed', e);
-      const msg = e instanceof Error ? e.message : String(e ?? '');
-      const details =
-        msg ||
-        (typeof e === 'object' && e != null ? JSON.stringify(e) : String(e ?? '')) ||
-        '';
-      const diag = `step=MediaLibrary.saveToLibraryAsync\nuri=${lastUri ?? 'n/a'}\nfile=${lastFilename ?? 'n/a'}\nerror=${details || 'unknown'}`;
-      alertSafe(t('save_error_title') || 'Save failed', diag);
+    } catch (error) {
+      const e = error as any;
+      const payload =
+        e instanceof Error
+          ? { name: e.name, message: e.message, stack: e.stack }
+          : typeof e === 'object' && e != null
+            ? e
+            : { message: String(e ?? '') };
+      Alert.alert('DEBUG', JSON.stringify(payload));
     }
   };
 
