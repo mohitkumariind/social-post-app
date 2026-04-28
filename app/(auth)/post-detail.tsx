@@ -336,6 +336,12 @@ export default function PostDetailScreen() {
       ? (frames[selectedFrame - 2]?.url || frames[selectedFrame - 2]?.frame_url || null)
       : null;
 
+  const alertSafe = (title: string | undefined | null, message: string | undefined | null) => {
+    const tt = String(title ?? '').trim();
+    const mm = String(message ?? '').trim();
+    Alert.alert(tt || 'Notice', mm || 'Please try again.');
+  };
+
   const getBestViewShot = (): any | null => {
     const map = viewShotRefs.current;
     const idx = captureIndexRef.current;
@@ -405,33 +411,46 @@ export default function PostDetailScreen() {
   };
 
   const handleDownload = async () => {
+    let lastUri: string | null = null;
+    let lastFilename: string | null = null;
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert(t('permission_required'), t('permission_message'));
+        alertSafe(t('permission_required'), t('permission_message'));
         return;
       }
       const named = await captureSnapshotToNamedFile();
       if (!named) {
-        Alert.alert(t('save_error_title'), t('save_error_message'));
+        alertSafe(t('save_error_title'), t('save_error_message'));
         return;
       }
+      lastUri = named.uri;
+      lastFilename = named.filename;
       await MediaLibrary.saveToLibraryAsync(named.uri);
-      Alert.alert(t('save_success_title'), t('save_success_message'));
+      alertSafe(t('save_success_title') || 'Saved', t('save_success_message') || 'Saved to gallery.');
     } catch (e) {
       if (__DEV__) console.warn('save poster failed', e);
       const msg = e instanceof Error ? e.message : String(e ?? '');
-      Alert.alert(t('save_error_title'), msg || t('save_error_message'));
+      const details =
+        msg ||
+        (typeof e === 'object' && e != null ? JSON.stringify(e) : String(e ?? '')) ||
+        '';
+      const diag = `step=MediaLibrary.saveToLibraryAsync\nuri=${lastUri ?? 'n/a'}\nfile=${lastFilename ?? 'n/a'}\nerror=${details || 'unknown'}`;
+      alertSafe(t('save_error_title') || 'Save failed', diag);
     }
   };
 
   const handleShare = async () => {
+    let lastUri: string | null = null;
+    let lastFilename: string | null = null;
     try {
       const named = await captureSnapshotToNamedFile();
       if (!named) {
-        Alert.alert(t('save_error_title'), t('save_error_message'));
+        alertSafe(t('save_error_title'), t('save_error_message'));
         return;
       }
+      lastUri = named.uri;
+      lastFilename = named.filename;
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(named.uri, { dialogTitle: named.filename, mimeType: 'image/jpeg' });
       } else {
@@ -440,7 +459,12 @@ export default function PostDetailScreen() {
     } catch (e) {
       if (__DEV__) console.warn('share failed', e);
       const msg = e instanceof Error ? e.message : String(e ?? '');
-      Alert.alert(t('save_error_title'), msg || t('save_error_message'));
+      const details =
+        msg ||
+        (typeof e === 'object' && e != null ? JSON.stringify(e) : String(e ?? '')) ||
+        '';
+      const diag = `step=Sharing.shareAsync\nuri=${lastUri ?? 'n/a'}\nfile=${lastFilename ?? 'n/a'}\nerror=${details || 'unknown'}`;
+      alertSafe(t('save_error_title') || 'Share failed', diag);
     }
   };
 
