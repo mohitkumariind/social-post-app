@@ -384,13 +384,7 @@ export default function PostDetailScreen() {
     }
     const filenameBase = buildSnapshotFilename(params as unknown as Record<string, unknown>);
     const ext = 'jpg';
-    const cacheDir: string | null =
-      (FileSystem as any).cacheDirectory ?? (FileSystem as any).documentDirectory ?? null;
-    if (!cacheDir) {
-      lastCaptureDiagRef.current = 'step=FileSystem.cacheDirectory\nerror=cache directory unavailable';
-      return null;
-    }
-    const dir = `${cacheDir}snapshots/`;
+    const fallbackFilename = `${filenameBase}.${ext}`;
 
     try {
       const rawUri: string = await shotRef.capture();
@@ -398,8 +392,20 @@ export default function PostDetailScreen() {
         lastCaptureDiagRef.current = `step=ViewShot.capture\nerror=invalid capture uri (${String(rawUri)})`;
         return null;
       }
+      const cacheDir: string | null =
+        (FileSystem as any).cacheDirectory ?? (FileSystem as any).documentDirectory ?? null;
+
+      // If cacheDirectory is unavailable on this runtime/device, do not block share/save.
+      // Use the raw capture URI and keep professional name only for the share sheet title.
+      if (!cacheDir) {
+        lastCaptureDiagRef.current = 'step=FileSystem.cacheDirectory\nwarn=cache directory unavailable; using rawUri';
+        return { uri: rawUri, filename: fallbackFilename };
+      }
+
+      const dir = `${cacheDir}snapshots/`;
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
       const { dest, filename } = await resolveUniqueSnapshotDest({ dir, filenameBase, ext });
+
       // Create a stable, user-friendly filename for share sheets / downloads.
       // Some Android devices/providers may return a URI that cannot be copied; in that case fall back to rawUri.
       try {
@@ -407,12 +413,11 @@ export default function PostDetailScreen() {
         return { uri: dest, filename };
       } catch (copyErr) {
         try {
-          // If copy fails due to provider restrictions, move may still work when it's a file URI.
           await FileSystem.moveAsync({ from: rawUri, to: dest });
           return { uri: dest, filename };
         } catch {
           if (__DEV__) console.warn('[PostDetail] copy/move snapshot failed, using rawUri', copyErr);
-          return { uri: rawUri, filename };
+          return { uri: rawUri, filename: fallbackFilename };
         }
       }
     } catch (e) {
