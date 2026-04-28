@@ -441,45 +441,23 @@ export default function PostDetailScreen() {
         return;
       }
 
-      const named = await captureSnapshotToNamedFile();
-      if (!named) {
-        const diag = lastCaptureDiagRef.current;
-        alertSafe(t('save_error_title') || 'Save failed', diag || t('save_error_message') || 'Something went wrong while saving.');
+      // Android 10 friendly: avoid FileSystem path manipulation.
+      const shotRef = getBestViewShot();
+      if (!shotRef) {
+        alertSafe(t('save_error_title') || 'Save failed', 'Capture not ready. Please try again.');
+        return;
+      }
+      const rawUri: string = await shotRef.capture();
+      if (!rawUri || typeof rawUri !== 'string') {
+        alertSafe(t('save_error_title') || 'Save failed', t('save_error_message') || 'Something went wrong while saving.');
         return;
       }
 
-      // Move/copy into a stable, app-accessible location first.
-      const baseDir: string | null =
-        (FileSystem as any).documentDirectory ?? (FileSystem as any).cacheDirectory ?? null;
-      if (!baseDir) {
-        Alert.alert('DEBUG', JSON.stringify({ step: 'FileSystem.documentDirectory', error: 'unavailable', uri: named.uri }));
-        return;
-      }
-      const tempPath = `${baseDir}temp_image.jpg`;
-
-      // Try move first (requested), but fall back to copy for providers that don't support move.
-      try {
-        await FileSystem.deleteAsync(tempPath, { idempotent: true });
-      } catch {
-        // ignore
-      }
-      try {
-        await FileSystem.moveAsync({ from: named.uri, to: tempPath });
-      } catch (moveErr) {
-        await FileSystem.copyAsync({ from: named.uri, to: tempPath });
-      }
-
-      await MediaLibrary.saveToLibraryAsync(tempPath);
+      await MediaLibrary.saveToLibraryAsync(rawUri);
       alertSafe(t('save_success_title') || 'Saved', t('save_success_message') || 'Saved to gallery.');
     } catch (error) {
-      const e = error as any;
-      const payload =
-        e instanceof Error
-          ? { name: e.name, message: e.message, stack: e.stack }
-          : typeof e === 'object' && e != null
-            ? e
-            : { message: String(e ?? '') };
-      Alert.alert('DEBUG', JSON.stringify(payload));
+      const msg = error instanceof Error ? error.message : String(error ?? '');
+      alertSafe(t('save_error_title') || 'Save failed', msg || t('save_error_message') || 'Something went wrong while saving.');
     }
   };
 
