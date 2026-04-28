@@ -216,6 +216,14 @@ export default function PostDetailScreen() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backNavLockRef = useRef(false);
 
+  useEffect(() => {
+    return () => {
+      // Ensure refs don't keep native views alive after unmount.
+      viewShotRefs.current = {};
+      captureIndexRef.current = 0;
+    };
+  }, []);
+
   const goBackToExpandedCategory = useCallback(() => {
     if (backNavLockRef.current) return true;
     backNavLockRef.current = true;
