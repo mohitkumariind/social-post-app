@@ -7,9 +7,10 @@ import { supabase } from './supabase';
 export { ANDROID_NOTIFICATION_CHANNEL_ID } from './pushChannel';
 
 /**
- * Must match `expo.extra.eas.projectId` in app.json (fallback when Constants manifest is empty in some builds).
+ * Intentionally no hardcoded fallback.
+ * After `eas init`, `expo.extra.eas.projectId` is the source of truth.
  */
-const FALLBACK_EAS_PROJECT_ID = '8445ac4b-11a5-4ae5-bc3c-d60e3b921b40';
+const FALLBACK_EAS_PROJECT_ID = '';
 
 function readProjectIdFromExtra(extra: unknown): string | undefined {
   if (!extra || typeof extra !== 'object') return undefined;
@@ -43,7 +44,7 @@ export function getExpoProjectId(): string {
     if (fromM1) return fromM1;
   }
 
-  if (__DEV__) console.warn('[notifications] Using FALLBACK_EAS_PROJECT_ID — verify app.json extra.eas.projectId');
+  if (__DEV__) console.warn('[notifications] Missing expo.extra.eas.projectId (run eas init / eas build at least once)');
   return FALLBACK_EAS_PROJECT_ID;
 }
 
