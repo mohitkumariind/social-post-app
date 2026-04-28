@@ -3,7 +3,7 @@ import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Updates from 'expo-updates';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Image, LogBox, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, Image, LogBox, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { I18nextProvider } from 'react-i18next';
@@ -245,6 +245,7 @@ export default function RootLayout() {
   const opacity = useRef(new Animated.Value(0)).current;
   const hideNativeSplashOnce = useRef(false);
   const insets = useSafeAreaInsets();
+  const [otaLabel, setOtaLabel] = useState<string>('OTA: checking…');
 
   useEffect(() => {
     // OTA audit logs (shows if the installed build is checking the right channel and why updates may not apply).
@@ -270,6 +271,21 @@ export default function RootLayout() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    const id = String((Updates as any)?.updateId ?? '').trim();
+    if (!id) setOtaLabel('Running Embedded Binary');
+    else setOtaLabel(`Running OTA Update: ${id}`);
+  }, []);
+
+  const onCheckForUpdates = async () => {
+    try {
+      const res = await Updates.checkForUpdateAsync();
+      Alert.alert('Updates.checkForUpdateAsync', JSON.stringify(res));
+    } catch (e) {
+      Alert.alert('Updates error', e instanceof Error ? e.message : String(e ?? ''));
+    }
+  };
 
   useEffect(() => {
     LogBox.ignoreLogs(['Unable to activate keep awake']);
@@ -337,6 +353,16 @@ export default function RootLayout() {
                 <View style={{ flex: 1 }}>
                   <Stack screenOptions={{ headerShown: false }} />
                   <PushNotificationLayer />
+                  <View style={styles.otaDebugWrap} pointerEvents="box-none">
+                    <Pressable style={styles.otaDebugCard} onPress={() => void onCheckForUpdates()}>
+                      <Text style={styles.otaDebugText} numberOfLines={2}>
+                        {otaLabel}
+                      </Text>
+                      <Text style={styles.otaDebugHint} numberOfLines={1}>
+                        Tap to check for updates
+                      </Text>
+                    </Pressable>
+                  </View>
                 </View>
               </SessionSync>
             </UserProvider>
@@ -376,6 +402,31 @@ export default function RootLayout() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#FFFFFF' },
+  otaDebugWrap: {
+    position: 'absolute',
+    left: 10,
+    bottom: 110,
+    zIndex: 99999,
+    elevation: 99999,
+  },
+  otaDebugCard: {
+    maxWidth: 320,
+    backgroundColor: 'rgba(0,0,0,0.78)',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  otaDebugText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  otaDebugHint: {
+    marginTop: 6,
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 11,
+    fontWeight: '600',
+  },
   loaderOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#FFFFFF',
