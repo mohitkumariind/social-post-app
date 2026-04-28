@@ -37,3 +37,8 @@ Thumbs.db
 
 # Admin Next.js app — not part of the Expo mobile app (omit from upload)
 socialbot/
+
+# Docs / tests
+docs/
+__tests__/
+*.md

@@ -26,6 +26,8 @@ import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-clie
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 
+const __DEV__ = process.env.NODE_ENV !== 'production';
+
 // --- TYPES ---
 interface UserFrame {
   id: string | number;
@@ -137,7 +139,7 @@ export default function UserManagement() {
       });
       const res = await fetch(url, { credentials: 'same-origin', signal });
         if (!res.ok) {
-          if (process.env.NODE_ENV === 'development') {
+          if (__DEV__) {
             console.error('[users] /api/admin/profiles', res.status, await res.text());
           }
           setUsers([]);
@@ -149,7 +151,7 @@ export default function UserManagement() {
         setUsers(mapped);
     } catch (err) {
       if ((err as any)?.name === 'AbortError') return;
-      console.error('fetchProfiles exception:', err);
+      if (__DEV__) console.error('fetchProfiles exception:', err);
       setUsers([]);
     } finally {
       setUsersLoading(false);
@@ -229,9 +231,7 @@ export default function UserManagement() {
       const id = encodeURIComponent(String(user.id));
       const res = await fetch(`/api/admin/user-frames?user_id=${id}`, { credentials: 'same-origin' });
       if (!res.ok) {
-        if (process.env.NODE_ENV === 'development') {
-          console.warn('[users] /api/admin/user-frames failed', res.status);
-        }
+        if (__DEV__) console.warn('[users] /api/admin/user-frames failed', res.status);
         return;
       }
       const json = (await res.json().catch(() => ({}))) as { frames?: Array<{ id: string | number; url: string; created_at: string | null }> };
@@ -243,7 +243,7 @@ export default function UserManagement() {
       setSelectedUser((prev) => (prev ? { ...prev, personalFrames: frames } : null));
       setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, personalFrames: frames } : u)));
     } catch (e) {
-      console.error('[users] fetch user-frames failed', e);
+      if (__DEV__) console.error('[users] fetch user-frames failed', e);
     }
   };
 
@@ -269,7 +269,7 @@ export default function UserManagement() {
         setSelectedUser((prev) => (prev ? { ...prev, personalFrames: frames } : null));
         setUsers((prev) => prev.map((u) => (u.id === selectedUser.id ? { ...u, personalFrames: frames } : u)));
       } catch (e) {
-        if (process.env.NODE_ENV === 'development') console.warn('[users] frames search fetch failed');
+        if (__DEV__) console.warn('[users] frames search fetch failed');
       }
     })();
     return () => {
@@ -292,7 +292,7 @@ export default function UserManagement() {
         const up = await adminStorageUpload('user-frames', storagePath, file);
         imageUrl = up.publicUrl;
       } catch (uploadErr) {
-        console.error('Frame upload error:', uploadErr);
+        if (__DEV__) console.error('Frame upload error:', uploadErr);
         continue;
       }
 
@@ -303,7 +303,7 @@ export default function UserManagement() {
         .single();
 
       if (insertErr) {
-        console.error('user_frames insert error:', insertErr);
+        if (__DEV__) console.error('user_frames insert error:', insertErr);
         continue;
       }
 
@@ -337,7 +337,7 @@ export default function UserManagement() {
         try {
           await adminStorageRemove('user-frames', [filePath]);
         } catch (e) {
-          console.error('Frame storage remove:', e);
+          if (__DEV__) console.error('Frame storage remove:', e);
         }
       }
       await supabase.from('user_frames').delete().eq('id', frameId);

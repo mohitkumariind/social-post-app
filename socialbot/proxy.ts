@@ -9,7 +9,7 @@ import {
 
 const proxyDebug = process.env.NODE_ENV === 'development';
 const proxyLog = (...args: Parameters<typeof console.log>) => {
-  if (proxyDebug) console.log(...args);
+  if (__DEV__ && proxyDebug) console.log(...args);
 };
 
 /**

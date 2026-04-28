@@ -7,6 +7,8 @@ import { adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 
+const __DEV__ = process.env.NODE_ENV !== 'production';
+
 const ACCENT = '#25D366';
 const BODY_MAX = 2000;
 
@@ -117,7 +119,7 @@ export default function NotificationBroadcastCenterPage() {
       .limit(400);
     setGalleryLoading(false);
     if (error) {
-      console.error('gallery posts:', error.message);
+      if (__DEV__) console.error('gallery posts:', error.message);
       setGalleryPosts([]);
       return;
     }
@@ -186,7 +188,7 @@ export default function NotificationBroadcastCenterPage() {
       setGeoLoading(true);
       const { data, error } = await supabase.from('states').select('*');
       if (error) {
-        console.error('states:', error.message);
+        if (__DEV__) console.error('states:', error.message);
         setStates([]);
       } else {
         const mapped = (data ?? []).map((r: Record<string, unknown>) => ({
@@ -210,7 +212,7 @@ export default function NotificationBroadcastCenterPage() {
       setLokLoading(true);
       const { data, error } = await supabase.from('loksabha').select('*').eq('state_id', stateId);
       if (error) {
-        console.error('loksabha:', error.message);
+        if (__DEV__) console.error('loksabha:', error.message);
         setLoksabhas([]);
       } else {
         const mapped = (data ?? []).map((r: Record<string, unknown>) => ({
@@ -235,7 +237,7 @@ export default function NotificationBroadcastCenterPage() {
       setAsmLoading(true);
       const { data, error } = await supabase.from('assembly').select('*').eq('loksabha_id', loksabhaId);
       if (error) {
-        console.error('assembly:', error.message);
+        if (__DEV__) console.error('assembly:', error.message);
         setAssemblies([]);
       } else {
         const mapped = (data ?? []).map((r: Record<string, unknown>) => ({
@@ -279,7 +281,7 @@ export default function NotificationBroadcastCenterPage() {
         error?: string;
       };
       if (!res.ok) {
-        console.error('preview:', d.error ?? res.status);
+        if (__DEV__) console.error('preview:', d.error ?? res.status);
         setPreviewCount(0);
         setPreviewTokens(0);
         return;
@@ -287,7 +289,7 @@ export default function NotificationBroadcastCenterPage() {
       setPreviewCount(typeof d.profile_count === 'number' ? d.profile_count : 0);
       setPreviewTokens(typeof d.token_count === 'number' ? d.token_count : 0);
     } catch (e) {
-      console.error('preview:', e);
+      if (__DEV__) console.error('preview:', e);
       setPreviewCount(0);
       setPreviewTokens(0);
     } finally {

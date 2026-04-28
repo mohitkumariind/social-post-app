@@ -26,6 +26,20 @@ import { supabase } from '@/lib/supabase';
 import { isPartyOtherId, LANGUAGE_OPTIONS, LANGUAGE_TO_STATES, PARTIES_DATA } from '@/lib/constants';
 import { captionsJsonForPostColumn, isLikelyEventUuid, normalizeCaptionsFromDb } from '@/lib/captions';
 
+const __DEV__ = process.env.NODE_ENV !== 'production';
+
+const devConsole = {
+  log: (...args: any[]) => {
+    if (__DEV__) console.log(...args);
+  },
+  warn: (...args: any[]) => {
+    if (__DEV__) console.warn(...args);
+  },
+  error: (...args: any[]) => {
+    if (__DEV__) console.error(...args);
+  },
+};
+
 // --- TYPES ---
 interface Post {
   id: string;
@@ -207,7 +221,7 @@ export default function App() {
       setStatesLoading(true);
       const { data, error } = await supabase.from('states').select('*');
       if (error) {
-        console.error('fetchStates error:', error.message);
+        if (__DEV__) console.error('fetchStates error:', error.message);
         setAvailableStates([]);
       } else {
         const raw = data ?? [];
@@ -226,7 +240,7 @@ export default function App() {
     const fetchEvents = async () => {
       const { data, error } = await supabase.from('events').select('*').order('created_at', { ascending: false });
       if (error) {
-        console.error('fetchEvents error:', error);
+        if (__DEV__) console.error('fetchEvents error:', error);
         setEvents([]);
         return;
       }
@@ -255,7 +269,7 @@ export default function App() {
             .select('id', { count: 'exact', head: true })
             .eq('category', ev.name);
           if (cntErr) {
-            console.error('[fetchEvents] posts count error:', cntErr.message);
+            if (__DEV__) console.error('[fetchEvents] posts count error:', cntErr.message);
             return ev;
           }
           return { ...ev, assetsCount: count ?? 0 };
@@ -320,7 +334,7 @@ export default function App() {
       }
       const { data, error } = await supabase.from('loksabha').select('*').in('state_id', idsAsNumbers);
       if (error) {
-        console.error('fetchLoksabhas error:', error.message);
+        if (__DEV__) console.error('fetchLoksabhas error:', error.message);
         setAvailableLoksabhas([]);
       } else {
         const raw = data ?? [];
@@ -354,7 +368,7 @@ export default function App() {
       }
       const { data, error } = await supabase.from('assembly').select('*').in('loksabha_id', idsAsNumbers);
       if (error) {
-        console.error('fetchAssemblies error:', error.message);
+        if (__DEV__) console.error('fetchAssemblies error:', error.message);
         setAvailableAssemblies([]);
       } else {
         const raw = data ?? [];
@@ -404,7 +418,7 @@ export default function App() {
       if (!error) return;
     }
     const { error } = await supabase.from('events').delete().eq('name', ev.name);
-    if (error) console.error('Events delete error:', error);
+    if (error) devConsole.error('Events delete error:', error);
   };
 
   /**
@@ -418,7 +432,7 @@ export default function App() {
     if (error) {
       ({ error } = await supabase.from('posts').update({ captions: jsonStr }).eq('category', ev.name));
     }
-    if (error) console.error('sync graphics captions to posts:', error.message, error);
+    if (error) devConsole.error('sync graphics captions to posts:', error.message, error);
   };
 
   const createEvent = async () => {
@@ -441,7 +455,7 @@ export default function App() {
       .select()
       .single();
     if (error) {
-      console.error('Insert Error:', error.message, error.details, error.hint);
+      devConsole.error('Insert Error:', error.message, error.details, error.hint);
       alert('Error: ' + error.message);
       return;
     }
@@ -481,7 +495,7 @@ export default function App() {
       fetchEventByIdOrName(ev, 'captions, party, state, language, loksabha, assembly'),
       postsQuery.order('created_at', { ascending: false }),
     ]);
-    if (eventsRes.error) console.error('openEvent events fetch:', eventsRes.error);
+    if (eventsRes.error) devConsole.error('openEvent events fetch:', eventsRes.error);
     const eventRow =
       !eventsRes.error && eventsRes.data != null ? (eventsRes.data as unknown as Record<string, unknown>) : null;
     const dbCaptions = normalizeCaptionsFromDb(eventRow?.captions ?? ev.captions);
@@ -526,7 +540,7 @@ export default function App() {
     /** Always pull latest captions from `events` so new rows match DB (not stale React state). */
     const evCaptionsRes = await fetchEventByIdOrName(selectedEvent, 'captions');
     if (evCaptionsRes.error) {
-      console.error('[handleUpload] Failed to read events.captions:', evCaptionsRes.error.message, evCaptionsRes.error);
+      devConsole.error('[handleUpload] Failed to read events.captions:', evCaptionsRes.error.message, evCaptionsRes.error);
     }
     const capRow =
       !evCaptionsRes.error && evCaptionsRes.data != null
@@ -550,7 +564,7 @@ export default function App() {
         const up = await adminStorageUpload('post-images', storagePath, file);
         imageUrl = up.publicUrl;
       } catch (uploadErr) {
-        console.error('Upload error:', uploadErr);
+        devConsole.error('Upload error:', uploadErr);
         continue;
       }
 
@@ -580,7 +594,7 @@ export default function App() {
       }
 
       if (insertErr || !insertData) {
-        if (insertErr) console.error('DB insert error:', insertErr);
+        if (insertErr) devConsole.error('DB insert error:', insertErr);
         continue;
       }
 
@@ -601,7 +615,7 @@ export default function App() {
 
       /** Re-read `events.captions` and push to every graphics post (same merge as inserts). */
       const evSnapRes = await fetchEventByIdOrName(selectedEvent, 'captions');
-      if (evSnapRes.error) console.error('[handleUpload] post-upload events read:', evSnapRes.error.message);
+      if (evSnapRes.error) devConsole.error('[handleUpload] post-upload events read:', evSnapRes.error.message);
       const snapRow =
         !evSnapRes.error && evSnapRes.data != null
           ? (evSnapRes.data as unknown as Record<string, unknown>)
@@ -661,21 +675,21 @@ export default function App() {
         try {
           await adminStorageRemove('post-images', filePaths);
         } catch (storageEx) {
-          console.error('Storage delete exception:', storageEx);
+          devConsole.error('Storage delete exception:', storageEx);
         }
       }
 
       try {
         const { error: postsErr } = await supabase.from('posts').delete().eq('category', ev.name);
-        if (postsErr) console.error('Posts delete error:', postsErr);
+        if (postsErr) devConsole.error('Posts delete error:', postsErr);
       } catch (postsEx) {
-        console.error('Posts delete exception:', postsEx);
+        devConsole.error('Posts delete exception:', postsEx);
       }
 
       try {
         await deleteEventRowByIdOrName(ev);
       } catch (eventsEx) {
-        console.error('Events delete exception:', eventsEx);
+        devConsole.error('Events delete exception:', eventsEx);
       }
 
       setEvents((prev) => prev.filter((e) => e.id !== ev.id));
@@ -684,7 +698,7 @@ export default function App() {
         setSelectedEvent(null);
       }
     } catch (err) {
-      console.error('deleteEvent exception:', err);
+      devConsole.error('deleteEvent exception:', err);
     } finally {
       setIsDeleting(null);
     }
@@ -698,13 +712,13 @@ export default function App() {
     const ev = selectedEvent;
 
     if (!postId || typeof postId !== 'string') {
-      console.error('removePost: invalid postToDelete.id', postToDelete);
+      devConsole.error('removePost: invalid postToDelete.id', postToDelete);
       return;
     }
 
     const { error: dbError } = await supabase.from('posts').delete().eq('id', postId);
     if (dbError) {
-      console.error('posts table delete error:', dbError);
+      devConsole.error('posts table delete error:', dbError);
     }
 
     const filePath = getStoragePathFromUrl(postUrl);
@@ -712,7 +726,7 @@ export default function App() {
       try {
         await adminStorageRemove('post-images', [filePath]);
       } catch (e) {
-        console.error('removePost storage:', e);
+        devConsole.error('removePost storage:', e);
       }
     }
 
@@ -776,7 +790,7 @@ export default function App() {
     const { error: eventsErr } = await updateEventByIdOrName(editingEvent, updatePayload);
 
     if (eventsErr) {
-      console.error('Full Error Object:', eventsErr);
+      devConsole.error('Full Error Object:', eventsErr);
       alert('Error: ' + eventsErr.message);
       return;
     }
@@ -840,7 +854,7 @@ export default function App() {
       });
       const payload = (await res.json()) as { error?: string };
       if (!res.ok || payload.error) {
-        console.error('worker notify:', payload.error ?? res.status);
+        devConsole.error('worker notify:', payload.error ?? res.status);
         alert(
           'Event saved, but worker notification failed: ' + (payload.error || `HTTP ${res.status}`)
         );
@@ -848,7 +862,7 @@ export default function App() {
         workerNotifyOk = true;
       }
     } catch (e) {
-      console.error('worker notify:', e);
+      devConsole.error('worker notify:', e);
       alert(
         'Event saved, but worker notification failed: ' + (e instanceof Error ? e.message : String(e))
       );

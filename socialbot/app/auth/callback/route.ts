@@ -2,6 +2,8 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 
+const __DEV__ = process.env.NODE_ENV !== 'production';
+
 type CookieToSet = { name: string; value: string; options?: CookieOptions };
 
 /**
@@ -41,7 +43,7 @@ export async function GET(request: Request) {
 
   const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
   if (exchangeError) {
-    if (process.env.NODE_ENV === 'development') {
+    if (__DEV__) {
       console.warn('[auth/callback] exchangeCodeForSession:', exchangeError.message);
     }
     return failRedirect;
@@ -52,7 +54,7 @@ export async function GET(request: Request) {
     error: userError,
   } = await supabase.auth.getUser();
   if (userError || !user) {
-    if (process.env.NODE_ENV === 'development') {
+    if (__DEV__) {
       console.warn('[auth/callback] getUser after exchange:', userError?.message);
     }
     return failRedirect;

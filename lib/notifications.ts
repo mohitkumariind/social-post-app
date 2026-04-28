@@ -43,7 +43,7 @@ export function getExpoProjectId(): string {
     if (fromM1) return fromM1;
   }
 
-  console.warn('[notifications] Using FALLBACK_EAS_PROJECT_ID — verify app.json extra.eas.projectId');
+  if (__DEV__) console.warn('[notifications] Using FALLBACK_EAS_PROJECT_ID — verify app.json extra.eas.projectId');
   return FALLBACK_EAS_PROJECT_ID;
 }
 
@@ -64,9 +64,11 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
   }
 
   if (!Device.isDevice) {
-    console.warn(
-      '[notifications] Device.isDevice is false (emulator/simulator?). Expo push often needs a real device; still attempting token…'
-    );
+    if (__DEV__) {
+      console.warn(
+        '[notifications] Device.isDevice is false (emulator/simulator?). Expo push often needs a real device; still attempting token…'
+      );
+    }
   }
 
   const { status: existing } = await Notifications.getPermissionsAsync();
@@ -76,7 +78,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     finalStatus = status;
   }
   if (finalStatus !== 'granted') {
-    console.warn('[notifications] Notification permission not granted:', finalStatus);
+    if (__DEV__) console.warn('[notifications] Notification permission not granted:', finalStatus);
     if (!didShowNotificationPermissionAlert) {
       didShowNotificationPermissionAlert = true;
       Alert.alert(
@@ -107,7 +109,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
         return push.data;
       }
     } catch (e) {
-      console.warn('[notifications] getExpoPushTokenAsync attempt failed:', e);
+      if (__DEV__) console.warn('[notifications] getExpoPushTokenAsync attempt failed:', e);
     }
   }
 
@@ -152,11 +154,11 @@ export async function saveTokenToSupabase(token: string): Promise<boolean> {
       return true;
     }
 
-    console.warn('[notifications] push_tokens upsert failed:', error.message, error.code ?? '');
+    if (__DEV__) console.warn('[notifications] push_tokens upsert failed:', error.message, error.code ?? '');
     return false;
   }
 
-  console.warn('[notifications] saveTokenToSupabase: no session after retries');
+  if (__DEV__) console.warn('[notifications] saveTokenToSupabase: no session after retries');
   return false;
 }
 

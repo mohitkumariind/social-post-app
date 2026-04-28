@@ -2,6 +2,8 @@
 import { BarChart3, Calendar, ChevronRight, Users } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
 
+const __DEV__ = process.env.NODE_ENV !== 'production';
+
 interface PostRow {
   id: string;
   title: string;
@@ -36,7 +38,7 @@ export default function Dashboard() {
     (async () => {
       const res = await fetch('/api/admin/dashboard-stats', { credentials: 'same-origin' });
       if (!res.ok) {
-        if (process.env.NODE_ENV === 'development') {
+        if (__DEV__) {
           console.warn('[dashboard] dashboard-stats', res.status, await res.text());
         }
         return;

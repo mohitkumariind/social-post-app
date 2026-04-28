@@ -121,7 +121,7 @@ export default function LoginScreen() {
         },
         { onConflict: 'id' }
       );
-      if (profileError) console.error('Profile Upsert Error:', profileError);
+      if (profileError && __DEV__) console.error('Profile Upsert Error:', profileError);
 
       const { data: profileRow, error: profileFetchError } = await supabase
         .from('profiles')

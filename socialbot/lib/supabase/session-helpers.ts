@@ -2,6 +2,8 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
+const __DEV__ = process.env.NODE_ENV !== 'production';
+
 export type CookieToSet = { name: string; value: string; options?: CookieOptions };
 
 /**
@@ -67,7 +69,7 @@ export async function fetchProfileRole(
     .single();
 
   if (error || data == null) {
-    if (process.env.NODE_ENV === 'development' && error?.code !== 'PGRST116') {
+    if (__DEV__ && error?.code !== 'PGRST116') {
       console.warn('[proxy] profiles.role fetch (anon):', error?.message ?? 'no row');
     }
     return null;

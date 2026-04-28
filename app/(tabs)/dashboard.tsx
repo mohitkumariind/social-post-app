@@ -190,12 +190,14 @@ export default function DashboardScreen() {
       const { data, error } = await query;
       if (error) {
         setFetchError(error.message);
-        console.warn('[Dashboard fetchPosts] Supabase error:', {
-          message: error.message,
-          code: error.code,
-          details: error.details,
-          hint: error.hint,
-        });
+        if (__DEV__) {
+          console.warn('[Dashboard fetchPosts] Supabase error:', {
+            message: error.message,
+            code: error.code,
+            details: error.details,
+            hint: error.hint,
+          });
+        }
         if (__DEV__) console.warn('[Dashboard fetchPosts] raw error object:', error);
         setPosts([]);
         return;
@@ -238,7 +240,7 @@ export default function DashboardScreen() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setFetchError(msg);
-      console.warn('[Dashboard fetchPosts] exception:', err);
+      if (__DEV__) console.warn('[Dashboard fetchPosts] exception:', err);
       setPosts([]);
     } finally {
       if (!silent) setLoading(false);
