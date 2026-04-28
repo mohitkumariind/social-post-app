@@ -49,6 +49,22 @@ export default function RewardsScreen() {
 
   const earnedBadges = ALL_RANKS.filter((rank) => rank.lv <= currentLevel);
 
+  const resolveUniqueSnapshotDest = async (opts: {
+    dir: string;
+    filenameBase: string;
+    ext: string;
+  }): Promise<{ dest: string; filename: string }> => {
+    for (let i = 0; i < 50; i++) {
+      const suffix = i === 0 ? '' : `_${i}`;
+      const filename = `${opts.filenameBase}${suffix}.${opts.ext}`;
+      const dest = `${opts.dir}${filename}`;
+      const info = await FileSystem.getInfoAsync(dest);
+      if (!info.exists) return { dest, filename };
+    }
+    const filename = `${opts.filenameBase}_${Date.now()}.${opts.ext}`;
+    return { dest: `${opts.dir}${filename}`, filename };
+  };
+
   const captureAndShare = async () => {
     if (Platform.OS === 'web') {
       Alert.alert("Note", "Image sharing mobile par hi chalti hai bhai!");
@@ -58,10 +74,13 @@ export default function RewardsScreen() {
       const shotRef = viewShotRef.current;
       if (!shotRef) throw new Error('capture not ready');
       const rawUri: string = await shotRef.capture();
-      const filename = getProfessionalFileName({ category: 'rewards', ext: 'png' });
-      const dir = `${(FileSystem as any).cacheDirectory}snapshots/`;
-      const dest = `${dir}${filename}`;
+      const baseFilename = getProfessionalFileName({ category: 'rewards', ext: 'png' }).replace(/\.png$/i, '');
+      const cacheDir: string | null =
+        (FileSystem as any).cacheDirectory ?? (FileSystem as any).documentDirectory ?? null;
+      if (!cacheDir) throw new Error('cache directory unavailable');
+      const dir = `${cacheDir}snapshots/`;
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+      const { dest, filename } = await resolveUniqueSnapshotDest({ dir, filenameBase: baseFilename, ext: 'png' });
       await FileSystem.copyAsync({ from: rawUri, to: dest });
       await Sharing.shareAsync(dest, { dialogTitle: filename });
     } catch {

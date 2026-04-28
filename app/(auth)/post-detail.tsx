@@ -349,20 +349,42 @@ export default function PostDetailScreen() {
     return map[keys[0]] ?? null;
   };
 
+  const resolveUniqueSnapshotDest = async (opts: {
+    dir: string;
+    filenameBase: string;
+    ext: string;
+  }): Promise<{ dest: string; filename: string }> => {
+    // Common failure mode on real phones: user taps save/share multiple times within the same minute.
+    // Our professional filename helper is minute-granular → the destination already exists → copyAsync throws.
+    for (let i = 0; i < 50; i++) {
+      const suffix = i === 0 ? '' : `_${i}`;
+      const filename = `${opts.filenameBase}${suffix}.${opts.ext}`;
+      const dest = `${opts.dir}${filename}`;
+      const info = await FileSystem.getInfoAsync(dest);
+      if (!info.exists) return { dest, filename };
+    }
+    // Fall back to a timestamped suffix as a last resort.
+    const filename = `${opts.filenameBase}_${Date.now()}.${opts.ext}`;
+    return { dest: `${opts.dir}${filename}`, filename };
+  };
+
   const captureSnapshotToNamedFile = async (): Promise<{ uri: string; filename: string } | null> => {
     const shotRef = getBestViewShot();
     if (!shotRef) return null;
     const filenameBase = buildSnapshotFilename(params as unknown as Record<string, unknown>);
     const ext = 'jpg';
-    const dir = `${(FileSystem as any).cacheDirectory}snapshots/`;
-    const dest = `${dir}${filenameBase}.${ext}`;
+    const cacheDir: string | null =
+      (FileSystem as any).cacheDirectory ?? (FileSystem as any).documentDirectory ?? null;
+    if (!cacheDir) return null;
+    const dir = `${cacheDir}snapshots/`;
 
     try {
       const rawUri: string = await shotRef.capture();
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+      const { dest, filename } = await resolveUniqueSnapshotDest({ dir, filenameBase, ext });
       // Create a stable, user-friendly filename for share sheets / downloads.
       await FileSystem.copyAsync({ from: rawUri, to: dest });
-      return { uri: dest, filename: `${filenameBase}.${ext}` };
+      return { uri: dest, filename };
     } catch (e) {
       if (__DEV__) console.warn('[PostDetail] captureSnapshotToNamedFile failed', e);
       return null;
