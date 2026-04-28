@@ -201,7 +201,8 @@ export default function PostDetailScreen() {
   const params = useLocalSearchParams();
   const { t } = useLang();
   const { userInfo } = useUser();
-  const viewShotRef = useRef<any>(null);
+  const viewShotRefs = useRef<Record<number, any>>({});
+  const captureIndexRef = useRef<number>(0);
 
   const initialIndex = params?.currentIndex != null ? parseInt(String(params.currentIndex), 10) : 0;
 
@@ -327,8 +328,21 @@ export default function PostDetailScreen() {
       ? (frames[selectedFrame - 2]?.url || frames[selectedFrame - 2]?.frame_url || null)
       : null;
 
+  const getBestViewShot = (): any | null => {
+    const map = viewShotRefs.current;
+    const idx = captureIndexRef.current;
+    if (map[idx]) return map[idx];
+    if (map[activeIndex]) return map[activeIndex];
+    const keys = Object.keys(map)
+      .map((k) => Number(k))
+      .filter((n) => Number.isFinite(n));
+    if (keys.length === 0) return null;
+    keys.sort((a, b) => Math.abs(a - idx) - Math.abs(b - idx));
+    return map[keys[0]] ?? null;
+  };
+
   const captureSnapshotToNamedFile = async (): Promise<{ uri: string; filename: string } | null> => {
-    const shotRef = viewShotRef.current;
+    const shotRef = getBestViewShot();
     if (!shotRef) return null;
     const filenameBase = buildSnapshotFilename(params as unknown as Record<string, unknown>);
     const ext = 'jpg';
@@ -370,14 +384,18 @@ export default function PostDetailScreen() {
   const handleShare = async () => {
     try {
       const named = await captureSnapshotToNamedFile();
-      if (!named) return;
+      if (!named) {
+        Alert.alert(t('save_error_title'), t('save_error_message'));
+        return;
+      }
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(named.uri, { dialogTitle: named.filename });
+        await Sharing.shareAsync(named.uri, { dialogTitle: named.filename, mimeType: 'image/jpeg' });
       } else {
         Share.share({ message: t('share_message') });
       }
     } catch {
       if (__DEV__) console.warn('share failed');
+      Alert.alert(t('save_error_title'), t('save_error_message'));
     }
   };
 
@@ -582,12 +600,20 @@ export default function PostDetailScreen() {
             pagingEnabled
             showsHorizontalScrollIndicator={false}
             onMomentumScrollEnd={handleScrollEnd}
+            onScroll={(e) => {
+              const x = e.nativeEvent.contentOffset?.x ?? 0;
+              const idx = Math.round(x / width);
+              captureIndexRef.current = idx;
+            }}
             scrollEventThrottle={16}
           >
             {infiniteData.map((item, index) => (
               <View key={`${item}-${index}`} style={styles.slideWrapper}>
                 <ViewShot
-                  ref={index === activeIndex ? viewShotRef : null}
+                  ref={(ref) => {
+                    if (ref) viewShotRefs.current[index] = ref;
+                    else delete viewShotRefs.current[index];
+                  }}
                   options={{
                     format: 'jpg',
                     quality: 1.0,
