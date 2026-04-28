@@ -380,11 +380,24 @@ export default function PostDetailScreen() {
 
     try {
       const rawUri: string = await shotRef.capture();
+      if (!rawUri || typeof rawUri !== 'string') return null;
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
       const { dest, filename } = await resolveUniqueSnapshotDest({ dir, filenameBase, ext });
       // Create a stable, user-friendly filename for share sheets / downloads.
-      await FileSystem.copyAsync({ from: rawUri, to: dest });
-      return { uri: dest, filename };
+      // Some Android devices/providers may return a URI that cannot be copied; in that case fall back to rawUri.
+      try {
+        await FileSystem.copyAsync({ from: rawUri, to: dest });
+        return { uri: dest, filename };
+      } catch (copyErr) {
+        try {
+          // If copy fails due to provider restrictions, move may still work when it's a file URI.
+          await FileSystem.moveAsync({ from: rawUri, to: dest });
+          return { uri: dest, filename };
+        } catch {
+          if (__DEV__) console.warn('[PostDetail] copy/move snapshot failed, using rawUri', copyErr);
+          return { uri: rawUri, filename };
+        }
+      }
     } catch (e) {
       if (__DEV__) console.warn('[PostDetail] captureSnapshotToNamedFile failed', e);
       return null;
@@ -405,9 +418,10 @@ export default function PostDetailScreen() {
       }
       await MediaLibrary.saveToLibraryAsync(named.uri);
       Alert.alert(t('save_success_title'), t('save_success_message'));
-    } catch {
-      if (__DEV__) console.warn('save poster failed');
-      Alert.alert(t('save_error_title'), t('save_error_message'));
+    } catch (e) {
+      if (__DEV__) console.warn('save poster failed', e);
+      const msg = e instanceof Error ? e.message : String(e ?? '');
+      Alert.alert(t('save_error_title'), msg || t('save_error_message'));
     }
   };
 
@@ -423,9 +437,10 @@ export default function PostDetailScreen() {
       } else {
         Share.share({ message: t('share_message') });
       }
-    } catch {
-      if (__DEV__) console.warn('share failed');
-      Alert.alert(t('save_error_title'), t('save_error_message'));
+    } catch (e) {
+      if (__DEV__) console.warn('share failed', e);
+      const msg = e instanceof Error ? e.message : String(e ?? '');
+      Alert.alert(t('save_error_title'), msg || t('save_error_message'));
     }
   };
 
