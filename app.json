@@ -82,7 +82,8 @@
     },
     "updates": {
       "checkAutomatically": "ON_LOAD",
-      "fallbackToCacheTimeout": 0
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/32dd35fb-bdfc-4cf8-a71a-fadab7018be0"
     },
     "owner": "mohitkumariind"
   }
