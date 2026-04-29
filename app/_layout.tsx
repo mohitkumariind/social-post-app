@@ -247,28 +247,36 @@ export default function RootLayout() {
   const insets = useSafeAreaInsets();
   const [otaLabel, setOtaLabel] = useState<string>('OTA: checking…');
   const [otaMetaLine, setOtaMetaLine] = useState<string>('');
+  const updateCheckInFlightRef = useRef(false);
 
   useEffect(() => {
     // OTA audit logs (shows if the installed build is checking the right channel and why updates may not apply).
     // These logs are safe in production and do not change UI.
     void (async () => {
       try {
+        // NOTE: checkForUpdateAsync is not re-entrant; calling it while a previous check/fetch is running
+        // can be rejected by the native module. Use the same in-flight lock as the debug button.
+        if (updateCheckInFlightRef.current) return;
+        updateCheckInFlightRef.current = true;
+
         if (__DEV__) {
           console.log('[updates] channel:', Updates.channel);
           console.log('[updates] runtimeVersion:', Updates.runtimeVersion);
           console.log('[updates] updateId:', Updates.updateId);
           console.log('[updates] isEmbeddedLaunch:', Updates.isEmbeddedLaunch);
         }
+
         const result = await Updates.checkForUpdateAsync();
         if (__DEV__) console.log('[updates] checkForUpdateAsync:', result);
         if (result.isAvailable) {
           const fetched = await Updates.fetchUpdateAsync();
           if (__DEV__) console.log('[updates] fetchUpdateAsync:', fetched);
-          // Apply immediately on next tick.
           await Updates.reloadAsync();
         }
       } catch (e) {
         if (__DEV__) console.warn('[updates] error', e);
+      } finally {
+        updateCheckInFlightRef.current = false;
       }
     })();
   }, []);
@@ -285,7 +293,12 @@ export default function RootLayout() {
   }, []);
 
   const onCheckForUpdates = async () => {
+    if (updateCheckInFlightRef.current) {
+      Alert.alert('Updates', 'Already checking for updates… Please wait 10–20 seconds and try again.');
+      return;
+    }
     try {
+      updateCheckInFlightRef.current = true;
       const isEnabled = (Updates as any).isEnabled;
       if (!isEnabled) {
         Alert.alert(
@@ -324,6 +337,8 @@ export default function RootLayout() {
         isEmbeddedLaunch: (Updates as any).isEmbeddedLaunch,
       };
       Alert.alert('Updates error', JSON.stringify({ meta, error: errPayload }));
+    } finally {
+      updateCheckInFlightRef.current = false;
     }
   };
 
