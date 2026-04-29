@@ -246,6 +246,7 @@ export default function RootLayout() {
   const hideNativeSplashOnce = useRef(false);
   const insets = useSafeAreaInsets();
   const [otaLabel, setOtaLabel] = useState<string>('OTA: checking…');
+  const [otaMetaLine, setOtaMetaLine] = useState<string>('');
 
   useEffect(() => {
     // OTA audit logs (shows if the installed build is checking the right channel and why updates may not apply).
@@ -276,10 +277,29 @@ export default function RootLayout() {
     const id = String((Updates as any)?.updateId ?? '').trim();
     if (!id) setOtaLabel('Running Embedded Binary');
     else setOtaLabel(`Running OTA Update: ${id}`);
+
+    const isEnabled = (Updates as any).isEnabled;
+    const channel = String((Updates as any).channel ?? '').trim();
+    const rv = String((Updates as any).runtimeVersion ?? '').trim();
+    setOtaMetaLine(`enabled=${String(isEnabled)}  channel=${channel || 'n/a'}  rv=${rv || 'n/a'}`);
   }, []);
 
   const onCheckForUpdates = async () => {
     try {
+      const isEnabled = (Updates as any).isEnabled;
+      if (!isEnabled) {
+        Alert.alert(
+          'Updates disabled in this build',
+          JSON.stringify({
+            isEnabled,
+            channel: (Updates as any).channel,
+            runtimeVersion: (Updates as any).runtimeVersion,
+            updateId: (Updates as any).updateId,
+            isEmbeddedLaunch: (Updates as any).isEmbeddedLaunch,
+          })
+        );
+        return;
+      }
       const meta = {
         isEnabled: (Updates as any).isEnabled,
         channel: (Updates as any).channel,
@@ -378,6 +398,9 @@ export default function RootLayout() {
                       <Text style={styles.otaDebugText} numberOfLines={2}>
                         {otaLabel}
                       </Text>
+                      <Text style={styles.otaDebugMeta} numberOfLines={1}>
+                        {otaMetaLine}
+                      </Text>
                       <Text style={styles.otaDebugHint} numberOfLines={1}>
                         Tap to check for updates
                       </Text>
@@ -440,6 +463,12 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 12,
     fontWeight: '800',
+  },
+  otaDebugMeta: {
+    marginTop: 6,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 11,
+    fontWeight: '700',
   },
   otaDebugHint: {
     marginTop: 6,
