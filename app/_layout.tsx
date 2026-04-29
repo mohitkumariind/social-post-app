@@ -3,7 +3,7 @@ import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Updates from 'expo-updates';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Image, LogBox, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Image, LogBox, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { I18nextProvider } from 'react-i18next';
@@ -118,6 +118,7 @@ function PushNotificationLayer() {
 
   /** Save Expo token whenever session exists — not only via `isLoggedIn` (avoids race after OAuth). */
   useEffect(() => {
+    if (!isLoggedIn) return;
     let cancelled = false;
 
     const registerAndSave = async () => {
@@ -149,9 +150,10 @@ function PushNotificationLayer() {
       cancelled = true;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [isLoggedIn]);
 
   useEffect(() => {
+    if (!isLoggedIn) return;
     const sub = Notifications.addNotificationReceivedListener((notification) => {
       const { title, body } = notification.request.content;
       setBanner({
@@ -165,14 +167,15 @@ function PushNotificationLayer() {
       sub.remove();
       if (bannerClearRef.current) clearTimeout(bannerClearRef.current);
     };
-  }, []);
+  }, [isLoggedIn]);
 
   useEffect(() => {
+    if (!isLoggedIn) return;
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       void recordBroadcastOpenFromNotificationResponse(response);
     });
     return () => sub.remove();
-  }, []);
+  }, [isLoggedIn]);
 
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -182,7 +185,8 @@ function PushNotificationLayer() {
     })();
   }, [isLoggedIn]);
 
-  if (!banner) return null;
+  const shouldRenderBanner = isLoggedIn && !!banner;
+  if (!shouldRenderBanner) return null;
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
@@ -245,8 +249,6 @@ export default function RootLayout() {
   const opacity = useRef(new Animated.Value(0)).current;
   const hideNativeSplashOnce = useRef(false);
   const insets = useSafeAreaInsets();
-  const [otaLabel, setOtaLabel] = useState<string>('OTA: checking…');
-  const [otaMetaLine, setOtaMetaLine] = useState<string>('');
   const updateCheckInFlightRef = useRef(false);
 
   useEffect(() => {
@@ -266,7 +268,23 @@ export default function RootLayout() {
           console.log('[updates] isEmbeddedLaunch:', Updates.isEmbeddedLaunch);
         }
 
-        const result = await Updates.checkForUpdateAsync();
+        let result: Updates.UpdateCheckResult | null = null;
+        let lastErr: unknown = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            result = await Updates.checkForUpdateAsync();
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < 2) {
+              await new Promise((r) => setTimeout(r, 1200));
+            }
+          }
+        }
+        if (!result) {
+          if (__DEV__) console.warn('[updates] checkForUpdateAsync failed after retries', lastErr);
+          return;
+        }
         if (__DEV__) console.log('[updates] checkForUpdateAsync:', result);
         if (result.isAvailable) {
           const fetched = await Updates.fetchUpdateAsync();
@@ -282,67 +300,6 @@ export default function RootLayout() {
       }
     })();
   }, []);
-
-  useEffect(() => {
-    const id = String((Updates as any)?.updateId ?? '').trim();
-    if (!id) setOtaLabel('Running Embedded Binary');
-    else setOtaLabel(`Running OTA Update: ${id}`);
-
-    const isEnabled = (Updates as any).isEnabled;
-    const channel = String((Updates as any).channel ?? '').trim();
-    const rv = String((Updates as any).runtimeVersion ?? '').trim();
-    setOtaMetaLine(`enabled=${String(isEnabled)}  channel=${channel || 'n/a'}  rv=${rv || 'n/a'}`);
-  }, []);
-
-  const onCheckForUpdates = async () => {
-    if (updateCheckInFlightRef.current) {
-      Alert.alert('Updates', 'Already checking for updates… Please wait 10–20 seconds and try again.');
-      return;
-    }
-    try {
-      updateCheckInFlightRef.current = true;
-      const isEnabled = (Updates as any).isEnabled;
-      if (!isEnabled) {
-        Alert.alert(
-          'Updates disabled in this build',
-          JSON.stringify({
-            isEnabled,
-            channel: (Updates as any).channel,
-            runtimeVersion: (Updates as any).runtimeVersion,
-            updateId: (Updates as any).updateId,
-            isEmbeddedLaunch: (Updates as any).isEmbeddedLaunch,
-          })
-        );
-        return;
-      }
-      const meta = {
-        isEnabled: (Updates as any).isEnabled,
-        channel: (Updates as any).channel,
-        runtimeVersion: (Updates as any).runtimeVersion,
-        updateId: (Updates as any).updateId,
-        isEmbeddedLaunch: (Updates as any).isEmbeddedLaunch,
-      };
-      const res = await Updates.checkForUpdateAsync();
-      Alert.alert('Updates.checkForUpdateAsync', JSON.stringify({ meta, res }));
-    } catch (e) {
-      const errPayload =
-        e instanceof Error
-          ? { name: e.name, message: e.message, stack: e.stack }
-          : typeof e === 'object' && e != null
-            ? e
-            : { message: String(e ?? '') };
-      const meta = {
-        isEnabled: (Updates as any).isEnabled,
-        channel: (Updates as any).channel,
-        runtimeVersion: (Updates as any).runtimeVersion,
-        updateId: (Updates as any).updateId,
-        isEmbeddedLaunch: (Updates as any).isEmbeddedLaunch,
-      };
-      Alert.alert('Updates error', JSON.stringify({ meta, error: errPayload }));
-    } finally {
-      updateCheckInFlightRef.current = false;
-    }
-  };
 
   useEffect(() => {
     LogBox.ignoreLogs(['Unable to activate keep awake']);
@@ -410,19 +367,6 @@ export default function RootLayout() {
                 <View style={{ flex: 1 }}>
                   <Stack screenOptions={{ headerShown: false }} />
                   <PushNotificationLayer />
-                  <View style={styles.otaDebugWrap} pointerEvents="box-none">
-                    <Pressable style={styles.otaDebugCard} onPress={() => void onCheckForUpdates()}>
-                      <Text style={styles.otaDebugText} numberOfLines={2}>
-                        {otaLabel}
-                      </Text>
-                      <Text style={styles.otaDebugMeta} numberOfLines={1}>
-                        {otaMetaLine}
-                      </Text>
-                      <Text style={styles.otaDebugHint} numberOfLines={1}>
-                        Tap to check for updates
-                      </Text>
-                    </Pressable>
-                  </View>
                 </View>
               </SessionSync>
             </UserProvider>
@@ -462,37 +406,6 @@ export default function RootLayout() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#FFFFFF' },
-  otaDebugWrap: {
-    position: 'absolute',
-    left: 10,
-    bottom: 110,
-    zIndex: 99999,
-    elevation: 99999,
-  },
-  otaDebugCard: {
-    maxWidth: 320,
-    backgroundColor: 'rgba(0,0,0,0.78)',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-  },
-  otaDebugText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  otaDebugMeta: {
-    marginTop: 6,
-    color: 'rgba(255,255,255,0.92)',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  otaDebugHint: {
-    marginTop: 6,
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 11,
-    fontWeight: '600',
-  },
   loaderOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#FFFFFF',

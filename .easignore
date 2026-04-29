@@ -5,9 +5,11 @@ node_modules/
 .git/
 
 # Native build outputs
+android/
 android/build/
 android/app/build/
 android/.gradle/
+ios/
 ios/build/
 ios/Pods/
 ios/DerivedData/
@@ -16,6 +18,7 @@ ios/DerivedData/
 dist/
 web-build/
 .expo/
+.next/
 
 # Artifacts
 *.apk
@@ -28,12 +31,15 @@ web-build/
 *.log
 .npm/
 .yarn/
+.supabase/
+.temp/
 
 # IDE / OS
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
+.kotlin/
 
 # Admin Next.js app — not part of the Expo mobile app (omit from upload)
 socialbot/
@@ -42,3 +48,7 @@ socialbot/
 docs/
 __tests__/
 *.md
+
+# Firebase Android config (do not upload; inject via EAS secret/file env)
+google-services.json
+**/google-services.json
