@@ -271,7 +271,9 @@ export default function RootLayout() {
         if (result.isAvailable) {
           const fetched = await Updates.fetchUpdateAsync();
           if (__DEV__) console.log('[updates] fetchUpdateAsync:', fetched);
-          await Updates.reloadAsync();
+          // Apply immediately after a successful fetch (no need to wait for next launch).
+          const isNew = typeof (fetched as any)?.isNew === 'boolean' ? (fetched as any).isNew : true;
+          if (isNew) await Updates.reloadAsync();
         }
       } catch (e) {
         if (__DEV__) console.warn('[updates] error', e);
