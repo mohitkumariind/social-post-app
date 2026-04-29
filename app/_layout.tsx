@@ -280,10 +280,30 @@ export default function RootLayout() {
 
   const onCheckForUpdates = async () => {
     try {
+      const meta = {
+        isEnabled: (Updates as any).isEnabled,
+        channel: (Updates as any).channel,
+        runtimeVersion: (Updates as any).runtimeVersion,
+        updateId: (Updates as any).updateId,
+        isEmbeddedLaunch: (Updates as any).isEmbeddedLaunch,
+      };
       const res = await Updates.checkForUpdateAsync();
-      Alert.alert('Updates.checkForUpdateAsync', JSON.stringify(res));
+      Alert.alert('Updates.checkForUpdateAsync', JSON.stringify({ meta, res }));
     } catch (e) {
-      Alert.alert('Updates error', e instanceof Error ? e.message : String(e ?? ''));
+      const errPayload =
+        e instanceof Error
+          ? { name: e.name, message: e.message, stack: e.stack }
+          : typeof e === 'object' && e != null
+            ? e
+            : { message: String(e ?? '') };
+      const meta = {
+        isEnabled: (Updates as any).isEnabled,
+        channel: (Updates as any).channel,
+        runtimeVersion: (Updates as any).runtimeVersion,
+        updateId: (Updates as any).updateId,
+        isEmbeddedLaunch: (Updates as any).isEmbeddedLaunch,
+      };
+      Alert.alert('Updates error', JSON.stringify({ meta, error: errPayload }));
     }
   };
 
