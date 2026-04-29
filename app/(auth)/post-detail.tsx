@@ -3,7 +3,6 @@ import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system';
 import { Image as ExpoImage } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
-import * as Updates from 'expo-updates';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -205,7 +204,6 @@ export default function PostDetailScreen() {
   const viewShotRefs = useRef<Record<number, any>>({});
   const captureIndexRef = useRef<number>(0);
   const lastCaptureDiagRef = useRef<string>('');
-  const [otaLabel, setOtaLabel] = useState<string>('Checking OTA…');
 
   const initialIndex = params?.currentIndex != null ? parseInt(String(params.currentIndex), 10) : 0;
 
@@ -226,26 +224,6 @@ export default function PostDetailScreen() {
       captureIndexRef.current = 0;
     };
   }, []);
-
-  useEffect(() => {
-    const id = String((Updates as any)?.updateId ?? '').trim();
-    if (!id) setOtaLabel('Running Embedded Binary');
-    else setOtaLabel(`Running OTA Update: ${id}`);
-  }, []);
-
-  const handleCheckForUpdates = async () => {
-    try {
-      const res = await Updates.checkForUpdateAsync();
-      Alert.alert('Updates.checkForUpdateAsync', JSON.stringify(res));
-      if (res.isAvailable) {
-        const fetched = await Updates.fetchUpdateAsync();
-        Alert.alert('Updates.fetchUpdateAsync', JSON.stringify(fetched));
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e ?? '');
-      Alert.alert('Updates error', msg || 'Unknown error');
-    }
-  };
 
   const goBackToExpandedCategory = useCallback(() => {
     if (backNavLockRef.current) return true;
@@ -697,16 +675,6 @@ export default function PostDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.otaDebugWrap} pointerEvents="box-none">
-        <View style={styles.otaDebugCard}>
-          <Text style={styles.otaDebugText} numberOfLines={2}>
-            {otaLabel}
-          </Text>
-          <TouchableOpacity onPress={() => void handleCheckForUpdates()} style={styles.otaDebugBtn}>
-            <Text style={styles.otaDebugBtnText}>Check for Updates</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
       <View style={styles.header}>
         <TouchableOpacity onPress={goBackToExpandedCategory} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color="#333" />
@@ -845,7 +813,7 @@ export default function PostDetailScreen() {
           </TouchableOpacity>
           <TouchableOpacity style={styles.downloadBtn} onPress={handleDownload}>
             <Ionicons name="download-outline" size={22} color="#FFF" />
-            <Text style={styles.downloadBtnText}>{t('save_to_gallery')}</Text>
+            <Text style={styles.downloadBtnText}>{t('save_to_gallery')} ✨</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -862,37 +830,6 @@ export default function PostDetailScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFF' },
-  otaDebugWrap: {
-    position: 'absolute',
-    left: 10,
-    bottom: 120,
-    zIndex: 9999,
-  },
-  otaDebugCard: {
-    maxWidth: 320,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-  },
-  otaDebugText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  otaDebugBtn: {
-    marginTop: 8,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    alignSelf: 'flex-start',
-  },
-  otaDebugBtnText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '800',
-  },
   header: { paddingTop: 40, paddingHorizontal: 20, paddingBottom: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   headerTitle: { fontSize: 18, fontWeight: '800' },
   backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
