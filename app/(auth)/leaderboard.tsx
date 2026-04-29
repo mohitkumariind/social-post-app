@@ -1,14 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
 
-const { width } = Dimensions.get('window');
-
 export default function LeaderboardScreen() {
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const { t } = useLang();
 
@@ -24,7 +23,7 @@ export default function LeaderboardScreen() {
         </View>
       </View>
 
-      <View style={styles.emptyWrap}>
+      <View style={[styles.emptyWrap, { maxWidth: width }]}>
         <Ionicons name="trophy-outline" size={72} color={Colors.textMuted} />
         <Text style={styles.emptyTitle}>{t('coming_soon_title')}</Text>
         <Text style={styles.emptySub}>{t('coming_soon_sub')}</Text>
@@ -62,7 +61,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     justifyContent: 'center',
     alignItems: 'center',
-    maxWidth: width,
   },
   emptyTitle: {
     marginTop: 20,

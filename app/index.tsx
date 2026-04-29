@@ -14,7 +14,15 @@ async function getSessionWithHydrationRetries(): Promise<
 > {
   let last: Awaited<ReturnType<typeof supabase.auth.getSession>> | null = null;
   for (let i = 0; i < GET_SESSION_RETRIES; i++) {
-    last = await supabase.auth.getSession();
+    try {
+      last = await supabase.auth.getSession();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? 'Unknown getSession error');
+      last = {
+        data: { session: null },
+        error: { message } as { message: string },
+      } as Awaited<ReturnType<typeof supabase.auth.getSession>>;
+    }
     if (last.data?.session?.user || last.error) return last;
     if (i < GET_SESSION_RETRIES - 1) {
       await new Promise<void>((r) => setTimeout(r, GET_SESSION_RETRY_DELAY_MS));
@@ -35,27 +43,31 @@ export default function Index() {
 
     (async () => {
       const start = Date.now();
+      try {
+        // Do not race getSession with a timeout that treats "slow" as "logged out" — AsyncStorage
+        // hydration can exceed a few seconds on cold start.
+        const sessionResult = await getSessionWithHydrationRetries();
 
-      // Do not race getSession with a timeout that treats "slow" as "logged out" — AsyncStorage
-      // hydration can exceed a few seconds on cold start.
-      const sessionResult = await getSessionWithHydrationRetries();
+        const elapsed = Date.now() - start;
+        if (elapsed < MIN_SPLASH_MS) {
+          await new Promise<void>((r) => setTimeout(r, MIN_SPLASH_MS - elapsed));
+        }
 
-      const elapsed = Date.now() - start;
-      if (elapsed < MIN_SPLASH_MS) {
-        await new Promise<void>((r) => setTimeout(r, MIN_SPLASH_MS - elapsed));
-      }
+        if (cancelled) return;
 
-      if (cancelled) return;
+        const session = sessionResult.data?.session;
 
-      const session = sessionResult.data?.session;
-      if (__DEV__) console.log('Current Session:', session);
+        if (!session?.user) {
+          router.replace('/login');
+          return;
+        }
 
-      if (!session?.user) {
+        router.replace('/(tabs)/dashboard');
+      } catch (error) {
+        if (__DEV__) console.warn('[Index] startup init failed:', error);
+        if (cancelled) return;
         router.replace('/login');
-        return;
       }
-
-      router.replace('/(tabs)/dashboard');
     })();
 
     return () => {

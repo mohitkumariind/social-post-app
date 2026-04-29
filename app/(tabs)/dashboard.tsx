@@ -7,7 +7,6 @@ import { downloadMediaToCache } from '../../lib/mediaCache';
 import {
   ActivityIndicator,
   BackHandler,
-  Dimensions,
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -16,6 +15,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Colors } from '../../constants/Colors';
@@ -25,8 +25,6 @@ import { useUser } from '../../context/UserContext';
 import { supabase } from '../../lib/supabase';
 import { EditProfileScreen } from '../edit-profile';
 import { SafeAreaView } from 'react-native-safe-area-context';
-
-const { width } = Dimensions.get('window');
 
 /** Dashboard par aane + profile load ke baad, incomplete users ko itni der baad edit-profile modal */
 const EDIT_PROFILE_GATE_DELAY_MS = 30_000;
@@ -74,6 +72,7 @@ function isProfileIncomplete(info: { name: string; phone: string; state: string;
 }
 
 export default function DashboardScreen() {
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const dashParams = useLocalSearchParams();
   const { userInfo, setUserInfo } = useUser();
@@ -84,6 +83,7 @@ export default function DashboardScreen() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const categoryCarouselRef = useRef<ScrollView>(null);
@@ -98,6 +98,7 @@ export default function DashboardScreen() {
 
   const [dailyLocalByUrl, setDailyLocalByUrl] = useState<Record<string, string>>({});
   const dailyInFlightRef = useRef<Set<string>>(new Set());
+  const fetchPostsReqIdRef = useRef(0);
 
   const ensureDailyCached = React.useCallback(
     async (url: string) => {
@@ -175,6 +176,7 @@ export default function DashboardScreen() {
   }, [setUserInfo]);
 
   const fetchPosts = React.useCallback(async (userState: string, userParty: string, silent = false) => {
+    const reqId = ++fetchPostsReqIdRef.current;
     try {
       if (!silent) {
         setFetchError(null);
@@ -188,6 +190,7 @@ export default function DashboardScreen() {
         .order('created_at', { ascending: false });
 
       const { data, error } = await query;
+      if (reqId !== fetchPostsReqIdRef.current) return;
       if (error) {
         setFetchError(error.message);
         if (__DEV__) {
@@ -225,39 +228,40 @@ export default function DashboardScreen() {
         return stateMatch && partyMatch;
       });
       const finalPosts = filtered.length > 0 ? filtered : raw;
-      if (__DEV__) {
-        console.log('[Dashboard fetchPosts] filter stats', {
-          rawCount: raw.length,
-          filteredCount: filtered.length,
-          finalCount: finalPosts.length,
-          userState,
-          userParty,
-          normalizedUserState,
-          normalizedUserParty,
-        });
-      }
       setPosts(finalPosts);
     } catch (err) {
+      if (reqId !== fetchPostsReqIdRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       setFetchError(msg);
       if (__DEV__) console.warn('[Dashboard fetchPosts] exception:', err);
       setPosts([]);
     } finally {
-      if (!silent) setLoading(false);
+      if (reqId === fetchPostsReqIdRef.current && !silent) setLoading(false);
     }
   }, []);
 
   const fetchEvents = async () => {
-    const { data } = await supabase.from('events').select('name, end');
-    const raw = (data as EventRow[]) || [];
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const filteredEvents = raw.filter((ev) => {
-      const evEndDate = new Date(ev.end);
-      evEndDate.setUTCHours(0, 0, 0, 0);
-      return evEndDate.getTime() >= today.getTime();
-    });
-    setEvents(filteredEvents);
+    try {
+      const { data, error } = await supabase.from('events').select('name, end');
+      if (error) {
+        setFetchError((prev) => prev ?? error.message);
+        setEvents([]);
+        return;
+      }
+      const raw = (data as EventRow[]) || [];
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
+      const filteredEvents = raw.filter((ev) => {
+        const evEndDate = new Date(ev.end);
+        evEndDate.setUTCHours(0, 0, 0, 0);
+        return evEndDate.getTime() >= today.getTime();
+      });
+      setEvents(filteredEvents);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err ?? 'Failed to load events');
+      setFetchError((prev) => prev ?? msg);
+      setEvents([]);
+    }
   };
 
   useEffect(() => {
@@ -522,7 +526,7 @@ export default function DashboardScreen() {
             {cat.images.slice(0, 2).map((img, index) => (
               <TouchableOpacity
                 key={index}
-                style={[styles.postItem, { height: Math.round(((width - 55) / 2) * 5 / 4) }]}
+                style={[styles.postItem, { width: (width - 55) / 2, height: Math.round(((width - 55) / 2) * 5 / 4) }]}
                 onPress={() => switchCategory(cat, idx)}
               >
                 <ExpoImage
@@ -552,7 +556,7 @@ export default function DashboardScreen() {
         scrollEventThrottle={16}
       >
         <View style={{ width: width, justifyContent: 'center', alignItems: 'center' }}>
-          <TouchableOpacity style={styles.allTrendingBackCard} onPress={() => setActiveCategory(null)}>
+          <TouchableOpacity style={[styles.allTrendingBackCard, { width: width - 80 }]} onPress={() => setActiveCategory(null)}>
             <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.allTrendingGradient}>
               <Ionicons name="apps" size={50} color="#FFF" />
               <Text style={styles.allTrendingTitle}>{t('graphics')}</Text>
@@ -573,6 +577,7 @@ export default function DashboardScreen() {
                   style={[
                     styles.modernGridItem,
                     {
+                      width: (width - 50) / 2,
                       height: Math.round(((width - 50) / 2) * 5 / 4),
                       marginTop: idx % 2 === 0 ? 0 : 25,
                     },
@@ -684,13 +689,26 @@ export default function DashboardScreen() {
             <View style={styles.statusMessage}>
               <Text style={styles.statusError}>Error: {fetchError}</Text>
               <TouchableOpacity
-                onPress={() => fetchPosts((userInfo?.state ?? '').trim(), (userInfo?.partyName ?? '').trim())}
-                style={styles.retryButton}
+                onPress={async () => {
+                  if (retrying) return;
+                  setRetrying(true);
+                  try {
+                    await fetchPosts((userInfo?.state ?? '').trim(), (userInfo?.partyName ?? '').trim());
+                  } finally {
+                    setRetrying(false);
+                  }
+                }}
+                style={[styles.retryButton, retrying && { opacity: 0.7 }]}
+                disabled={retrying}
               >
-                <Text style={styles.retryButtonText}>Retry</Text>
+                <Text style={styles.retryButtonText}>{retrying ? 'Retrying...' : 'Retry'}</Text>
               </TouchableOpacity>
             </View>
-          ) : filteredPosts.length === 0 || graphicsData.length === 0 ? null : activeCategory ? (
+          ) : filteredPosts.length === 0 || graphicsData.length === 0 ? (
+            <View style={styles.statusMessage}>
+              <Text style={styles.statusText}>No graphics available right now.</Text>
+            </View>
+          ) : activeCategory ? (
             renderSlidingGrids()
           ) : (
             renderHomeRows()
@@ -776,7 +794,6 @@ const styles = StyleSheet.create({
   },
   postGridRow: { flexDirection: 'row', paddingHorizontal: 20, justifyContent: 'space-between' },
   postItem: {
-    width: (width - 55) / 2,
     borderRadius: Colors.borderRadius,
     overflow: 'hidden',
     backgroundColor: Colors.cardBg,
@@ -799,7 +816,6 @@ const styles = StyleSheet.create({
   gridSectionTitle: { fontSize: 22, fontWeight: '900', color: Colors.headerColor, fontFamily: Colors.fontFamilyBold },
   gridSectionSub: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
   allTrendingBackCard: {
-    width: width - 80,
     height: 350,
     borderRadius: 12,
     overflow: 'hidden',
@@ -819,7 +835,6 @@ const styles = StyleSheet.create({
     paddingBottom: 50,
   },
   modernGridItem: {
-    width: (width - 50) / 2,
     borderRadius: Colors.borderRadius,
     overflow: 'hidden',
     backgroundColor: Colors.cardBg,

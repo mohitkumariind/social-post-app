@@ -4,7 +4,6 @@ import { useRouter } from 'expo-router';
 import React from 'react';
 import {
     Alert,
-    Dimensions,
     Platform,
     ScrollView,
     Share,
@@ -16,16 +15,17 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-const { width } = Dimensions.get('window');
-
 export default function ReferEarnScreen() {
   const router = useRouter();
+  const [isSharing, setIsSharing] = React.useState(false);
 
   // Yahan apna Play Store ka link daalein
   const playStoreLink = 'https://play.google.com/store/apps/details?id=com.mohit.socialpost.app'; 
 
   const onShare = async () => {
+    if (isSharing) return;
     try {
+      setIsSharing(true);
       const message = `🚩 *Jai Hind!* \n\nMain Party ki Digital Army se jud gaya hoon. Aap bhi is app ko download karein aur desh ke liye apna yogdaan dein! \n\nDirect Download Link: \n${playStoreLink}`;
       
       await Share.share({
@@ -33,6 +33,8 @@ export default function ReferEarnScreen() {
       });
     } catch (error: any) {
       Alert.alert("Error", "Sharing mein dikkat aa rahi hai.");
+    } finally {
+      setIsSharing(false);
     }
   };
 
@@ -70,10 +72,10 @@ export default function ReferEarnScreen() {
             Niche diye gaye button par click karke apne dosto aur group mein Play Store ka link share karein.
           </Text>
 
-          <TouchableOpacity style={styles.shareBtn} onPress={onShare} activeOpacity={0.8}>
+          <TouchableOpacity style={[styles.shareBtn, isSharing && { opacity: 0.7 }]} onPress={onShare} activeOpacity={0.8} disabled={isSharing}>
             <View style={[styles.btnGradient, { backgroundColor: Colors.primary }]}>
                <Ionicons name="share-social" size={20} color="#FFF" />
-               <Text style={[styles.shareBtnText, { color: '#FFF' }]}>Invite Now</Text>
+               <Text style={[styles.shareBtnText, { color: '#FFF' }]}>{isSharing ? 'Sharing...' : 'Invite Now'}</Text>
             </View>
           </TouchableOpacity>
         </View>

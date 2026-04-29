@@ -156,10 +156,13 @@ function PushNotificationLayer() {
     if (!isLoggedIn) return;
     const sub = Notifications.addNotificationReceivedListener((notification) => {
       const { title, body } = notification.request.content;
-      setBanner({
-        title: typeof title === 'string' ? title : title != null ? String(title) : '',
-        body: typeof body === 'string' ? body : body != null ? String(body) : '',
-      });
+      const safeTitle = typeof title === 'string' ? title.trim() : title != null ? String(title).trim() : '';
+      const safeBody = typeof body === 'string' ? body.trim() : body != null ? String(body).trim() : '';
+      if (!safeTitle && !safeBody) {
+        setBanner(null);
+        return;
+      }
+      setBanner({ title: safeTitle, body: safeBody });
       if (bannerClearRef.current) clearTimeout(bannerClearRef.current);
       bannerClearRef.current = setTimeout(() => setBanner(null), 4500);
     });
@@ -185,7 +188,7 @@ function PushNotificationLayer() {
     })();
   }, [isLoggedIn]);
 
-  const shouldRenderBanner = isLoggedIn && !!banner;
+  const shouldRenderBanner = isLoggedIn && !!banner && (!!banner.title || !!banner.body);
   if (!shouldRenderBanner) return null;
 
   return (
@@ -261,13 +264,6 @@ export default function RootLayout() {
         if (updateCheckInFlightRef.current) return;
         updateCheckInFlightRef.current = true;
 
-        if (__DEV__) {
-          console.log('[updates] channel:', Updates.channel);
-          console.log('[updates] runtimeVersion:', Updates.runtimeVersion);
-          console.log('[updates] updateId:', Updates.updateId);
-          console.log('[updates] isEmbeddedLaunch:', Updates.isEmbeddedLaunch);
-        }
-
         let result: Updates.UpdateCheckResult | null = null;
         let lastErr: unknown = null;
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -285,10 +281,8 @@ export default function RootLayout() {
           if (__DEV__) console.warn('[updates] checkForUpdateAsync failed after retries', lastErr);
           return;
         }
-        if (__DEV__) console.log('[updates] checkForUpdateAsync:', result);
         if (result.isAvailable) {
           const fetched = await Updates.fetchUpdateAsync();
-          if (__DEV__) console.log('[updates] fetchUpdateAsync:', fetched);
           // Apply immediately after a successful fetch (no need to wait for next launch).
           const isNew = typeof (fetched as any)?.isNew === 'boolean' ? (fetched as any).isNew : true;
           if (isNew) await Updates.reloadAsync();

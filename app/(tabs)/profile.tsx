@@ -3,13 +3,13 @@ import { Image as ExpoImage } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
-  Dimensions,
   Linking,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -18,9 +18,8 @@ import { useLang } from '../../context/LanguageContext';
 import { EMPTY_USER_INFO, useUser } from '../../context/UserContext';
 import { signOutApp } from '../../lib/supabase';
 
-const { width } = Dimensions.get('window');
-
 export default function ProfileScreen() {
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const { t } = useLang();
   const { userInfo, setUserInfo, setIsLoggedIn } = useUser();
@@ -58,7 +57,7 @@ export default function ProfileScreen() {
     <SafeAreaView style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.topSection}>
-          <View style={[styles.gradientBg, { backgroundColor: Colors.primary }]} />
+          <View style={[styles.gradientBg, { width, backgroundColor: Colors.primary }]} />
           <View style={styles.headerNav}>
             <TouchableOpacity onPress={() => router.back()} style={styles.navBtn}>
               <Ionicons name="chevron-back" size={22} color={Colors.text} />
@@ -108,7 +107,7 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   topSection: { height: 400, alignItems: 'center' },
-  gradientBg: { position: 'absolute', top: 0, width: width, height: 220, borderBottomLeftRadius: 60, borderBottomRightRadius: 60 },
+  gradientBg: { position: 'absolute', top: 0, height: 220, borderBottomLeftRadius: 60, borderBottomRightRadius: 60 },
   headerNav: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: Platform.OS === 'android' ? 40 : 10 },
   navBtn: { width: 40, height: 40, borderRadius: Colors.borderRadiusSm, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
   headerTitle: { fontSize: 18, fontWeight: '800', color: Colors.headerColor, fontFamily: Colors.fontFamilyBold },

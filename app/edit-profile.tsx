@@ -140,6 +140,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
     assembly_id: userInfo.assembly_id ?? null,
   }));
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [partyPickerOpen, setPartyPickerOpen] = useState(false);
   const [partySearch, setPartySearch] = useState('');
   const [parties, setParties] = useState(PARTIES_DATA);
@@ -152,6 +153,9 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
   const [assemblyPickerOpen, setAssemblyPickerOpen] = useState(false);
   const [geoSearch, setGeoSearch] = useState('');
   const [statesLoading, setStatesLoading] = useState(true);
+  const [fetchUiError, setFetchUiError] = useState<string | null>(null);
+  const loksabhaReqIdRef = useRef(0);
+  const assemblyReqIdRef = useRef(0);
 
   const selectedParty = useMemo(
     () => {
@@ -189,17 +193,20 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     const fetchStates = async () => {
       setStatesLoading(true);
       try {
         const { data, error } = await supabase.from('states').select('*');
         if (error) {
           if (__DEV__) console.warn('[EditProfile] fetchStates Supabase error:', error.message, error);
-          setAvailableStates([]);
+          if (!cancelled) {
+            setAvailableStates([]);
+            setFetchUiError(error.message || 'Could not load states');
+          }
           return;
         }
         const raw = data ?? [];
-        if (__DEV__) console.log('[EditProfile] fetchStates: API row count =', raw.length);
 
         const mapped: GeoItem[] = [];
         for (const row of raw) {
@@ -208,13 +215,18 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         }
         mapped.sort((a, b) => a.name.localeCompare(b.name));
 
-        if (__DEV__) console.log('[EditProfile] fetchStates: mapped items (valid id+name) =', mapped.length);
-        setAvailableStates(mapped);
+        if (!cancelled) {
+          setAvailableStates(mapped);
+          setFetchUiError(null);
+        }
       } finally {
-        setStatesLoading(false);
+        if (!cancelled) setStatesLoading(false);
       }
     };
-    fetchStates();
+    void fetchStates();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /** Match `profiles.state` string to `states.id` for loksabha queries */
@@ -246,6 +258,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
             hint: error.hint,
           });
         }
+        setFetchUiError(error.message || 'Could not load profile');
         return;
       }
       if (!row) return;
@@ -284,6 +297,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       const { stateId: _omitStateId, ...userPayload } = next;
       setFormData((prev) => ({ ...prev, ...next }));
       setUserInfo((prev) => ({ ...prev, ...userPayload }));
+      setFetchUiError(null);
     })();
     return () => {
       cancelled = true;
@@ -295,11 +309,15 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       setAvailableLoksabhas([]);
       return;
     }
+    let cancelled = false;
+    const reqId = ++loksabhaReqIdRef.current;
     const fetchLoksabhas = async () => {
       const { data, error } = await supabase.from('loksabha').select('*').eq('state_id', formData.stateId!);
+      if (cancelled || reqId !== loksabhaReqIdRef.current) return;
       if (error) {
         if (__DEV__) console.warn('[EditProfile] fetchLoksabhas error:', error.message);
         setAvailableLoksabhas([]);
+        setFetchUiError(error.message || 'Could not load Lok Sabha list');
         return;
       }
       const mapped: GeoItem[] = [];
@@ -309,8 +327,12 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       }
       mapped.sort((a, b) => a.name.localeCompare(b.name));
       setAvailableLoksabhas(mapped);
+      setFetchUiError(null);
     };
-    fetchLoksabhas();
+    void fetchLoksabhas();
+    return () => {
+      cancelled = true;
+    };
   }, [formData.stateId]);
 
   useEffect(() => {
@@ -318,11 +340,15 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       setAvailableAssemblies([]);
       return;
     }
+    let cancelled = false;
+    const reqId = ++assemblyReqIdRef.current;
     const fetchAssemblies = async () => {
       const { data, error } = await supabase.from('assembly').select('*').eq('loksabha_id', formData.loksabha_id!);
+      if (cancelled || reqId !== assemblyReqIdRef.current) return;
       if (error) {
         if (__DEV__) console.warn('[EditProfile] fetchAssemblies error:', error.message);
         setAvailableAssemblies([]);
+        setFetchUiError(error.message || 'Could not load assembly list');
         return;
       }
       const mapped: GeoItem[] = [];
@@ -332,8 +358,12 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       }
       mapped.sort((a, b) => a.name.localeCompare(b.name));
       setAvailableAssemblies(mapped);
+      setFetchUiError(null);
     };
-    fetchAssemblies();
+    void fetchAssemblies();
+    return () => {
+      cancelled = true;
+    };
   }, [formData.loksabha_id]);
 
   const selectedState = useMemo(
@@ -367,14 +397,17 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       .upsert({ id: uid, avatar_url: publicUrl }, { onConflict: 'id' });
     if (avatarUpdateError) {
       if (__DEV__) console.warn('[EditProfile] avatar DB update failed:', avatarUpdateError);
-    } else if (__DEV__) {
-      console.log('[EditProfile] avatar DB update success', { publicUrl });
     }
     return publicUrl;
   };
 
   const pickImage = async () => {
     if (isUploadingAvatar) return;
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('', 'Media permission is required to select a profile photo.');
+      return;
+    }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: true,
@@ -411,8 +444,9 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
   };
 
   const handleUpdate = async () => {
-    if (isUploadingAvatar) return;
+    if (isUploadingAvatar || isSavingProfile) return;
     if (!validateMandatoryFields()) return;
+    setIsSavingProfile(true);
     try {
       const { data: authUser } = await supabase.auth.getUser();
       if (!authUser?.user?.id) {
@@ -449,7 +483,6 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         Alert.alert('', error.message ?? 'Could not save profile');
         return;
       }
-      if (__DEV__) console.log('[EditProfile] profile upsert success', payload);
       setFormData((prev) => ({ ...prev, avatar_url: resolvedAvatarUrl }));
       try {
         const { stateId: _sid, ...userOnly } = formData;
@@ -475,6 +508,8 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
     } catch (e) {
       if (__DEV__) console.warn('Profile save exception', e);
       Alert.alert('', 'Could not save profile');
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
@@ -517,8 +552,10 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
           </TouchableOpacity>
         )}
         <Text style={styles.headerTitle}>{t('edit_profile')}</Text>
-        <TouchableOpacity onPress={handleUpdate} disabled={isUploadingAvatar}>
-          <Text style={[styles.saveHeaderBtn, isUploadingAvatar && { opacity: 0.45 }]}>{t('save')}</Text>
+        <TouchableOpacity onPress={handleUpdate} disabled={isUploadingAvatar || isSavingProfile}>
+          <Text style={[styles.saveHeaderBtn, (isUploadingAvatar || isSavingProfile) && { opacity: 0.45 }]}>
+            {isSavingProfile ? 'Saving...' : t('save')}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -553,6 +590,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         </View>
 
         <View style={styles.form}>
+          {fetchUiError ? <Text style={styles.fetchErrorText}>{fetchUiError}</Text> : null}
           <Text style={styles.formHead}>{t('personal_info')}</Text>
           {renderInput(t('full_name'), 'name', 'person-outline', { required: true })}
           {renderInput(t('mobile'), 'phone', 'call-outline', { required: true, keyboardType: 'phone-pad', digitsOnly: true })}
@@ -623,8 +661,8 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
           {renderInput('Twitter (X)', 'twitter', 'logo-twitter')}
         </View>
 
-        <TouchableOpacity style={styles.updateBtn} onPress={handleUpdate}>
-          <Text style={styles.updateBtnText}>{t('save_all_changes')}</Text>
+        <TouchableOpacity style={[styles.updateBtn, (isUploadingAvatar || isSavingProfile) && { opacity: 0.7 }]} onPress={handleUpdate} disabled={isUploadingAvatar || isSavingProfile}>
+          <Text style={styles.updateBtnText}>{isSavingProfile ? 'Saving...' : t('save_all_changes')}</Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -724,6 +762,9 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
                   </TouchableOpacity>
                 );
               })}
+              {!statesLoading && filterGeo(availableStates).length === 0 ? (
+                <Text style={styles.pickerEmptyText}>No states found.</Text>
+              ) : null}
             </ScrollView>
           </View>
         </View>
@@ -764,6 +805,9 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
                   </TouchableOpacity>
                 );
               })}
+              {filterGeo(availableLoksabhas).length === 0 ? (
+                <Text style={styles.pickerEmptyText}>No Lok Sabha options.</Text>
+              ) : null}
             </ScrollView>
           </View>
         </View>
@@ -804,6 +848,9 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
                   </TouchableOpacity>
                 );
               })}
+              {filterGeo(availableAssemblies).length === 0 ? (
+                <Text style={styles.pickerEmptyText}>No assembly options.</Text>
+              ) : null}
             </ScrollView>
           </View>
         </View>
@@ -858,6 +905,7 @@ const styles = StyleSheet.create({
   updateImageBtnDisabled: { opacity: 0.7 },
   updateImageBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
   form: { paddingHorizontal: 20 },
+  fetchErrorText: { marginTop: 8, marginBottom: 4, color: Colors.error, fontSize: 13, fontWeight: '600' },
   formHead: { fontSize: 11, fontWeight: '800', color: '#AAA', marginTop: 25, marginBottom: 5 },
   labelPart: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   inputLabel: { fontSize: 14, color: '#666', fontWeight: '500' },

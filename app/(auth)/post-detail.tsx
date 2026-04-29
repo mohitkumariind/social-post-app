@@ -10,12 +10,12 @@ import {
   ActivityIndicator,
   Alert,
   BackHandler,
-  Dimensions,
   ScrollView,
   Share,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,8 +26,6 @@ import { useUser } from '../../context/UserContext';
 import { downloadMediaToCache } from '../../lib/mediaCache';
 import { getProfessionalFileName } from '../../lib/professionalFileName';
 import { supabase } from '../../lib/supabase';
-
-const { width } = Dimensions.get('window');
 
 const FRAME_STATIC_COLOR = Colors.primary;
 
@@ -197,6 +195,7 @@ function CachedMediaImage({
 }
 
 export default function PostDetailScreen() {
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const params = useLocalSearchParams();
   const { t } = useLang();
@@ -212,6 +211,8 @@ export default function PostDetailScreen() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [dynamicCaptions, setDynamicCaptions] = useState<string[]>([]);
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -434,7 +435,9 @@ export default function PostDetailScreen() {
   };
 
   const handleDownload = async () => {
+    if (isDownloading || isSharing) return;
     try {
+      setIsDownloading(true);
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
         alertSafe(t('permission_required') || 'Permission required', t('permission_message') || 'Please allow access to save images.');
@@ -458,13 +461,17 @@ export default function PostDetailScreen() {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error ?? '');
       alertSafe(t('save_error_title') || 'Save failed', msg || t('save_error_message') || 'Something went wrong while saving.');
+    } finally {
+      setIsDownloading(false);
     }
   };
 
   const handleShare = async () => {
+    if (isSharing || isDownloading) return;
     let lastUri: string | null = null;
     let lastFilename: string | null = null;
     try {
+      setIsSharing(true);
       const named = await captureSnapshotToNamedFile();
       if (!named) {
         const diag = lastCaptureDiagRef.current;
@@ -487,6 +494,8 @@ export default function PostDetailScreen() {
         '';
       const diag = `step=Sharing.shareAsync\nuri=${lastUri ?? 'n/a'}\nfile=${lastFilename ?? 'n/a'}\nerror=${details || 'unknown'}`;
       alertSafe(t('save_error_title') || 'Share failed', diag);
+    } finally {
+      setIsSharing(false);
     }
   };
 
@@ -581,12 +590,9 @@ export default function PostDetailScreen() {
     let cancelled = false;
     (async () => {
       try {
-        if (__DEV__) console.log('[PostDetail] captions fallback query', { postId, imageUrl, category });
-
         if (postId) {
           const { data, error } = await supabase.from('posts').select('captions').eq('id', postId).maybeSingle();
           if (cancelled) return;
-          if (__DEV__) console.log('[PostDetail] Fetched post by id:', data);
           if (error && __DEV__) console.warn('[PostDetail] postId captions error:', error.message);
           if (!error && data) {
             const list = parseCaptionsFromDb((data as { captions?: unknown }).captions);
@@ -600,7 +606,6 @@ export default function PostDetailScreen() {
         if (imageUrl) {
           const { data, error } = await supabase.from('posts').select('captions').eq('image_url', imageUrl).maybeSingle();
           if (cancelled) return;
-          if (__DEV__) console.log('[PostDetail] Fetched post by image_url:', data);
           if (error && __DEV__) console.warn('[PostDetail] image_url captions error:', error.message);
           if (!error && data) {
             const list = parseCaptionsFromDb((data as { captions?: unknown }).captions);
@@ -618,7 +623,6 @@ export default function PostDetailScreen() {
           .eq('name', category)
           .limit(1);
         if (cancelled) return;
-        if (__DEV__) console.log('[PostDetail] Fetched events row:', evRows?.[0]);
         if (evErr) {
           if (__DEV__) console.warn('[PostDetail] events captions error:', evErr.message);
           return;
@@ -699,7 +703,7 @@ export default function PostDetailScreen() {
             scrollEventThrottle={16}
           >
             {infiniteData.map((item, index) => (
-              <View key={`${item}-${index}`} style={styles.slideWrapper}>
+              <View key={`${item}-${index}`} style={[styles.slideWrapper, { width }]}>
                 <ViewShot
                   ref={(ref) => {
                     if (ref) viewShotRefs.current[index] = ref;
@@ -712,7 +716,7 @@ export default function PostDetailScreen() {
                     height: 1350,
                   }}
                 >
-                  <View style={[styles.mediaContainer, { aspectRatio: 4 / 5 }]}>
+                  <View style={[styles.mediaContainer, { width: width - 20, aspectRatio: 4 / 5 }]}>
                     <View style={styles.mediaDragWrapper}>
                       {item && typeof item === 'string' ? (
                         <CachedMediaImage kind="daily" url={item} style={styles.fullMedia} contentFit="contain" />
@@ -807,13 +811,13 @@ export default function PostDetailScreen() {
 
       <View style={styles.stickyActionCard} pointerEvents="box-none">
         <View style={styles.buttonContainer}>
-          <TouchableOpacity style={styles.shareBtn} onPress={handleShare}>
+          <TouchableOpacity style={[styles.shareBtn, (isSharing || isDownloading) && { opacity: 0.7 }]} onPress={handleShare} disabled={isSharing || isDownloading}>
             <Ionicons name="logo-whatsapp" size={22} color={Colors.textOnPrimary} />
-            <Text style={styles.shareBtnText}>{t('share_whatsapp')}</Text>
+            <Text style={styles.shareBtnText}>{isSharing ? 'Sharing...' : t('share_whatsapp')}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.downloadBtn} onPress={handleDownload}>
+          <TouchableOpacity style={[styles.downloadBtn, (isSharing || isDownloading) && { opacity: 0.7 }]} onPress={handleDownload} disabled={isSharing || isDownloading}>
             <Ionicons name="download-outline" size={22} color="#FFF" />
-            <Text style={styles.downloadBtnText}>{t('save_to_gallery')} ✨</Text>
+            <Text style={styles.downloadBtnText}>{isDownloading ? 'Saving...' : `${t('save_to_gallery')} ✨`}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -834,8 +838,8 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 18, fontWeight: '800' },
   backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
   scrollContent: { paddingVertical: 10, paddingBottom: 220 },
-  slideWrapper: { width: width, alignItems: 'center', justifyContent: 'center' },
-  mediaContainer: { width: width - 20, backgroundColor: '#000', borderRadius: 0, overflow: 'hidden', position: 'relative' },
+  slideWrapper: { alignItems: 'center', justifyContent: 'center' },
+  mediaContainer: { backgroundColor: '#000', borderRadius: 0, overflow: 'hidden', position: 'relative' },
   mediaDragWrapper: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
   fullMedia: { width: '100%', height: '100%' },
   frameOverlayImageWrap: { position: 'absolute', bottom: 0, left: 0, right: 0, top: 0, justifyContent: 'flex-end', backgroundColor: 'transparent' },

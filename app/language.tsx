@@ -29,41 +29,47 @@ export default function LanguageScreen() {
   const { t, changeLanguage, lang } = useLang();
   const { setUserInfo } = useUser();
   const [selectedLang, setSelectedLang] = useState(lang || 'en');
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     setSelectedLang(lang || 'en');
   }, [lang]);
 
   const handleConfirm = async () => {
-    if (!selectedLang) return;
-    changeLanguage(selectedLang);
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (session?.user?.id) {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ language: selectedLang })
-        .eq('id', session.user.id);
-      if (error && __DEV__) console.warn('[Language] profiles.language save:', error.message);
-    }
-    setUserInfo((prev) => ({ ...prev, language: selectedLang }));
-    const next =
-      typeof params.next === 'string'
-        ? params.next
-        : Array.isArray(params.next)
-          ? params.next[0]
-          : undefined;
+    if (!selectedLang || isSaving) return;
+    setIsSaving(true);
+    try {
+      changeLanguage(selectedLang);
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        const { error } = await supabase
+          .from('profiles')
+          .update({ language: selectedLang })
+          .eq('id', session.user.id);
+        if (error && __DEV__) console.warn('[Language] profiles.language save:', error.message);
+      }
+      setUserInfo((prev) => ({ ...prev, language: selectedLang }));
+      const next =
+        typeof params.next === 'string'
+          ? params.next
+          : Array.isArray(params.next)
+            ? params.next[0]
+            : undefined;
 
-    if (next) {
-      router.replace(next);
-      return;
-    }
-    // Bina `next` ke (purana flow): logged-in user ko login par mat bhejo — loop fix
-    if (session?.user) {
-      router.replace('/party');
-    } else {
-      router.replace('/(auth)/login');
+      if (next) {
+        router.replace(next);
+        return;
+      }
+      // Bina `next` ke (purana flow): logged-in user ko login par mat bhejo — loop fix
+      if (session?.user) {
+        router.replace('/party');
+      } else {
+        router.replace('/(auth)/login');
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -129,11 +135,11 @@ export default function LanguageScreen() {
       {/* Footer / Confirm Button */}
       <View style={styles.footer}>
         <TouchableOpacity 
-          style={[styles.chooseBtn, !selectedLang && styles.disabledBtn]} 
+          style={[styles.chooseBtn, (!selectedLang || isSaving) && styles.disabledBtn]} 
           onPress={handleConfirm} 
-          disabled={!selectedLang}
+          disabled={!selectedLang || isSaving}
         >
-          <Text style={styles.chooseBtnText}>{t('continue')}</Text>
+          <Text style={styles.chooseBtnText}>{isSaving ? 'Saving...' : t('continue')}</Text>
         </TouchableOpacity>
       </View>
     </View>

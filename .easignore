@@ -4,6 +4,11 @@ node_modules/
 # VCS
 .git/
 
+# Env & secrets (keep examples)
+.env*
+!.env.example
+!**/.env.example
+
 # Native build outputs
 android/
 android/build/

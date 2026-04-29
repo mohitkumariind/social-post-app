@@ -72,7 +72,12 @@ export default function NotificationScreen() {
         renderItem={renderItem}
         contentContainerStyle={{ padding: 20 }}
         showsVerticalScrollIndicator={false}
-        ListEmptyComponent={null}
+        ListEmptyComponent={
+          <View style={styles.emptyStateWrap}>
+            <Ionicons name="notifications-off-outline" size={38} color={Colors.textMuted} />
+            <Text style={styles.emptyStateText}>No notifications yet.</Text>
+          </View>
+        }
       />
     </SafeAreaView>
   );
@@ -112,5 +117,6 @@ const styles = StyleSheet.create({
   notiMessage: { fontSize: 13, color: '#666', marginTop: 3, lineHeight: 18 },
   notiTime: { fontSize: 11, color: '#AAA', marginTop: 8, fontWeight: '500' },
   
-  // Intentionally no empty state UI (silent empty screen)
+  emptyStateWrap: { paddingTop: 40, alignItems: 'center', justifyContent: 'center' },
+  emptyStateText: { marginTop: 10, fontSize: 14, color: Colors.textMuted, fontWeight: '600' },
 });

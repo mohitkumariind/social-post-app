@@ -9,18 +9,16 @@ import React, { useRef } from 'react';
 import { getProfessionalFileName } from '../../lib/professionalFileName';
 import {
     Alert,
-    Dimensions,
     Platform,
     ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
+    useWindowDimensions,
     View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ViewShot from "react-native-view-shot";
-
-const { width } = Dimensions.get('window');
 
 const ALL_RANKS = [
   { lv: 1, name: 'Volunteer', icon: 'person', color: '#95A5A6' },
@@ -36,10 +34,12 @@ const ALL_RANKS = [
 ];
 
 export default function RewardsScreen() {
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const { t } = useLang();
   const { userInfo } = useUser();
   const viewShotRef = useRef<any>(null);
+  const [isSharing, setIsSharing] = React.useState(false);
 
   const displayName = (userInfo?.name ?? '').trim() || t('default_user_name');
   const currentLevel = 1;
@@ -66,11 +66,13 @@ export default function RewardsScreen() {
   };
 
   const captureAndShare = async () => {
+    if (isSharing) return;
     if (Platform.OS === 'web') {
       Alert.alert("Note", "Image sharing mobile par hi chalti hai bhai!");
       return;
     }
     try {
+      setIsSharing(true);
       const shotRef = viewShotRef.current;
       if (!shotRef) throw new Error('capture not ready');
       const rawUri: string = await shotRef.capture();
@@ -85,6 +87,8 @@ export default function RewardsScreen() {
       await Sharing.shareAsync(dest, { dialogTitle: filename });
     } catch {
       Alert.alert("Error", "Share nahi ho paya!");
+    } finally {
+      setIsSharing(false);
     }
   };
 
@@ -94,7 +98,9 @@ export default function RewardsScreen() {
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()}><Ionicons name="chevron-back" size={24} color="#333" /></TouchableOpacity>
         <Text style={styles.headerTitle}>Army Rewards</Text>
-        <TouchableOpacity onPress={captureAndShare}><Ionicons name="share-social-outline" size={24} color={Colors.text} /></TouchableOpacity>
+        <TouchableOpacity onPress={captureAndShare} disabled={isSharing} style={isSharing ? { opacity: 0.7 } : undefined}>
+          <Ionicons name="share-social-outline" size={24} color={Colors.text} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 60 }}>
@@ -102,7 +108,7 @@ export default function RewardsScreen() {
         {/* --- TOP: CERTIFICATE --- */}
         <View style={styles.certContainer}>
           <ViewShot ref={viewShotRef} options={{ format: "png", quality: 1.0 }}>
-            <View style={[styles.certCard, { backgroundColor: Colors.cardBg }]}>
+            <View style={[styles.certCard, { width: width - 40, backgroundColor: Colors.cardBg }]}>
               <View style={styles.certWatermark}><Ionicons name="medal" size={180} color="rgba(0,0,0,0.05)" /></View>
               <View style={styles.certHeader}>
                 <Ionicons name="ribbon" size={40} color={Colors.primary} />
@@ -116,9 +122,9 @@ export default function RewardsScreen() {
               </View>
             </View>
           </ViewShot>
-          <TouchableOpacity style={styles.actionBtn} onPress={captureAndShare}>
+          <TouchableOpacity style={[styles.actionBtn, isSharing && { opacity: 0.7 }]} onPress={captureAndShare} disabled={isSharing}>
             <Ionicons name="logo-whatsapp" size={18} color="#FFF" />
-            <Text style={styles.actionBtnText}>Share Status</Text>
+            <Text style={styles.actionBtnText}>{isSharing ? 'Sharing...' : 'Share Status'}</Text>
           </TouchableOpacity>
         </View>
 
@@ -160,7 +166,7 @@ export default function RewardsScreen() {
           <View style={styles.podiumContainer}>
             
             {/* 2nd Place: MONTH */}
-            <View style={styles.podiumSlot}>
+            <View style={[styles.podiumSlot, { width: (width - 100) / 3 }]}>
               <Ionicons name="medal" size={32} color="#C0C0C0" />
               <Text style={styles.podiumName}>Subedar</Text>
               <View style={[styles.podiumBar, { height: 60, backgroundColor: '#C0C0C0' }]}>
@@ -169,7 +175,7 @@ export default function RewardsScreen() {
             </View>
 
             {/* 1st Place: YEAR */}
-            <View style={[styles.podiumSlot, { marginTop: -20 }]}>
+            <View style={[styles.podiumSlot, { width: (width - 100) / 3, marginTop: -20 }]}>
               <Ionicons name="ribbon" size={42} color="#FFD700" />
               <Text style={[styles.podiumName, {fontWeight: '900'}]}>General</Text>
               <View style={[styles.podiumBar, { height: 90, backgroundColor: '#FFD700' }]}>
@@ -178,7 +184,7 @@ export default function RewardsScreen() {
             </View>
 
             {/* 3rd Place: WEEK */}
-            <View style={styles.podiumSlot}>
+            <View style={[styles.podiumSlot, { width: (width - 100) / 3 }]}>
               <Ionicons name="shield-checkmark" size={28} color="#CD7F32" />
               <Text style={styles.podiumName}>Commando</Text>
               <View style={[styles.podiumBar, { height: 45, backgroundColor: '#CD7F32' }]}>
@@ -200,7 +206,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 17, fontWeight: '800' },
   
   certContainer: { padding: 20, alignItems: 'center' },
-  certCard: { height: 280, width: width - 40, borderRadius: Colors.borderRadius, padding: 24, alignItems: 'center', justifyContent: 'center', ...Colors.cardShadow, elevation: Colors.cardElevation },
+  certCard: { height: 280, borderRadius: Colors.borderRadius, padding: 24, alignItems: 'center', justifyContent: 'center', ...Colors.cardShadow, elevation: Colors.cardElevation },
   certWatermark: { position: 'absolute' },
   certHeader: { alignItems: 'center', marginBottom: 10 },
   certRankTitle: { color: Colors.primary, fontSize: 14, fontWeight: '900', letterSpacing: 2 },
@@ -234,7 +240,7 @@ const styles = StyleSheet.create({
 
   /* --- PODIUM --- */
   podiumContainer: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', backgroundColor: Colors.cardBg, paddingVertical: 24, borderRadius: Colors.borderRadius, ...Colors.cardShadow, elevation: Colors.cardElevation },
-  podiumSlot: { alignItems: 'center', width: (width - 100) / 3 },
+  podiumSlot: { alignItems: 'center' },
   podiumName: { fontSize: 12, fontWeight: '800', marginVertical: 8 },
   podiumBar: { width: '85%', borderTopLeftRadius: 10, borderTopRightRadius: 10, justifyContent: 'center', alignItems: 'center' },
   podiumLabel: { color: '#FFF', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' }
