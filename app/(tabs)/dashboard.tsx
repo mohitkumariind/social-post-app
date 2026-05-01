@@ -20,7 +20,7 @@ import {
 } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { normalizePartyId } from '../../constants/Parties';
-import { SUPPORTED_LANGS, useLang } from '../../context/LanguageContext';
+import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { supabase } from '../../lib/supabase';
 import { EditProfileScreen } from '../edit-profile';
@@ -77,7 +77,6 @@ export default function DashboardScreen() {
   const dashParams = useLocalSearchParams();
   const { userInfo, setUserInfo } = useUser();
   const { t, lang } = useLang();
-  const { changeLanguage } = useLang();
   const [activeCategory, setActiveCategory] = useState<Category | null>(null);
   const [posts, setPosts] = useState<PostRow[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -99,6 +98,16 @@ export default function DashboardScreen() {
   const [dailyLocalByUrl, setDailyLocalByUrl] = useState<Record<string, string>>({});
   const dailyInFlightRef = useRef<Set<string>>(new Set());
   const fetchPostsReqIdRef = useRef(0);
+  const safeUserInfo = userInfo ?? { name: '', phone: '', state: '', partyName: '' };
+
+  const clearDashboardExpandParams = React.useCallback(() => {
+    // `setParams` has differed across Expo Router versions / navigators.
+    // Guard to prevent a hard crash when returning from PostDetail.
+    const r = router as unknown as { setParams?: (p: Record<string, unknown>) => void };
+    if (typeof r?.setParams === 'function') {
+      r.setParams({ expandCategory: undefined, expandTab: undefined });
+    }
+  }, [router]);
 
   const ensureDailyCached = React.useCallback(
     async (url: string) => {
@@ -137,9 +146,6 @@ export default function DashboardScreen() {
 
       if (profile) {
         const langRaw = String((profile as { language?: string }).language ?? '').trim();
-        if (langRaw && (SUPPORTED_LANGS as readonly string[]).includes(langRaw)) {
-          changeLanguage(langRaw);
-        }
         const rawParty = String(profile.party ?? '').trim();
         const party = normalizePartyId(rawParty) || rawParty;
         const stateStr = String(profile.state ?? '').trim();
@@ -302,7 +308,7 @@ export default function DashboardScreen() {
       setEditProfileDelayedVisible(false);
       return;
     }
-    if (!isProfileIncomplete(userInfo)) {
+    if (!isProfileIncomplete(safeUserInfo)) {
       setEditProfileDelayedVisible(false);
       return;
     }
@@ -315,14 +321,14 @@ export default function DashboardScreen() {
   }, [
     authReady,
     dashboardProfileLoaded,
-    userInfo.name,
-    userInfo.phone,
-    userInfo.state,
-    userInfo.partyName,
+    safeUserInfo?.name,
+    safeUserInfo?.phone,
+    safeUserInfo?.state,
+    safeUserInfo?.partyName,
   ]);
 
   const showEditProfileModal =
-    editProfileDelayedVisible && authReady && dashboardProfileLoaded && isProfileIncomplete(userInfo);
+    editProfileDelayedVisible && authReady && dashboardProfileLoaded && isProfileIncomplete(safeUserInfo);
 
   const handleProfileSaved = React.useCallback(() => {
     void fetchUserProfile();
@@ -341,7 +347,9 @@ export default function DashboardScreen() {
     };
   }, []);
 
-  const filteredPosts = posts;
+  const safePosts = Array.isArray(posts) ? posts : [];
+  const safeEvents = Array.isArray(events) ? events : [];
+  const filteredPosts = safePosts;
 
   const postsByCategory = React.useMemo(() => {
     const map = new Map<string, Category>();
@@ -365,9 +373,9 @@ export default function DashboardScreen() {
   const graphicsData = React.useMemo(() => {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
-    if (events.length === 0) return postsByCategory;
-    const activeEventNames = new Set(events.map((e) => e.name));
-    const eventEndByName = new Map(events.map((e) => [e.name, e.end]));
+    if (safeEvents.length === 0) return postsByCategory;
+    const activeEventNames = new Set(safeEvents.map((e) => e.name));
+    const eventEndByName = new Map(safeEvents.map((e) => [e.name, e.end]));
     const filtered = postsByCategory.filter((cat) => {
       if (!activeEventNames.has(cat.name)) return false;
       const evEnd = eventEndByName.get(cat.name);
@@ -386,7 +394,7 @@ export default function DashboardScreen() {
             return new Date(endA).getTime() - new Date(endB).getTime();
           });
     return result.length > 0 ? result : postsByCategory;
-  }, [postsByCategory, events, refreshKey]);
+  }, [postsByCategory, safeEvents, refreshKey]);
 
   const CURRENT_DATA = graphicsData;
 
@@ -453,21 +461,21 @@ export default function DashboardScreen() {
     if (activeCategory?.id === target.id) return;
     consumedExpandKeyRef.current = expandKey;
     switchCategory(target, idx);
-    router.setParams({ expandCategory: undefined, expandTab: undefined });
-  }, [dashParams?.expandCategory, CURRENT_DATA, activeCategory, router]);
+    clearDashboardExpandParams();
+  }, [dashParams?.expandCategory, CURRENT_DATA, activeCategory, clearDashboardExpandParams]);
 
   useEffect(() => {
     const onBackPress = () => {
       if (activeCategory) {
         setActiveCategory(null);
-        router.setParams({ expandCategory: undefined, expandTab: undefined });
+        clearDashboardExpandParams();
         return true;
       }
       return false;
     };
     const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => sub.remove();
-  }, [activeCategory, router]);
+  }, [activeCategory, clearDashboardExpandParams]);
 
   const renderTrendingSection = () => (
     <View style={styles.sectionContainer}>
@@ -628,6 +636,13 @@ export default function DashboardScreen() {
       </Modal>
 
       <SafeAreaView style={styles.container}>
+        {!Array.isArray(posts) || !Array.isArray(events) ? (
+          <View style={styles.statusMessage}>
+            <ActivityIndicator size="large" color={Colors.primary} />
+            <Text style={[styles.statusText, { marginTop: 12 }]}>Loading...</Text>
+          </View>
+        ) : (
+          <>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.push('/profile')} style={styles.profileRow}>
             <View style={styles.avatarPlaceholder}>
@@ -645,7 +660,7 @@ export default function DashboardScreen() {
             <View style={styles.welcomeTextGroup}>
               <Text style={styles.welcomeText}>{t('welcome')}!</Text>
               <Text style={styles.userName}>
-                {t('hi_user')}, {userInfo?.name?.split(' ')[0] || t('user')}
+                {t('hi_user')}, {String(userInfo?.name ?? '').trim().split(' ')[0] || t('user')}
               </Text>
             </View>
           </TouchableOpacity>
@@ -675,7 +690,7 @@ export default function DashboardScreen() {
           <View style={styles.gradientHeaderWrapper}>
             <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.eclipseGradient}>
               <Text style={styles.modernCenterTitle}>
-                {activeCategory ? activeCategory.name : `${t('top_picks')} ${t('graphics')}`}
+                {activeCategory ? activeCategory.name : 'Daily Trending Graphics'}
               </Text>
             </LinearGradient>
           </View>
@@ -714,6 +729,8 @@ export default function DashboardScreen() {
             renderHomeRows()
           )}
         </ScrollView>
+          </>
+        )}
       </SafeAreaView>
     </>
   );

@@ -217,18 +217,29 @@ export default function PostDetailScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backNavLockRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const isNavigatingAwayRef = useRef(false);
 
   useEffect(() => {
     return () => {
+      isMountedRef.current = false;
+      isNavigatingAwayRef.current = true;
       // Ensure refs don't keep native views alive after unmount.
       viewShotRefs.current = {};
       captureIndexRef.current = 0;
+      backNavLockRef.current = false;
     };
   }, []);
 
   const goBackToExpandedCategory = useCallback(() => {
     if (backNavLockRef.current) return true;
     backNavLockRef.current = true;
+    isNavigatingAwayRef.current = true;
+    // Safety unlock: if navigation is interrupted, allow retry instead of white screen lock.
+    setTimeout(() => {
+      backNavLockRef.current = false;
+      isNavigatingAwayRef.current = false;
+    }, 1200);
     const categoryRaw = params?.category;
     const category =
       typeof categoryRaw === 'string'
@@ -242,7 +253,8 @@ export default function PostDetailScreen() {
         params: { expandCategory: category, expandTab: 'graphics' },
       });
     } else {
-      router.back();
+      if (router.canGoBack()) router.back();
+      else router.replace('/(tabs)/dashboard');
     }
     return true;
   }, [params?.category, router]);
@@ -280,14 +292,14 @@ export default function PostDetailScreen() {
       const timer = setTimeout(() => {
         try {
           scrollRef.current?.scrollTo({ x: jumpTo * width, animated: false });
-          setIsReady(true);
+          if (isMountedRef.current) setIsReady(true);
         } catch {
-          setIsReady(true);
+          if (isMountedRef.current) setIsReady(true);
         }
       }, 400);
       return () => clearTimeout(timer);
     } catch (e) {
-      setIsReady(true);
+      if (isMountedRef.current) setIsReady(true);
     }
   }, [originalData, initialIndex]);
 
@@ -323,7 +335,7 @@ export default function PostDetailScreen() {
           if (!cancelled && __DEV__) console.warn('[PostDetail] fetchFrames error:', error.message);
           return;
         }
-        if (data) setFrames(sortFramesByFileName(data as any[]));
+        if (data && isMountedRef.current) setFrames(sortFramesByFileName(data as any[]));
       } catch (e) {
       if (!cancelled && __DEV__) console.warn('fetchFrames exception');
       }
@@ -435,7 +447,7 @@ export default function PostDetailScreen() {
   };
 
   const handleDownload = async () => {
-    if (isDownloading || isSharing) return;
+      if (!isMountedRef.current || isNavigatingAwayRef.current || isDownloading || isSharing) return;
     try {
       setIsDownloading(true);
       const { status } = await MediaLibrary.requestPermissionsAsync();
@@ -462,12 +474,12 @@ export default function PostDetailScreen() {
       const msg = error instanceof Error ? error.message : String(error ?? '');
       alertSafe(t('save_error_title') || 'Save failed', msg || t('save_error_message') || 'Something went wrong while saving.');
     } finally {
-      setIsDownloading(false);
+      if (isMountedRef.current) setIsDownloading(false);
     }
   };
 
   const handleShare = async () => {
-    if (isSharing || isDownloading) return;
+      if (!isMountedRef.current || isNavigatingAwayRef.current || isSharing || isDownloading) return;
     let lastUri: string | null = null;
     let lastFilename: string | null = null;
     try {
@@ -495,7 +507,7 @@ export default function PostDetailScreen() {
       const diag = `step=Sharing.shareAsync\nuri=${lastUri ?? 'n/a'}\nfile=${lastFilename ?? 'n/a'}\nerror=${details || 'unknown'}`;
       alertSafe(t('save_error_title') || 'Share failed', diag);
     } finally {
-      setIsSharing(false);
+      if (isMountedRef.current) setIsSharing(false);
     }
   };
 
@@ -644,9 +656,9 @@ export default function PostDetailScreen() {
       if (!text?.trim()) return;
       await Clipboard.setStringAsync(text);
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      setShowCopiedToast(true);
+      if (isMountedRef.current) setShowCopiedToast(true);
       toastTimerRef.current = setTimeout(() => {
-        setShowCopiedToast(false);
+        if (isMountedRef.current) setShowCopiedToast(false);
         toastTimerRef.current = null;
       }, 2000);
     },
@@ -733,10 +745,11 @@ export default function PostDetailScreen() {
                         </View>
                         <View style={styles.nameSection}>
                           <Text style={styles.userName} numberOfLines={1}>
-                            {userInfo?.name?.toUpperCase() || t('default_user_name').toUpperCase()}
+                            {String(userInfo?.name ?? '').trim().toUpperCase() ||
+                              String(t('default_user_name') ?? '').trim().toUpperCase()}
                           </Text>
                           <Text style={styles.userDesignation} numberOfLines={1}>
-                            {userInfo?.designation1 || t('default_designation')}
+                            {String(userInfo?.designation1 ?? '').trim() || String(t('default_designation') ?? '').trim()}
                           </Text>
                         </View>
                         <View style={styles.photoContainer}>

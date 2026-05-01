@@ -9,7 +9,7 @@ export const SUPPORTED_LANGS = ['en', 'hi', 'pa', 'mr', 'gu'] as const;
 
 interface LanguageContextType {
   t: (key: string) => string;
-  changeLanguage: (lng: string) => void;
+  changeLanguage: (lng: string) => Promise<void>;
   lang: string;
 }
 
@@ -38,10 +38,18 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   }, [i18n]);
 
-  const changeLanguage = (lng: string) => {
+  const changeLanguage = async (lng: string) => {
     if (!(SUPPORTED_LANGS as readonly string[]).includes(lng)) return;
-    AsyncStorage.setItem(LANG_STORAGE_KEY, lng);
-    i18n.changeLanguage(lng);
+    try {
+      await AsyncStorage.setItem(LANG_STORAGE_KEY, lng);
+    } catch {
+      // Non-blocking: continue with in-memory language switch.
+    }
+    try {
+      await i18n.changeLanguage(lng);
+    } catch {
+      // Keep app running even if language resources fail unexpectedly.
+    }
     setLang(lng);
   };
 

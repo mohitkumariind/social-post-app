@@ -246,6 +246,33 @@ const pushStyles = StyleSheet.create({
   },
 });
 
+type RootErrorBoundaryState = { hasError: boolean };
+
+class RootErrorBoundary extends React.Component<{ children: React.ReactNode }, RootErrorBoundaryState> {
+  state: RootErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): RootErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    if (__DEV__) console.warn('[RootErrorBoundary] render crash captured', error);
+    console.error(error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.rootFallback}>
+          <Text style={styles.rootFallbackTitle}>Something went wrong</Text>
+          <Text style={styles.rootFallbackSub}>Please restart the app.</Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function RootLayout() {
   const [showCustomLoader, setShowCustomLoader] = useState(true);
   const [dots, setDots] = useState(1);
@@ -353,20 +380,22 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
-      <SafeAreaProvider>
-        <I18nextProvider i18n={i18n}>
-          <LanguageProvider>
-            <UserProvider>
-              <SessionSync>
-                <View style={{ flex: 1 }}>
-                  <Stack screenOptions={{ headerShown: false }} />
-                  <PushNotificationLayer />
-                </View>
-              </SessionSync>
-            </UserProvider>
-          </LanguageProvider>
-        </I18nextProvider>
-      </SafeAreaProvider>
+      <RootErrorBoundary>
+        <SafeAreaProvider>
+          <I18nextProvider i18n={i18n}>
+            <LanguageProvider>
+              <UserProvider>
+                <SessionSync>
+                  <View style={{ flex: 1 }}>
+                    <Stack screenOptions={{ headerShown: false }} />
+                    <PushNotificationLayer />
+                  </View>
+                </SessionSync>
+              </UserProvider>
+            </LanguageProvider>
+          </I18nextProvider>
+        </SafeAreaProvider>
+      </RootErrorBoundary>
 
       {showCustomLoader ? (
         <Animated.View
@@ -400,6 +429,24 @@ export default function RootLayout() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#FFFFFF' },
+  rootFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 24,
+  },
+  rootFallbackTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  rootFallbackSub: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#4B5563',
+    textAlign: 'center',
+  },
   loaderOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#FFFFFF',

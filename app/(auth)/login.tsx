@@ -97,12 +97,13 @@ export default function LoginScreen() {
 
       const gUser = signInResult.data.user;
       const sbUser = authData.session.user;
-      const name =
-        (sbUser.user_metadata?.full_name as string | undefined) ??
-        (sbUser.user_metadata?.name as string | undefined) ??
-        gUser.name ??
+      const nameRaw =
+        (sbUser.user_metadata?.full_name as unknown) ??
+        (sbUser.user_metadata?.name as unknown) ??
+        (gUser as unknown as { name?: unknown } | null)?.name ??
         '';
-      const email = sbUser.email ?? gUser.email ?? '';
+      const name = String(nameRaw ?? '').trim();
+      const email = String(sbUser.email ?? gUser.email ?? '').trim();
       /** Supabase user_metadata (Google OIDC) — fallback to native Google user photo */
       const googlePhotoUrl =
         (sbUser.user_metadata?.avatar_url as string | undefined) ||
@@ -146,11 +147,7 @@ export default function LoginScreen() {
         langRaw.length > 0 && (SUPPORTED_LANGS as readonly string[]).includes(langRaw);
       const hasParty = partyCanon.length > 0;
 
-      const baseUser = {
-        name,
-        email,
-        avatar_url: photoUrl ?? '',
-      };
+      const baseUser = { name, email, avatar_url: String(photoUrl ?? '').trim() };
 
       if (hasLang && hasParty) {
         changeLanguage(langRaw);

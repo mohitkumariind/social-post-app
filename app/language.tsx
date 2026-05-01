@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -30,16 +31,35 @@ export default function LanguageScreen() {
   const { setUserInfo } = useUser();
   const [selectedLang, setSelectedLang] = useState(lang || 'en');
   const [isSaving, setIsSaving] = useState(false);
+  const [safeTitle, setSafeTitle] = useState('Choose Language');
+  const [safeSubtitle, setSafeSubtitle] = useState('Select your preferred language');
+  const [safeContinue, setSafeContinue] = useState('Continue');
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
     setSelectedLang(lang || 'en');
   }, [lang]);
 
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const title = String(t('choose_lang') ?? '').trim();
+    const subtitle = String(t('sub_lang') ?? '').trim();
+    const cont = String(t('continue') ?? '').trim();
+    setSafeTitle(title || 'Choose Language');
+    setSafeSubtitle(subtitle || 'Select your preferred language');
+    setSafeContinue(cont || 'Continue');
+  }, [lang, t]);
+
   const handleConfirm = async () => {
     if (!selectedLang || isSaving) return;
     setIsSaving(true);
     try {
-      changeLanguage(selectedLang);
+      await changeLanguage(selectedLang);
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -58,18 +78,31 @@ export default function LanguageScreen() {
             ? params.next[0]
             : undefined;
 
+      const navigateTo = async (to: string) => {
+        await Promise.resolve();
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        router.replace(to);
+      };
+
       if (next) {
-        router.replace(next);
+        if (next === '/dashboard') {
+          await navigateTo('/(tabs)/dashboard');
+        } else {
+          await navigateTo(next);
+        }
         return;
       }
       // Bina `next` ke (purana flow): logged-in user ko login par mat bhejo — loop fix
       if (session?.user) {
-        router.replace('/party');
+        await navigateTo('/party');
       } else {
-        router.replace('/(auth)/login');
+        await navigateTo('/(auth)/login');
       }
+    } catch (error) {
+      if (__DEV__) console.warn('[Language] handleConfirm failed:', error);
+      Alert.alert('Language update failed', 'Please try again.');
     } finally {
-      setIsSaving(false);
+      if (isMountedRef.current) setIsSaving(false);
     }
   };
 
@@ -82,8 +115,8 @@ export default function LanguageScreen() {
         <View style={styles.logoCircle}>
           <Text style={styles.logoLetter}>S</Text>
         </View>
-        <Text style={styles.title}>{t('choose_lang')}</Text> 
-        <Text style={styles.subtitle}>{t('sub_lang')}</Text>
+        <Text style={styles.title}>{safeTitle}</Text> 
+        <Text style={styles.subtitle}>{safeSubtitle}</Text>
       </View>
 
       {/* Language List */}
@@ -139,7 +172,7 @@ export default function LanguageScreen() {
           onPress={handleConfirm} 
           disabled={!selectedLang || isSaving}
         >
-          <Text style={styles.chooseBtnText}>{isSaving ? 'Saving...' : t('continue')}</Text>
+          <Text style={styles.chooseBtnText}>{isSaving ? 'Saving...' : safeContinue}</Text>
         </TouchableOpacity>
       </View>
     </View>
