@@ -5,8 +5,10 @@
 -- The code uploads avatars to `post-images/avatars/*`.
 -- Existing policies in this codebase restrict `post-images` uploads to admin only,
 -- which breaks profile photo upload for normal users.
-
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+--
+-- If the SQL editor returns 42501 (must be owner of table objects), do not run
+-- ALTER on storage.objects. Use Dashboard -> Storage -> post-images -> Policies,
+-- or apply via Supabase CLI migration (`supabase db push`).
 
 -- Replace policies if re-applied
 DROP POLICY IF EXISTS "storage_insert_user_avatars_in_post_images" ON storage.objects;

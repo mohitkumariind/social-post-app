@@ -3,8 +3,10 @@
 --   object: transparent-avatars/<auth.uid()>.png
 --
 -- Matches app/(auth)/post-detail.tsx path getTransparentCutoutObjectPath(userId).
-
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+--
+-- If the SQL editor returns 42501 (must be owner of table objects), do not run
+-- ALTER on storage.objects. RLS is already enabled on storage.objects by Supabase.
+-- Use: Dashboard -> Storage -> post-images -> Policies, or `supabase db push` / migration pipeline.
 
 DROP POLICY IF EXISTS "storage_insert_user_transparent_avatar_cutout" ON storage.objects;
 DROP POLICY IF EXISTS "storage_update_user_transparent_avatar_cutout" ON storage.objects;
