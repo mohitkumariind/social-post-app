@@ -31,7 +31,9 @@ const FRAME_STATIC_COLOR = Colors.primary;
 
 /** Supabase Storage — same bucket as post graphics / avatars */
 const POST_IMAGES_BUCKET = 'post-images';
-const PIXELBIN_ERASE_BG_URL = 'https://api.pixelbin.io/v1/transformation/erase_bg';
+/** PixelBin Predictions API — `erase_bg` → path segment `erase/bg` (see @pixelbin/admin Predictions.js). */
+const PIXELBIN_API_ORIGIN = 'https://api.pixelbin.io';
+const PIXELBIN_PREDICTIONS_ERASE_BG = `${PIXELBIN_API_ORIGIN}/service/platform/transformation/v1.0/predictions/erase/bg`;
 /** PixelBin API token (client-side: easy to extract; prefer a backend proxy for production). */
 const PIXELBIN_TOKEN = 'ec264319-6e12-41b2-8079-e85a763f2026';
 
@@ -158,13 +160,22 @@ async function persistCutoutAfterPixelBin(
   return { kind: 'remote', publicUrl: data.publicUrl };
 }
 
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * PixelBin erase_bg via official Predictions API (multipart + poll + download output).
+ * Auth matches Pixelbin JS SDK: Authorization: Bearer base64(apiSecret) for ASCII secrets.
+ */
 async function fetchTransparentCutoutFromPixelBin(sourceImageUri: string, sourceNameForMime: string): Promise<Blob> {
   if (typeof globalThis.btoa !== 'function') {
     throw new Error('btoa is not available for PixelBin auth');
   }
-  // Standard Base64 on ASCII API token (must match PIXELBIN_TOKEN).
-  const encodedToken = globalThis.btoa('ec264319-6e12-41b2-8079-e85a763f2026');
-  console.log(CUTOUT_LOG, 'PixelBin API call starting', PIXELBIN_ERASE_BG_URL, {
+  const encodedToken = globalThis.btoa(String(PIXELBIN_TOKEN).trim());
+  const authHeaders = { Authorization: `Bearer ${encodedToken}` };
+
+  console.log(CUTOUT_LOG, 'PixelBin Predictions create starting', PIXELBIN_PREDICTIONS_ERASE_BG, {
     tokenLen: PIXELBIN_TOKEN.length,
     b64AuthLen: encodedToken.length,
   });
@@ -174,41 +185,102 @@ async function fetchTransparentCutoutFromPixelBin(sourceImageUri: string, source
     ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/jpeg';
 
   const form = new FormData();
-  form.append('industry_type', 'human');
-  form.append('quality_type', 'original');
-  form.append('refine', 'true');
-  form.append('image', { uri: sourceImageUri, name: `source.${ext || 'jpg'}`, type: mime } as any);
+  form.append('input.image', { uri: sourceImageUri, name: `source.${ext || 'jpg'}`, type: mime } as any);
+  form.append('input.industry_type', 'human');
+  form.append('input.quality_type', 'original');
+  form.append('input.refine', 'true');
+  form.append('input.shadow', 'false');
 
   const controller = new AbortController();
-  const timeoutMs = 120000;
+  const timeoutMs = 240000;
   const to = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(PIXELBIN_ERASE_BG_URL, {
+    const res = await fetch(PIXELBIN_PREDICTIONS_ERASE_BG, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${encodedToken}`,
-      },
+      headers: authHeaders,
       body: form,
       signal: controller.signal,
     });
 
-    console.log(CUTOUT_LOG, 'PixelBin response', {
+    console.log(CUTOUT_LOG, 'PixelBin create HTTP', {
       ok: res.ok,
       status: res.status,
       statusText: res.statusText,
     });
 
+    const createText = await res.text().catch(() => '');
     if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      console.log(CUTOUT_LOG, 'PixelBin error body (truncated):', errBody.slice(0, 500));
-      throw new Error(`PixelBin erase_bg failed (${res.status}): ${errBody.slice(0, 300)}`);
+      console.log(CUTOUT_LOG, 'PixelBin create error body (truncated):', createText.slice(0, 500));
+      throw new Error(`PixelBin create failed (${res.status}): ${createText.slice(0, 300)}`);
     }
 
-    const blob = await res.blob();
-    console.log(CUTOUT_LOG, 'PixelBin OK; response blob', { size: blob?.size, type: blob?.type });
-    return blob;
+    let createJson: { _id?: string; id?: string; status?: string };
+    try {
+      createJson = JSON.parse(createText) as { _id?: string; id?: string; status?: string };
+    } catch {
+      console.log(CUTOUT_LOG, 'PixelBin create non-JSON body (truncated):', createText.slice(0, 300));
+      throw new Error('PixelBin create: expected JSON job response');
+    }
+
+    const jobId = createJson._id ?? createJson.id;
+    console.log(CUTOUT_LOG, 'PixelBin job created', { jobId: jobId ?? null, initialStatus: createJson.status ?? null });
+    if (!jobId || typeof jobId !== 'string') {
+      throw new Error(`PixelBin create: missing job id: ${createText.slice(0, 400)}`);
+    }
+
+    const statusPath = `/service/platform/transformation/v1.0/predictions/${encodeURIComponent(jobId)}`;
+    const statusUrl = `${PIXELBIN_API_ORIGIN}${statusPath}`;
+
+    for (let attempt = 1; attempt <= 90; attempt++) {
+      await sleepMs(2000);
+      const stRes = await fetch(statusUrl, { headers: authHeaders, signal: controller.signal });
+      const stText = await stRes.text().catch(() => '');
+      let detail: {
+        status?: string;
+        output?: string[];
+        message?: string;
+        error?: unknown;
+      } = {};
+      try {
+        detail = JSON.parse(stText) as typeof detail;
+      } catch {
+        console.log(CUTOUT_LOG, 'PixelBin poll non-JSON (truncated):', stText.slice(0, 200));
+      }
+
+      console.log(CUTOUT_LOG, `PixelBin poll ${attempt}/90`, {
+        httpOk: stRes.ok,
+        jobStatus: detail.status ?? null,
+      });
+
+      if (!stRes.ok) {
+        throw new Error(`PixelBin poll failed (${stRes.status}): ${stText.slice(0, 250)}`);
+      }
+
+      if (detail.status === 'SUCCESS') {
+        const outUrl = Array.isArray(detail.output) ? detail.output[0] : undefined;
+        if (!outUrl || typeof outUrl !== 'string') {
+          throw new Error(`PixelBin SUCCESS but no output URL: ${stText.slice(0, 400)}`);
+        }
+        console.log(CUTOUT_LOG, 'PixelBin fetching result PNG', outUrl.slice(0, 80) + '…');
+        const imgRes = await fetch(outUrl, { signal: controller.signal });
+        if (!imgRes.ok) {
+          const t = await imgRes.text().catch(() => '');
+          throw new Error(`PixelBin output fetch failed (${imgRes.status}): ${t.slice(0, 200)}`);
+        }
+        const blob = await imgRes.blob();
+        console.log(CUTOUT_LOG, 'PixelBin OK; PNG blob', { size: blob?.size, type: blob?.type });
+        return blob;
+      }
+
+      if (detail.status === 'FAILURE') {
+        console.log(CUTOUT_LOG, 'PixelBin job FAILURE body (truncated):', stText.slice(0, 500));
+        throw new Error(`PixelBin prediction failed: ${detail.message ?? stText.slice(0, 300)}`);
+      }
+    }
+
+    throw new Error('PixelBin prediction timed out (still pending after 90 polls)');
   } catch (err) {
-    console.log(CUTOUT_LOG, 'PixelBin fetch threw:', err);
+    console.log(CUTOUT_LOG, 'PixelBin pipeline threw:', err);
     throw err;
   } finally {
     clearTimeout(to);
