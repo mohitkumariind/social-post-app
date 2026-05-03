@@ -21,6 +21,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ViewShot from "react-native-view-shot";
 import { Colors } from '../../constants/Colors';
+import { getPartyLabel } from '../../constants/Parties';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { downloadMediaToCache } from '../../lib/mediaCache';
@@ -740,21 +741,10 @@ export default function PostDetailScreen() {
                     </View>
                     {isStaticFrame && (
                       <View style={[styles.frameOverlay, { borderTopColor: FRAME_STATIC_COLOR }]}>
-                        <View style={[styles.partyLogoCircle, { backgroundColor: FRAME_STATIC_COLOR }]}>
-                          <Ionicons name="flag" size={16} color="#FFF" />
-                        </View>
-                        <View style={styles.nameSection}>
-                          <Text style={styles.userName} numberOfLines={1}>
-                            {String(userInfo?.name ?? '').trim().toUpperCase() ||
-                              String(t('default_user_name') ?? '').trim().toUpperCase()}
-                          </Text>
-                          <Text style={styles.userDesignation} numberOfLines={1}>
-                            {String(userInfo?.designation1 ?? '').trim() || String(t('default_designation') ?? '').trim()}
-                          </Text>
-                        </View>
+                        {/* Large floating avatar (no clipped boxes) */}
                         <View style={styles.photoContainer}>
                           {userInfo?.avatar_url?.trim() ? (
-                            <View style={[styles.userPhotoActual, { backgroundColor: IMAGE_SKELETON_BG }]}>
+                            <View style={styles.userPhotoActual}>
                               <ExpoImage
                                 source={{ uri: userInfo.avatar_url }}
                                 style={StyleSheet.absoluteFillObject}
@@ -762,12 +752,31 @@ export default function PostDetailScreen() {
                                 cachePolicy="disk"
                               />
                             </View>
-                          ) : (
-                            <View style={[styles.userPhotoActual, styles.userPhotoPlaceholder]}>
-                              <Ionicons name="person" size={28} color="#FFF" />
-                            </View>
-                          )}
+                          ) : null}
                         </View>
+
+                        {/* Left-aligned name + designation pill */}
+                        <View style={styles.nameSection}>
+                          <Text style={styles.userName} numberOfLines={1}>
+                            {String(userInfo?.name ?? '').trim().toUpperCase() ||
+                              String(t('default_user_name') ?? '').trim().toUpperCase()}
+                          </Text>
+                          <View style={styles.designationPill}>
+                            <Text style={styles.userDesignation} numberOfLines={1}>
+                              {String(userInfo?.designation1 ?? '').trim() ||
+                                String(t('default_designation') ?? '').trim()}
+                            </Text>
+                          </View>
+                        </View>
+
+                        {/* Premium Party badge on right (no fallback icons) */}
+                        {String(userInfo?.partyName ?? '').trim() ? (
+                          <View style={[styles.partyBadge, { backgroundColor: FRAME_STATIC_COLOR }]}>
+                            <Text style={styles.partyBadgeText}>
+                              {getPartyLabel(String(userInfo?.partyName ?? '').trim()).toUpperCase()}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
                     )}
                     {overlayUrl ? (
@@ -857,14 +866,38 @@ const styles = StyleSheet.create({
   fullMedia: { width: '100%', height: '100%' },
   frameOverlayImageWrap: { position: 'absolute', bottom: 0, left: 0, right: 0, top: 0, justifyContent: 'flex-end', backgroundColor: 'transparent' },
   frameOverlayImage: { width: '100%', aspectRatio: 4 / 5 },
-  frameOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 80, backgroundColor: 'rgba(255,255,255,0.98)', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, borderTopWidth: 5 },
-  partyLogoCircle: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  nameSection: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
-  userName: { fontSize: 18, fontWeight: '900', color: '#1A1A1A' },
-  userDesignation: { fontSize: 11, color: '#666', fontWeight: '600' },
-  photoContainer: { width: 60, alignItems: 'flex-end' },
-  userPhotoActual: { width: 65, height: 65, borderRadius: 8, marginTop: -40, borderWidth: 3, borderColor: '#FFF' },
-  userPhotoPlaceholder: { backgroundColor: 'rgba(0,0,0,0.2)', justifyContent: 'center', alignItems: 'center' },
+  frameOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 115,
+    backgroundColor: '#F8FAFC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    borderTopWidth: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 8,
+  },
+  photoContainer: { width: 145, alignItems: 'flex-start' },
+  userPhotoActual: {
+    width: 135,
+    height: 135,
+    borderRadius: 18,
+    marginTop: -55,
+    overflow: 'hidden',
+    backgroundColor: 'transparent',
+  },
+  nameSection: { flex: 1, alignItems: 'flex-start', justifyContent: 'center', paddingRight: 12 },
+  userName: { fontSize: 18, fontWeight: '800', color: '#0F172A', letterSpacing: 0.3 },
+  designationPill: { marginTop: 6, backgroundColor: '#F1F5F9', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6 },
+  userDesignation: { fontSize: 11, color: '#334155', fontWeight: '700' },
+  partyBadge: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
+  partyBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '900', letterSpacing: 0.6 },
   sectionTitle: { fontSize: 16, fontWeight: '700', margin: 20 },
   framesGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 15 },
   frameCard: { width: '33.33%', height: 80, padding: 6 },
