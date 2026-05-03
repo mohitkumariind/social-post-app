@@ -256,7 +256,12 @@ class RootErrorBoundary extends React.Component<{ children: React.ReactNode }, R
   }
 
   componentDidCatch(error: unknown) {
-    if (__DEV__) console.warn('[RootErrorBoundary] render crash captured', error);
+    // Keep logs production-safe but include stack when available.
+    const payload =
+      error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : { error: String(error) };
+    if (__DEV__) console.warn('[RootErrorBoundary] render crash captured', payload);
     console.error(error);
   }
 
@@ -286,6 +291,14 @@ export default function RootLayout() {
     // These logs are safe in production and do not change UI.
     void (async () => {
       try {
+        // If user reports "update applied but issue persists", first confirm what the device is actually running.
+        // This is critical for diagnosing channel/runtime mismatches in EAS Update.
+        console.log('[updates] runtimeVersion=', Updates.runtimeVersion);
+        console.log('[updates] channel=', (Updates as any).channel ?? 'unknown');
+        console.log('[updates] updateId=', Updates.updateId ?? null);
+        console.log('[updates] isEmbeddedLaunch=', Updates.isEmbeddedLaunch);
+        console.log('[updates] isEmergencyLaunch=', Updates.isEmergencyLaunch);
+
         // NOTE: checkForUpdateAsync is not re-entrant; calling it while a previous check/fetch is running
         // can be rejected by the native module. Use the same in-flight lock as the debug button.
         if (updateCheckInFlightRef.current) return;
