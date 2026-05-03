@@ -23,7 +23,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     detectSessionInUrl: false,
   },
 });
-export { supabaseUrl };
+export { supabaseUrl, supabaseAnonKey };
 
 /** Remove persisted Supabase session keys (sb-*-auth-token, etc.) if anything was left behind. */
 async function clearSupabaseAuthStorageKeys(): Promise<void> {

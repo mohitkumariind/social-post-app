@@ -21,7 +21,7 @@ import { Colors } from '../constants/Colors';
 import { isPartyOtherId, normalizePartyId, PARTIES_DATA } from '../constants/Parties';
 import { useLang } from '../context/LanguageContext';
 import { type UserInfo, useUser } from '../context/UserContext';
-import { supabase, supabaseUrl } from '../lib/supabase';
+import { supabase, supabaseAnonKey, supabaseUrl } from '../lib/supabase';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getPartiesSafe } from '../lib/parties';
 
@@ -48,9 +48,12 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 async function uploadViaStorageRest(localUri: string, objectPath: string, accessToken: string): Promise<void> {
   const uploadUrl = `${supabaseUrl}/storage/v1/object/${AVATARS_BUCKET}/${objectPath}`;
   const result = await FileSystem.uploadAsync(uploadUrl, localUri, {
-    httpMethod: 'POST',
+    // Supabase Storage REST expects API key + user JWT.
+    // PUT is the most compatible verb for "upsert" style uploads.
+    httpMethod: 'PUT',
     uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
     headers: {
+      apikey: supabaseAnonKey,
       Authorization: `Bearer ${accessToken}`,
       'x-upsert': 'true',
       'Content-Type': 'image/jpeg',
