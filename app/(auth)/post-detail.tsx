@@ -25,9 +25,146 @@ import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { downloadMediaToCache } from '../../lib/mediaCache';
 import { getProfessionalFileName } from '../../lib/professionalFileName';
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseAnonKey, supabaseUrl } from '../../lib/supabase';
 
 const FRAME_STATIC_COLOR = Colors.primary;
+
+/** Supabase Storage — same bucket as post graphics / avatars */
+const POST_IMAGES_BUCKET = 'post-images';
+const PIXELBIN_ERASE_BG_URL = 'https://api.pixelbin.io/v1/transformation/erase_bg';
+/** PixelBin API token (client-side: easy to extract; prefer a backend proxy for production). */
+const PIXELBIN_TOKEN = 'ec264319-6e12-41b2-8079-e85a763f2026';
+
+function getTransparentCutoutObjectPath(userId: string): string {
+  return `transparent-avatars/${userId}.png`;
+}
+
+function encodePixelbinBearerToken(token: string): string {
+  if (typeof globalThis.btoa !== 'function') {
+    throw new Error('btoa is not available for PixelBin auth encoding');
+  }
+  return globalThis.btoa(token);
+}
+
+async function postImagesObjectExists(objectPath: string): Promise<boolean> {
+  const folder = objectPath.includes('/') ? objectPath.slice(0, objectPath.lastIndexOf('/')) : '';
+  const fileName = objectPath.includes('/') ? objectPath.slice(objectPath.lastIndexOf('/') + 1) : objectPath;
+  const searchPrefix = fileName.replace(/\.png$/i, '') || fileName;
+  const { data, error } = await supabase.storage.from(POST_IMAGES_BUCKET).list(folder, {
+    limit: 100,
+    search: searchPrefix,
+  });
+  if (error) {
+    if (__DEV__) console.warn('[PostDetail] storage list (cutout cache):', error.message);
+    return false;
+  }
+  return (data ?? []).some((f) => f.name === fileName);
+}
+
+async function uploadCutoutPngViaRest(localUri: string, objectPath: string, accessToken: string): Promise<void> {
+  const uploadUrl = `${supabaseUrl}/storage/v1/object/${POST_IMAGES_BUCKET}/${objectPath}`;
+  const result = await FileSystem.uploadAsync(uploadUrl, localUri, {
+    httpMethod: 'PUT',
+    uploadType: (FileSystem as any).FileSystemUploadType.BINARY_CONTENT,
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      'x-upsert': 'true',
+      'Content-Type': 'image/png',
+      Accept: 'application/json',
+    },
+  });
+  if (result.status < 200 || result.status >= 300) {
+    const body = typeof result.body === 'string' ? result.body : '';
+    throw new Error(`Cutout storage upload failed (${result.status})${body ? `: ${body.slice(0, 400)}` : ''}`);
+  }
+}
+
+async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer();
+  return new Response(blob).arrayBuffer();
+}
+
+function uint8ToBase64(u8: Uint8Array): string {
+  if (typeof globalThis.btoa !== 'function') {
+    throw new Error('btoa is not available for cutout temp file encoding');
+  }
+  let binary = '';
+  for (let i = 0; i < u8.length; i++) {
+    binary += String.fromCharCode(u8[i]!);
+  }
+  return globalThis.btoa(binary);
+}
+
+async function savePixelBinPngToPostImages(userId: string, pngBlob: Blob): Promise<string> {
+  const objectPath = getTransparentCutoutObjectPath(userId);
+  const cacheDir =
+    (FileSystem as any).cacheDirectory ?? (FileSystem as any).documentDirectory ?? null;
+  if (!cacheDir) throw new Error('No cache directory for cutout upload');
+
+  const tmpOut = `${cacheDir}transparent-cutout-${userId}-${Date.now()}.png`;
+  const ab = await blobToArrayBuffer(pngBlob);
+  const u8 = new Uint8Array(ab);
+  await FileSystem.writeAsStringAsync(tmpOut, uint8ToBase64(u8), {
+    encoding: (FileSystem as any).EncodingType.Base64,
+  });
+
+  try {
+    const { error } = await supabase.storage.from(POST_IMAGES_BUCKET).upload(objectPath, u8, {
+      upsert: true,
+      contentType: 'image/png',
+    });
+    if (error) throw error;
+  } catch (e) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) throw e;
+    await uploadCutoutPngViaRest(tmpOut, objectPath, accessToken);
+  } finally {
+    try {
+      await FileSystem.deleteAsync(tmpOut, { idempotent: true });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const { data } = supabase.storage.from(POST_IMAGES_BUCKET).getPublicUrl(objectPath);
+  return data.publicUrl;
+}
+
+async function fetchTransparentCutoutFromPixelBin(sourceImageUri: string, sourceNameForMime: string): Promise<Blob> {
+  const encodedToken = encodePixelbinBearerToken(PIXELBIN_TOKEN);
+  const ext = sourceNameForMime.split('.').pop()?.toLowerCase() ?? '';
+  const mime =
+    ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/jpeg';
+
+  const form = new FormData();
+  form.append('industry_type', 'human');
+  form.append('quality_type', 'original');
+  form.append('refine', 'true');
+  form.append('image', { uri: sourceImageUri, name: `source.${ext || 'jpg'}`, type: mime } as any);
+
+  const controller = new AbortController();
+  const timeoutMs = 120000;
+  const to = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(PIXELBIN_ERASE_BG_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${encodedToken}`,
+      },
+      body: form,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`PixelBin erase_bg failed (${res.status}): ${errBody.slice(0, 300)}`);
+    }
+    return await res.blob();
+  } finally {
+    clearTimeout(to);
+  }
+}
 
 /** Solid skeleton while graphics / frame URLs resolve (no blurhash placeholder). */
 const IMAGE_SKELETON_BG = '#E8E8E8';
@@ -214,6 +351,8 @@ export default function PostDetailScreen() {
   const [isSharing, setIsSharing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [dynamicCaptions, setDynamicCaptions] = useState<string[]>([]);
+  /** Cached PixelBin cutout public URL; null = use `avatarUrl` fallback on frame. */
+  const [frameCutoutUri, setFrameCutoutUri] = useState<string | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backNavLockRef = useRef(false);
@@ -351,6 +490,68 @@ export default function PostDetailScreen() {
   const displayDesignation =
     String(userInfo?.designation1 ?? '').trim() || String(t('default_designation') ?? '').trim();
   const avatarUrl = String(userInfo?.avatar_url ?? '').trim();
+
+  useEffect(() => {
+    let cancelled = false;
+    setFrameCutoutUri(null);
+
+    (async () => {
+      try {
+        let uid: string | undefined;
+        const { data: sess } = await supabase.auth.getSession();
+        uid = sess?.session?.user?.id;
+        if (!uid) {
+          const { data: authUser } = await supabase.auth.getUser();
+          uid = authUser?.user?.id;
+        }
+
+        const src = String(avatarUrl ?? '').trim();
+        if (!uid || !src) {
+          return;
+        }
+
+        const objectPath = getTransparentCutoutObjectPath(uid);
+        const cached = await postImagesObjectExists(objectPath);
+        if (cancelled || !isMountedRef.current) return;
+
+        if (cached) {
+          const { data } = supabase.storage.from(POST_IMAGES_BUCKET).getPublicUrl(objectPath);
+          if (!cancelled && isMountedRef.current) setFrameCutoutUri(data.publicUrl);
+          return;
+        }
+
+        const cacheDir =
+          (FileSystem as any).cacheDirectory ?? (FileSystem as any).documentDirectory ?? null;
+        if (!cacheDir) throw new Error('No cache directory');
+
+        const cleanUrl = src.split('?')[0] ?? src;
+        const ext = cleanUrl.includes('.') ? (cleanUrl.split('.').pop()?.toLowerCase() ?? 'jpg') : 'jpg';
+        const safeExt = ext.length <= 5 && /^[a-z0-9]+$/i.test(ext) ? ext : 'jpg';
+        const tmpSrc = `${cacheDir}pixelbin-src-${uid}-${Date.now()}.${safeExt}`;
+
+        await FileSystem.downloadAsync(src, tmpSrc);
+        if (cancelled || !isMountedRef.current) return;
+
+        const pngBlob = await fetchTransparentCutoutFromPixelBin(tmpSrc, `source.${safeExt}`);
+        try {
+          await FileSystem.deleteAsync(tmpSrc, { idempotent: true });
+        } catch {
+          /* ignore */
+        }
+        if (cancelled || !isMountedRef.current) return;
+
+        const publicUrl = await savePixelBinPngToPostImages(uid, pngBlob);
+        if (!cancelled && isMountedRef.current) setFrameCutoutUri(publicUrl);
+      } catch (e) {
+        if (__DEV__) console.warn('[PostDetail] transparent cutout pipeline failed; using avatar on frame:', e);
+        if (!cancelled && isMountedRef.current) setFrameCutoutUri(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [avatarUrl]);
 
   const overlayUrl =
     selectedFrame >= 2 && selectedFrame - 2 < frames.length
@@ -766,9 +967,9 @@ export default function PostDetailScreen() {
                           {avatarUrl ? (
                             <View style={styles.userPhotoActual}>
                               <ExpoImage
-                                source={{ uri: avatarUrl }}
+                                source={{ uri: frameCutoutUri ?? avatarUrl }}
                                 style={StyleSheet.absoluteFillObject}
-                                contentFit="cover"
+                                contentFit={frameCutoutUri ? 'contain' : 'cover'}
                                 cachePolicy="disk"
                               />
                             </View>
@@ -875,9 +1076,10 @@ const styles = StyleSheet.create({
     padding: 0,
     margin: 0,
   },
-  // Centers name + designation in the band left of the 135px avatar (rebalanced, not under the image).
+  // Horizontally + vertically centered in strip; reserve 135px on the right for the cutout.
   textBlockCentered: {
     position: 'absolute',
+    zIndex: 1,
     left: 0,
     right: 135,
     top: 0,
@@ -899,6 +1101,7 @@ const styles = StyleSheet.create({
   },
   avatarDock: {
     position: 'absolute',
+    zIndex: 2,
     bottom: 0,
     right: 0,
     width: 135,
