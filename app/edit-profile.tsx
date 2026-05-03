@@ -57,10 +57,19 @@ async function uploadViaStorageRest(localUri: string, objectPath: string, access
       Authorization: `Bearer ${accessToken}`,
       'x-upsert': 'true',
       'Content-Type': 'image/jpeg',
+      Accept: 'application/json',
     },
   });
   if (result.status < 200 || result.status >= 300) {
-    throw new Error(`Storage REST upload failed (${result.status})`);
+    // Supabase often includes a JSON error body; surface it for debugging.
+    const body = typeof result.body === 'string' ? result.body : '';
+    if (__DEV__) {
+      console.warn('[EditProfile] Storage REST upload failed', {
+        status: result.status,
+        body: body?.slice?.(0, 800) ?? body,
+      });
+    }
+    throw new Error(`Storage REST upload failed (${result.status})${body ? `: ${body}` : ''}`);
   }
 }
 
