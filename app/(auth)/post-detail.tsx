@@ -352,12 +352,6 @@ export default function PostDetailScreen() {
     String(userInfo?.designation1 ?? '').trim() || String(t('default_designation') ?? '').trim();
   const avatarUrl = String(userInfo?.avatar_url ?? '').trim();
 
-  const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
-  const nameLen = displayName.length;
-  // Base 14, max 16. Slight downscale for longer names.
-  const nameFontSize = clamp(16 - Math.floor(Math.max(0, nameLen - 12) / 6), 14, 16);
-  // Exactly 0.8x of name font size, but never exceeds 13 when name is 16.
-  const designationFontSize = clamp(Math.round(nameFontSize * 0.8), 11, nameFontSize === 16 ? 13 : 13);
   const overlayUrl =
     selectedFrame >= 2 && selectedFrame - 2 < frames.length
       ? (frames[selectedFrame - 2]?.url || frames[selectedFrame - 2]?.frame_url || null)
@@ -741,7 +735,13 @@ export default function PostDetailScreen() {
                     height: 1350,
                   }}
                 >
-                  <View style={[styles.mediaContainer, { width: width - 20, aspectRatio: 4 / 5 }]}>
+                  <View
+                    style={[
+                      styles.mediaContainer,
+                      { width: width - 20, aspectRatio: 4 / 5 },
+                      isStaticFrame && { overflow: 'visible' as const },
+                    ]}
+                  >
                     <View style={styles.mediaDragWrapper}>
                       {item && typeof item === 'string' ? (
                         <CachedMediaImage kind="daily" url={item} style={styles.fullMedia} contentFit="contain" />
@@ -754,10 +754,10 @@ export default function PostDetailScreen() {
                     {isStaticFrame && (
                       <View style={styles.frameOverlay}>
                         <View style={styles.textBlock}>
-                          <Text style={[styles.userName, { fontSize: nameFontSize }]} numberOfLines={1}>
+                          <Text style={styles.userName} numberOfLines={1}>
                             {displayName}
                           </Text>
-                          <Text style={[styles.userDesignation, { fontSize: designationFontSize }]} numberOfLines={1}>
+                          <Text style={styles.userDesignation} numberOfLines={1}>
                             {displayDesignation}
                           </Text>
                         </View>
@@ -883,14 +883,15 @@ const styles = StyleSheet.create({
   userPhotoActual: {
     width: 90,
     height: 90,
-    borderRadius: 45,
+    borderRadius: 0,
+    borderWidth: 0,
     marginTop: 0,
     overflow: 'hidden',
     backgroundColor: 'transparent',
   },
   avatarDock: { width: 90, height: 90, alignItems: 'flex-end', justifyContent: 'flex-end' },
-  userName: { fontSize: 14, fontWeight: '900', color: '#0F172A' },
-  userDesignation: { fontSize: 11, color: '#64748B', fontWeight: '600' },
+  userName: { fontSize: 10, fontWeight: '700', color: '#0F172A' },
+  userDesignation: { fontSize: 8, color: '#64748B', fontWeight: '600' },
   sectionTitle: { fontSize: 16, fontWeight: '700', margin: 20 },
   framesGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 15 },
   frameCard: { width: '33.33%', height: 80, padding: 6 },
