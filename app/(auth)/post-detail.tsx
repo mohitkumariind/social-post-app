@@ -346,8 +346,8 @@ export default function PostDetailScreen() {
 
   const isStaticFrame = selectedFrame === 1;
   const displayName =
-    String(userInfo?.name ?? '').trim().toUpperCase() ||
-    String(t('default_user_name') ?? '').trim().toUpperCase();
+    String(userInfo?.name ?? '').trim() ||
+    String(t('default_user_name') ?? '').trim();
   const displayDesignation =
     String(userInfo?.designation1 ?? '').trim() || String(t('default_designation') ?? '').trim();
   const avatarUrl = String(userInfo?.avatar_url ?? '').trim();
