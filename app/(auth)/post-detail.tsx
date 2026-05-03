@@ -753,7 +753,7 @@ export default function PostDetailScreen() {
                     </View>
                     {isStaticFrame && (
                       <View style={styles.frameOverlay}>
-                        <View style={styles.textBlock}>
+                        <View style={[styles.textBlockCentered, !avatarUrl && styles.textBlockCenteredFullWidth]}>
                           <Text style={styles.userName} numberOfLines={1}>
                             {displayName}
                           </Text>
@@ -870,28 +870,46 @@ const styles = StyleSheet.create({
     right: 0,
     height: 65,
     backgroundColor: '#FCFCFC',
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    paddingLeft: 16,
-    paddingRight: 12,
-    paddingBottom: 10,
     borderTopWidth: 0,
     overflow: 'visible',
+    padding: 0,
+    margin: 0,
   },
-  textBlock: { flex: 1, paddingRight: 10, alignItems: 'flex-start', justifyContent: 'flex-end' },
+  // Centers name + designation in the band left of the 135px avatar (rebalanced, not under the image).
+  textBlockCentered: {
+    position: 'absolute',
+    left: 0,
+    right: 135,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  textBlockCenteredFullWidth: { right: 0 },
   userPhotoActual: {
-    width: 90,
-    height: 90,
+    width: 135,
+    height: 135,
     borderRadius: 0,
     borderWidth: 0,
-    marginTop: 0,
+    margin: 0,
+    padding: 0,
     overflow: 'hidden',
     backgroundColor: 'transparent',
   },
-  avatarDock: { width: 90, height: 90, alignItems: 'flex-end', justifyContent: 'flex-end' },
-  userName: { fontSize: 10, fontWeight: '700', color: '#0F172A' },
-  userDesignation: { fontSize: 8, color: '#64748B', fontWeight: '600' },
+  avatarDock: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 135,
+    height: 135,
+    margin: 0,
+    padding: 0,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+  },
+  userName: { fontSize: 16, fontWeight: '700', color: '#0F172A', textAlign: 'center' },
+  userDesignation: { fontSize: 14, color: '#64748B', fontWeight: '600', textAlign: 'center' },
   sectionTitle: { fontSize: 16, fontWeight: '700', margin: 20 },
   framesGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 15 },
   frameCard: { width: '33.33%', height: 80, padding: 6 },
