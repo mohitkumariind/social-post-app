@@ -302,6 +302,13 @@ function buildSnapshotFilename(params: Record<string, unknown>): string {
   return getProfessionalFileName({ category, ext: 'jpg' }).replace(/\.jpg$/i, '');
 }
 
+/** Gallery save name: `SocialPost-[CleanName].png` (alphanumeric only in name segment). */
+function buildSocialPostSaveBasename(displayName: unknown): string {
+  const raw = String(displayName ?? '').trim() || 'User';
+  const cleanName = raw.replace(/[^a-zA-Z0-9]/g, '') || 'User';
+  return `SocialPost-${cleanName}`;
+}
+
 function sortFramesByFileName<T extends { file_name?: unknown; url?: unknown; frame_url?: unknown }>(rows: T[]): T[] {
   // Numeric-aware collator (14 > 2)
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -811,7 +818,28 @@ export default function PostDetailScreen() {
         return;
       }
 
-      await MediaLibrary.saveToLibraryAsync(rawUri);
+      const filenameBase = buildSocialPostSaveBasename(userInfo?.name);
+      const ext = 'png';
+      let uriToSave = rawUri;
+      const cacheDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? null;
+      if (cacheDir) {
+        try {
+          const dir = `${cacheDir}snapshots/`;
+          await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+          const { dest } = await resolveUniqueSnapshotDest({ dir, filenameBase, ext });
+          try {
+            await FileSystem.copyAsync({ from: rawUri, to: dest });
+            uriToSave = dest;
+          } catch {
+            await FileSystem.moveAsync({ from: rawUri, to: dest });
+            uriToSave = dest;
+          }
+        } catch (copyErr) {
+          if (__DEV__) console.warn('[PostDetail] gallery named file copy failed, saving capture URI', copyErr);
+        }
+      }
+
+      await MediaLibrary.saveToLibraryAsync(uriToSave);
       alertSafe(t('save_success_title') || 'Saved', t('save_success_message') || 'Saved to gallery.');
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error ?? '');
