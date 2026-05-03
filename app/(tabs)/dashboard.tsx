@@ -99,6 +99,7 @@ export default function DashboardScreen() {
   const dailyInFlightRef = useRef<Set<string>>(new Set());
   const fetchPostsReqIdRef = useRef(0);
   const safeUserInfo = userInfo ?? { name: '', phone: '', state: '', partyName: '' };
+  const realtimeChannelRef = useRef<any>(null);
 
   const clearDashboardExpandParams = React.useCallback(() => {
     // `setParams` has differed across Expo Router versions / navigators.
@@ -337,13 +338,40 @@ export default function DashboardScreen() {
 
   useEffect(() => {
     fetchEvents();
-    const channel = supabase
-      .channel('realtime-any')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'events' }, () => setRefreshKey((p) => p + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => setRefreshKey((p) => p + 1))
-      .subscribe();
+    try {
+      // IMPORTANT: Do not reuse a fixed channel name here.
+      // Dashboard can mount more than once (router.replace/back, tab stack behavior),
+      // and Supabase will return the existing subscribed channel for the same name.
+      // Adding callbacks after subscribe throws and can blank-screen the app.
+      if (realtimeChannelRef.current) {
+        try {
+          supabase.removeChannel(realtimeChannelRef.current);
+        } catch {
+          // ignore
+        }
+        realtimeChannelRef.current = null;
+      }
+
+      const channelName = `realtime-any-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const channel = supabase
+        .channel(channelName)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'events' }, () => setRefreshKey((p) => p + 1))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => setRefreshKey((p) => p + 1))
+        .subscribe();
+      realtimeChannelRef.current = channel;
+    } catch (e) {
+      if (__DEV__) console.warn('[Dashboard] realtime subscribe failed:', e);
+    }
     return () => {
-      supabase.removeChannel(channel);
+      const ch = realtimeChannelRef.current;
+      realtimeChannelRef.current = null;
+      if (ch) {
+        try {
+          supabase.removeChannel(ch);
+        } catch {
+          // ignore
+        }
+      }
     };
   }, []);
 
