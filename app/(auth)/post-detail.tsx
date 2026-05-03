@@ -21,7 +21,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ViewShot from "react-native-view-shot";
 import { Colors } from '../../constants/Colors';
-import { getPartyLabel } from '../../constants/Parties';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { downloadMediaToCache } from '../../lib/mediaCache';
@@ -346,6 +345,19 @@ export default function PostDetailScreen() {
   }, []);
 
   const isStaticFrame = selectedFrame === 1;
+  const displayName =
+    String(userInfo?.name ?? '').trim().toUpperCase() ||
+    String(t('default_user_name') ?? '').trim().toUpperCase();
+  const displayDesignation =
+    String(userInfo?.designation1 ?? '').trim() || String(t('default_designation') ?? '').trim();
+  const avatarUrl = String(userInfo?.avatar_url ?? '').trim();
+
+  const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+  const nameLen = displayName.length;
+  // Base 14, max 16. Slight downscale for longer names.
+  const nameFontSize = clamp(16 - Math.floor(Math.max(0, nameLen - 12) / 6), 14, 16);
+  // Exactly 0.8x of name font size, but never exceeds 13 when name is 16.
+  const designationFontSize = clamp(Math.round(nameFontSize * 0.8), 11, nameFontSize === 16 ? 13 : 13);
   const overlayUrl =
     selectedFrame >= 2 && selectedFrame - 2 < frames.length
       ? (frames[selectedFrame - 2]?.url || frames[selectedFrame - 2]?.frame_url || null)
@@ -740,13 +752,21 @@ export default function PostDetailScreen() {
                       )}
                     </View>
                     {isStaticFrame && (
-                      <View style={[styles.frameOverlay, { borderTopColor: FRAME_STATIC_COLOR }]}>
-                        {/* Large floating avatar (no clipped boxes) */}
-                        <View style={styles.photoContainer}>
-                          {userInfo?.avatar_url?.trim() ? (
+                      <View style={styles.frameOverlay}>
+                        <View style={styles.textBlock}>
+                          <Text style={[styles.userName, { fontSize: nameFontSize }]} numberOfLines={1}>
+                            {displayName}
+                          </Text>
+                          <Text style={[styles.userDesignation, { fontSize: designationFontSize }]} numberOfLines={1}>
+                            {displayDesignation}
+                          </Text>
+                        </View>
+
+                        <View style={styles.avatarDock}>
+                          {avatarUrl ? (
                             <View style={styles.userPhotoActual}>
                               <ExpoImage
-                                source={{ uri: userInfo.avatar_url }}
+                                source={{ uri: avatarUrl }}
                                 style={StyleSheet.absoluteFillObject}
                                 contentFit="cover"
                                 cachePolicy="disk"
@@ -754,29 +774,6 @@ export default function PostDetailScreen() {
                             </View>
                           ) : null}
                         </View>
-
-                        {/* Left-aligned name + designation pill */}
-                        <View style={styles.nameSection}>
-                          <Text style={styles.userName} numberOfLines={1}>
-                            {String(userInfo?.name ?? '').trim().toUpperCase() ||
-                              String(t('default_user_name') ?? '').trim().toUpperCase()}
-                          </Text>
-                          <View style={styles.designationPill}>
-                            <Text style={styles.userDesignation} numberOfLines={1}>
-                              {String(userInfo?.designation1 ?? '').trim() ||
-                                String(t('default_designation') ?? '').trim()}
-                            </Text>
-                          </View>
-                        </View>
-
-                        {/* Premium Party badge on right (no fallback icons) */}
-                        {String(userInfo?.partyName ?? '').trim() ? (
-                          <View style={[styles.partyBadge, { backgroundColor: FRAME_STATIC_COLOR }]}>
-                            <Text style={styles.partyBadgeText}>
-                              {getPartyLabel(String(userInfo?.partyName ?? '').trim()).toUpperCase()}
-                            </Text>
-                          </View>
-                        ) : null}
                       </View>
                     )}
                     {overlayUrl ? (
@@ -871,33 +868,29 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: 115,
-    backgroundColor: '#F8FAFC',
+    height: 65,
+    backgroundColor: '#FCFCFC',
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 18,
-    borderTopWidth: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 5,
-    elevation: 8,
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingLeft: 16,
+    paddingRight: 12,
+    paddingBottom: 10,
+    borderTopWidth: 0,
+    overflow: 'visible',
   },
-  photoContainer: { width: 145, alignItems: 'flex-start' },
+  textBlock: { flex: 1, paddingRight: 10, alignItems: 'flex-start', justifyContent: 'flex-end' },
   userPhotoActual: {
-    width: 135,
-    height: 135,
-    borderRadius: 18,
-    marginTop: -55,
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    marginTop: 0,
     overflow: 'hidden',
     backgroundColor: 'transparent',
   },
-  nameSection: { flex: 1, alignItems: 'flex-start', justifyContent: 'center', paddingRight: 12 },
-  userName: { fontSize: 18, fontWeight: '800', color: '#0F172A', letterSpacing: 0.3 },
-  designationPill: { marginTop: 6, backgroundColor: '#F1F5F9', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6 },
-  userDesignation: { fontSize: 11, color: '#334155', fontWeight: '700' },
-  partyBadge: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
-  partyBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '900', letterSpacing: 0.6 },
+  avatarDock: { width: 90, height: 90, alignItems: 'flex-end', justifyContent: 'flex-end' },
+  userName: { fontSize: 14, fontWeight: '900', color: '#0F172A' },
+  userDesignation: { fontSize: 11, color: '#64748B', fontWeight: '600' },
   sectionTitle: { fontSize: 16, fontWeight: '700', margin: 20 },
   framesGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 15 },
   frameCard: { width: '33.33%', height: 80, padding: 6 },
