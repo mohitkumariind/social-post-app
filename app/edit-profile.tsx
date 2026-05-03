@@ -28,7 +28,7 @@ import { getPartiesSafe } from '../lib/parties';
 const PROFILE_REDIRECT_DONE_KEY = '@profile_redirect_done';
 
 /** Supabase Storage — must match bucket created in SQL / dashboard */
-const AVATARS_BUCKET = 'avatars';
+const AVATARS_BUCKET = 'post-images';
 
 type GeoItem = { id: number; name: string };
 
@@ -88,8 +88,10 @@ async function uploadImage(localUri: string, userId: string): Promise<string> {
     });
     uploadBody = base64ToArrayBuffer(base64);
   }
-  const fileName = `${userId}_${Date.now()}.jpg`;
-  const path = `profiles/${fileName}`;
+  // Keep avatar uploads isolated from post graphics.
+  // Bucket: post-images, Folder: avatars/
+  const fileName = `${userId}-${Date.now()}.jpg`;
+  const path = `avatars/${fileName}`;
 
   try {
     const { error } = await supabase.storage.from(AVATARS_BUCKET).upload(path, uploadBody, {
