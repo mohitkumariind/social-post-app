@@ -4,6 +4,9 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 type Body = { ids?: string[]; group_tags?: string[] };
 
+const NO_SERVICE_ROLE =
+  'Bulk tag assign requires SUPABASE_SERVICE_ROLE_KEY on the server; otherwise RLS may block updates to other users and group_tags stays null.';
+
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
@@ -26,11 +29,26 @@ export async function POST(request: NextRequest) {
   if (ids.length === 0) return NextResponse.json({ error: 'Missing ids' }, { status: 400 });
 
   const admin = createServiceRoleClient();
-  const db = admin ?? supabase;
+  if (!admin) {
+    return NextResponse.json({ error: NO_SERVICE_ROLE }, { status: 503 });
+  }
 
-  const { error } = await db.from('profiles').update({ group_tags }).in('id', ids);
+  /** Column name must match Supabase `profiles.group_tags` (TEXT[]). */
+  const { data, error } = await admin.from('profiles').update({ group_tags }).in('id', ids).select('id, group_tags');
+
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  console.log('[admin/profiles/bulk-tags][POST]', {
+    table: 'profiles',
+    updateColumn: 'group_tags',
+    idCount: ids.length,
+    payloadGroupTags: group_tags,
+    returnedRows: (data ?? []).length,
+    sampleWritten: (data ?? []).slice(0, 5).map((r: { id?: string; group_tags?: unknown }) => ({
+      id: r.id,
+      group_tags: r.group_tags,
+    })),
+  });
 
   return NextResponse.json({ ok: true, updated: ids.length }, { headers: { 'Cache-Control': 'no-store' } });
 }
-

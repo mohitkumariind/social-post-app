@@ -26,6 +26,10 @@ function toStrArr(v: unknown): string[] {
   return [];
 }
 
+/**
+ * Counts tag strings across all profile rows.
+ * Every row is visited: `null`, `[]`, or missing `group_tags` yields zero inner iterations (not skipped as a row).
+ */
 function aggregateTags(rows: { id: string; group_tags: unknown }[]): { tag: string; count: number }[] {
   const counts = new Map<string, number>();
   for (const row of rows) {
@@ -36,6 +40,47 @@ function aggregateTags(rows: { id: string; group_tags: unknown }[]): { tag: stri
   return Array.from(counts.entries())
     .map(([tag, count]) => ({ tag, count }))
     .sort((a, b) => a.tag.localeCompare(b.tag));
+}
+
+function summarizeGroupTagsRaw(rows: { id: string; group_tags: unknown }[]) {
+  let nullish = 0;
+  let emptyArray = 0;
+  let nonEmptyParsed = 0;
+  for (const r of rows) {
+    const v = r.group_tags;
+    if (v == null) {
+      nullish += 1;
+      continue;
+    }
+    if (Array.isArray(v) && v.length === 0) {
+      emptyArray += 1;
+      continue;
+    }
+    if (toStrArr(v).length > 0) nonEmptyParsed += 1;
+  }
+  return { totalRows: rows.length, nullish, emptyArray, rowsWithAtLeastOneTag: nonEmptyParsed };
+}
+
+function rawRowDebug(r: { id: string; group_tags: unknown }) {
+  const v = r.group_tags;
+  return {
+    id: r.id,
+    column: 'group_tags',
+    typeof: typeof v,
+    isNull: v === null,
+    isArray: Array.isArray(v),
+    arrayLength: Array.isArray(v) ? v.length : null,
+    parsedLength: toStrArr(v).length,
+    /** Short preview for logs (avoid huge JSON in Vercel). */
+    preview:
+      typeof v === 'string'
+        ? `${v.slice(0, 120)}${v.length > 120 ? '…' : ''}`
+        : Array.isArray(v)
+          ? JSON.stringify(v.slice(0, 8)) + (v.length > 8 ? '…' : '')
+          : v === undefined
+            ? 'undefined'
+            : String(v).slice(0, 80),
+  };
 }
 
 /** Paginate through all profiles (PostgREST often caps ~1k rows per request). */
@@ -101,6 +146,14 @@ export async function GET(request: NextRequest) {
   try {
     if (tag) {
       const rows = await fetchMembersForTag(admin, tag);
+      console.log('[admin/groups][GET] members raw', {
+        tag,
+        selectColumns: 'id, name, phone, phone_number, avatar_url, group_tags',
+        table: 'profiles',
+        overlapFilter: { column: 'group_tags', overlaps: [tag] },
+        rowCount: rows.length,
+        sample: rows.slice(0, 5).map((r) => rawRowDebug({ id: String(r.id ?? ''), group_tags: r.group_tags })),
+      });
       const members = rows.map((r) => ({
         id: String(r.id ?? ''),
         name: String(r.name ?? ''),
@@ -113,7 +166,24 @@ export async function GET(request: NextRequest) {
     }
 
     const rows = await fetchAllProfileIdAndTags(admin);
-    return NextResponse.json({ groups: aggregateTags(rows) }, { headers: { 'Cache-Control': 'no-store' } });
+    const groups = aggregateTags(rows);
+    const summary = summarizeGroupTagsRaw(rows);
+    const sample = rows.slice(0, 8).map(rawRowDebug);
+    const sampleWithTags = rows
+      .filter((r) => toStrArr(r.group_tags).length > 0)
+      .slice(0, 8)
+      .map(rawRowDebug);
+
+    console.log('[admin/groups][GET] profiles raw (list)', {
+      selectColumns: 'id, group_tags',
+      table: 'profiles',
+      ...summary,
+      uniqueTags: groups.length,
+      sampleRowsFirst8: sample,
+      sampleRowsWithTagsFirst8: sampleWithTags,
+    });
+
+    return NextResponse.json({ groups }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Failed to load groups';
     return NextResponse.json({ error: msg }, { status: 500 });
