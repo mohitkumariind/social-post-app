@@ -29,6 +29,60 @@ import { supabase, supabaseAnonKey, supabaseUrl } from '../../lib/supabase';
 
 const FRAME_STATIC_COLOR = Colors.primary;
 
+/** Minimum height for the off-white name / designation band. */
+const FRAME_TEXT_BAND_MIN_HEIGHT = 55;
+
+type PartySocialStripPalette = { bg: string; fg: string };
+
+/** Party-colored bottom strip + contrasting label/icon color. */
+function getFramePartyStripPalette(partyName: unknown): PartySocialStripPalette {
+  const p = String(partyName ?? '').toLowerCase();
+  if (p.includes('bjp')) return { bg: '#FF9933', fg: '#1E293B' };
+  if (p.includes('congress')) return { bg: '#00A03E', fg: '#FFFFFF' };
+  if (p.includes('aap') || p.includes('aam aadmi')) return { bg: '#003399', fg: '#FFFFFF' };
+  if (p.includes('akali')) return { bg: '#FFCC00', fg: '#1E293B' };
+  return { bg: '#1E293B', fg: '#FFFFFF' };
+}
+
+type FrameSocialStripItem = { key: string; icon: string; value: string };
+
+function buildFrameSocialStripItems(u: { whatsapp?: string; facebook?: string; twitter?: string; instagram?: string } | null | undefined): FrameSocialStripItem[] {
+  if (!u) return [];
+  const out: FrameSocialStripItem[] = [];
+  const wa = String(u.whatsapp ?? '').trim();
+  if (wa) out.push({ key: 'wa', icon: 'logo-whatsapp', value: wa });
+  const fb = String(u.facebook ?? '').trim();
+  if (fb) out.push({ key: 'fb', icon: 'logo-facebook', value: fb });
+  const tw = String(u.twitter ?? '').trim();
+  if (tw) out.push({ key: 'tw', icon: 'logo-twitter', value: tw });
+  const ig = String(u.instagram ?? '').trim();
+  if (ig) out.push({ key: 'ig', icon: 'logo-instagram', value: ig });
+  return out;
+}
+
+const getFontForLang = (lang: string | undefined, isName: boolean) => {
+  const language = lang || 'en';
+  switch (language) {
+    case 'hi':
+    case 'en':
+      return { fontFamily: isName ? 'Poppins-ExtraBold' : 'Poppins-Bold', fontWeight: (isName ? '800' : '700') as const };
+    case 'pa':
+      return {
+        fontFamily: isName ? 'NotoSansGurmukhi-ExtraBold' : 'NotoSansGurmukhi-Bold',
+        fontWeight: (isName ? '800' : '700') as const,
+      };
+    case 'gu':
+      return {
+        fontFamily: isName ? 'NotoSansGujarati-ExtraBold' : 'NotoSansGujarati-Bold',
+        fontWeight: (isName ? '800' : '700') as const,
+      };
+    case 'mr':
+      return { fontFamily: isName ? 'GoogleSans-Bold' : 'GoogleSans-SemiBold', fontWeight: '700' as const };
+    default:
+      return { fontFamily: isName ? 'Poppins-ExtraBold' : 'Poppins-Bold', fontWeight: (isName ? '800' : '700') as const };
+  }
+};
+
 /** Supabase Storage — same bucket as post graphics / avatars */
 const POST_IMAGES_BUCKET = 'post-images';
 /** PixelBin Predictions API — `erase_bg` → path segment `erase/bg` (see @pixelbin/admin Predictions.js). */
@@ -290,6 +344,8 @@ async function fetchTransparentCutoutFromPixelBin(sourceImageUri: string, source
 /** Solid skeleton while graphics / frame URLs resolve (no blurhash placeholder). */
 const IMAGE_SKELETON_BG = '#E8E8E8';
 
+type FrameAvatarSlotMode = 'loading' | 'cutout' | 'original';
+
 function routeParamStr(v: unknown): string {
   if (v == null) return '';
   if (typeof v === 'string') return v.trim();
@@ -469,18 +525,41 @@ export default function PostDetailScreen() {
   const captureIndexRef = useRef<number>(0);
   const lastCaptureDiagRef = useRef<string>('');
 
+  // Rendered "frame" size on-screen (same aspect ratio as ViewShot: 1080x1350 => 4/5).
+  const frameRenderWidth = width - 20;
+  const frameRenderHeight = (frameRenderWidth * 5) / 4;
+
+  // Dynamic micro-strip sizing derived from rendered frame height.
+  const STRIP_HEIGHT = frameRenderHeight * 0.03; // 3% of frame height
+  const CONTENT_SIZE = frameRenderHeight * 0.0182; // 30% smaller than 0.026
+
+  // Dynamic text sizing derived from rendered frame height.
+  const NAME_SIZE = frameRenderHeight * 0.052; // requested
+  const DESIGNATION_SIZE = frameRenderHeight * 0.035;
+
   const initialIndex = params?.currentIndex != null ? parseInt(String(params.currentIndex), 10) : 0;
 
   const [frames, setFrames] = useState<any[]>([]);
-  const [selectedFrame, setSelectedFrame] = useState(1);
+  const [selectedFrame, setSelectedFrame] = useState<number>(1);
+  const selectedFrameNum = Number(selectedFrame);
+  const safeSelectedFrame = Number.isFinite(selectedFrameNum) && selectedFrameNum > 0 ? selectedFrameNum : 1;
+
+  // Frame variant is derived from the first two static "frame slots":
+  // 1 => Variant A (avatar right)
+  // 2 => Variant B (avatar left)
+  const isAvatarRight = safeSelectedFrame !== 2;
+  const AVATAR_SLOT = 135;
+  const TEXT_SAFE_MARGIN = 125;
   const [activeIndex, setActiveIndex] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [dynamicCaptions, setDynamicCaptions] = useState<string[]>([]);
-  /** Cached PixelBin cutout public URL; null = use `avatarUrl` fallback on frame. */
+  /** Cached PixelBin cutout public URL; null until resolved or unavailable. */
   const [frameCutoutUri, setFrameCutoutUri] = useState<string | null>(null);
+  /** Avoid showing original avatar while cutout pipeline runs or cutout image is decoding. */
+  const [frameAvatarSlotMode, setFrameAvatarSlotMode] = useState<FrameAvatarSlotMode>('loading');
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backNavLockRef = useRef(false);
@@ -611,33 +690,77 @@ export default function PostDetailScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  const isStaticFrame = selectedFrame === 1;
-  const displayName =
-    String(userInfo?.name ?? '').trim() ||
-    String(t('default_user_name') ?? '').trim();
-  const displayDesignation =
-    String(userInfo?.designation1 ?? '').trim() || String(t('default_designation') ?? '').trim();
+  const isStaticFrame = safeSelectedFrame === 1 || safeSelectedFrame === 2;
+  // Render user's input as-is (supports regional/local languages).
+  const displayName = String(userInfo?.name ?? '');
   const avatarUrl = String(userInfo?.avatar_url ?? '').trim();
+
+  const filledDesignations = useMemo(() => {
+    const raw = [
+      userInfo?.designation1,
+      userInfo?.designation2,
+      userInfo?.designation3,
+      userInfo?.designation4,
+    ];
+    const values = raw.map((x) => String(x ?? ''));
+    // Keep rendering "as typed", but don't render blank/whitespace-only lines.
+    return values.filter((s) => s.trim().length > 0);
+  }, [userInfo?.designation1, userInfo?.designation2, userInfo?.designation3, userInfo?.designation4]);
+
+  const partySocialStripPalette = useMemo(
+    () => getFramePartyStripPalette(userInfo?.partyName),
+    [userInfo?.partyName]
+  );
+
+  const socialStripItems = useMemo(() => buildFrameSocialStripItems(userInfo), [
+    userInfo?.whatsapp,
+    userInfo?.facebook,
+    userInfo?.twitter,
+    userInfo?.instagram,
+  ]);
+
+  const socialStripJustifyContent = useMemo(() => {
+    const count = socialStripItems.length;
+    if (count <= 2) return 'center' as const;
+    return isAvatarRight ? ('flex-start' as const) : ('flex-end' as const);
+  }, [isAvatarRight, socialStripItems.length]);
+
+  useEffect(() => {
+    console.log('[PostDetail] selectedFrame=', safeSelectedFrame, 'isAvatarRight=', isAvatarRight);
+  }, [isAvatarRight, safeSelectedFrame]);
 
   useEffect(() => {
     let cancelled = false;
     setFrameCutoutUri(null);
+    setFrameAvatarSlotMode('loading');
 
     (async () => {
       try {
         console.log(CUTOUT_LOG, 'Pipeline start (avatarUrl changed)');
 
-        let uid: string | undefined;
-        const { data: sess } = await supabase.auth.getSession();
-        uid = sess?.session?.user?.id;
-        if (!uid) {
-          const { data: authUser } = await supabase.auth.getUser();
-          uid = authUser?.user?.id;
+        const src = String(avatarUrl ?? '').trim();
+        if (!src) {
+          console.log(CUTOUT_LOG, 'Skip: no avatarUrl');
+          return;
         }
 
-        const src = String(avatarUrl ?? '').trim();
-        if (!uid || !src) {
-          console.log(CUTOUT_LOG, 'Skip: missing uid or avatarUrl', { hasUid: Boolean(uid), hasSrc: Boolean(src) });
+        // Match fetchFrames: auth restore can lag navigation; a single getSession miss
+        // must not lock us into `original` forever (effect only re-runs when avatarUrl changes).
+        let uid: string | undefined;
+        for (let i = 0; i < 5; i++) {
+          const { data: sess } = await supabase.auth.getSession();
+          uid = sess?.session?.user?.id;
+          if (uid) break;
+          const { data: authUser } = await supabase.auth.getUser();
+          uid = authUser?.user?.id;
+          if (uid) break;
+          await new Promise((r) => setTimeout(r, 400));
+          if (cancelled) return;
+        }
+
+        if (!uid) {
+          console.log(CUTOUT_LOG, 'Skip: missing uid after retries; fallback to original avatar on frame');
+          if (!cancelled && isMountedRef.current) setFrameAvatarSlotMode('original');
           return;
         }
 
@@ -686,7 +809,10 @@ export default function PostDetailScreen() {
         }
       } catch (e) {
         console.log(CUTOUT_LOG, 'Pipeline failed; frame falls back to normal avatar_url', e);
-        if (!cancelled && isMountedRef.current) setFrameCutoutUri(null);
+        if (!cancelled && isMountedRef.current) {
+          setFrameCutoutUri(null);
+          setFrameAvatarSlotMode('original');
+        }
       }
     })();
 
@@ -696,8 +822,8 @@ export default function PostDetailScreen() {
   }, [avatarUrl]);
 
   const overlayUrl =
-    selectedFrame >= 2 && selectedFrame - 2 < frames.length
-      ? (frames[selectedFrame - 2]?.url || frames[selectedFrame - 2]?.frame_url || null)
+    safeSelectedFrame >= 3 && safeSelectedFrame - 3 < frames.length
+      ? (frames[safeSelectedFrame - 3]?.url || frames[safeSelectedFrame - 3]?.frame_url || null)
       : null;
 
   const alertSafe = (title: string | undefined | null, message: string | undefined | null) => {
@@ -902,19 +1028,21 @@ export default function PostDetailScreen() {
 
   const FRAME_COLORS: Record<number, string> = {
     1: FRAME_STATIC_COLOR,
-    2: '#2ECC71',
-    3: '#1A73E8',
-    4: '#E74C3C',
-    5: '#8E44AD',
-    6: '#2C3E50',
+    2: FRAME_STATIC_COLOR,
+    3: '#2ECC71',
+    4: '#1A73E8',
+    5: '#E74C3C',
+    6: '#8E44AD',
+    7: '#2C3E50',
   };
-  const visibleFrameIds = useMemo(() => [1, ...frames.map((_, i) => i + 2)], [frames]);
+  const visibleFrameIds = useMemo(() => [1, 2, ...frames.map((_, i) => i + 3)], [frames]);
   const visibleFrames = useMemo(
     () => [
       { id: 1, color: FRAME_STATIC_COLOR, url: null as string | null },
+      { id: 2, color: FRAME_STATIC_COLOR, url: null as string | null },
       ...frames.map((f, i) => ({
-        id: i + 2,
-        color: FRAME_COLORS[i + 2] ?? '#333',
+        id: i + 3,
+        color: FRAME_COLORS[i + 3] ?? '#333',
         url: (f.url || f.frame_url || '') as string,
       })),
     ],
@@ -1102,7 +1230,7 @@ export default function PostDetailScreen() {
                   <View
                     style={[
                       styles.mediaContainer,
-                      { width: width - 20, aspectRatio: 4 / 5 },
+                      { width: frameRenderWidth, aspectRatio: 4 / 5 },
                       isStaticFrame && { overflow: 'visible' as const },
                     ]}
                   >
@@ -1117,25 +1245,113 @@ export default function PostDetailScreen() {
                     </View>
                     {isStaticFrame && (
                       <View style={styles.frameOverlay}>
-                        <View style={[styles.textBlockCentered, !avatarUrl && styles.textBlockCenteredFullWidth]}>
-                          <Text style={styles.userName} numberOfLines={1}>
-                            {displayName}
-                          </Text>
-                          <Text style={styles.userDesignation} numberOfLines={1}>
-                            {displayDesignation}
-                          </Text>
+                        <View
+                          style={[
+                            styles.frameTextBand,
+                            { minHeight: FRAME_TEXT_BAND_MIN_HEIGHT },
+                            !avatarUrl && styles.frameTextBandFullBleed,
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.frameTextBandInner,
+                              avatarUrl
+                                ? (isAvatarRight ? { marginRight: TEXT_SAFE_MARGIN } : { marginLeft: TEXT_SAFE_MARGIN })
+                                : null,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.userName,
+                                getFontForLang(userInfo?.language, true),
+                                { fontSize: NAME_SIZE, lineHeight: Math.round(NAME_SIZE * 1.2) },
+                              ]}
+                            >
+                              {displayName}
+                            </Text>
+                            {filledDesignations.map((line, idx) => (
+                              <Text
+                                key={`d-${idx}-${line.slice(0, 32)}`}
+                                style={[
+                                  styles.userDesignation,
+                                  getFontForLang(userInfo?.language, false),
+                                  idx > 0 ? styles.userDesignationStacked : null,
+                                  { fontSize: DESIGNATION_SIZE, lineHeight: Math.round(DESIGNATION_SIZE * 1.2) },
+                                ]}
+                              >
+                                {line}
+                              </Text>
+                            ))}
+                          </View>
                         </View>
 
-                        <View style={styles.avatarDock}>
+                        <View
+                          style={[
+                            styles.framePartySocialStrip,
+                            { height: STRIP_HEIGHT, backgroundColor: partySocialStripPalette.bg },
+                          ]}
+                        >
+                          <View style={[styles.framePartySocialRow, { justifyContent: socialStripJustifyContent }]}>
+                            {socialStripItems.map((it) => (
+                              <View key={it.key} style={styles.framePartySocialItem}>
+                                <Ionicons name={it.icon as any} size={CONTENT_SIZE} color={partySocialStripPalette.fg} />
+                                <Text
+                                  style={[
+                                    styles.framePartySocialText,
+                                    { color: partySocialStripPalette.fg, fontSize: CONTENT_SIZE },
+                                  ]}
+                                  numberOfLines={1}
+                                >
+                                  {it.value}
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        </View>
+
+                        <View
+                          style={[
+                            styles.avatarDock,
+                            isAvatarRight ? styles.avatarDockRight : styles.avatarDockLeft,
+                            { bottom: STRIP_HEIGHT },
+                          ]}
+                        >
                           {avatarUrl ? (
                             <View style={styles.userPhotoActual}>
-                              <ExpoImage
-                                source={{ uri: frameCutoutUri ?? avatarUrl }}
-                                style={[StyleSheet.absoluteFillObject, styles.frameAvatarImage]}
-                                contentFit={frameCutoutUri ? 'contain' : 'cover'}
-                                cachePolicy="disk"
-                                recyclingKey={frameCutoutUri ?? avatarUrl}
-                              />
+                              {frameAvatarSlotMode === 'original' ? (
+                                <ExpoImage
+                                  source={{ uri: avatarUrl }}
+                                  style={[StyleSheet.absoluteFillObject, styles.frameAvatarImage]}
+                                  contentFit="cover"
+                                  cachePolicy="disk"
+                                  recyclingKey={avatarUrl}
+                                />
+                              ) : frameCutoutUri ? (
+                                <ExpoImage
+                                  key={frameCutoutUri}
+                                  source={{ uri: frameCutoutUri }}
+                                  style={[
+                                    StyleSheet.absoluteFillObject,
+                                    styles.frameAvatarImage,
+                                    frameAvatarSlotMode === 'loading' ? { opacity: 0 } : null,
+                                  ]}
+                                  contentFit="contain"
+                                  cachePolicy="disk"
+                                  recyclingKey={frameCutoutUri}
+                                  onLoad={() => {
+                                    if (isMountedRef.current) setFrameAvatarSlotMode('cutout');
+                                  }}
+                                  onLoadEnd={() => {
+                                    if (isMountedRef.current) setFrameAvatarSlotMode('cutout');
+                                  }}
+                                  onError={() => {
+                                    if (isMountedRef.current) {
+                                      setFrameCutoutUri(null);
+                                      setFrameAvatarSlotMode('original');
+                                    }
+                                  }}
+                                />
+                              ) : null}
                             </View>
                           ) : null}
                         </View>
@@ -1156,9 +1372,15 @@ export default function PostDetailScreen() {
         <Text style={styles.sectionTitle}>{t('select_frame')}</Text>
         <View style={styles.framesGrid}>
           {visibleFrames.map((f) => (
-            <TouchableOpacity key={f.id} onPress={() => setSelectedFrame(f.id)} style={styles.frameCard}>
-              {f.id === 1 ? (
-                <View style={[styles.miniFrameUI, selectedFrame === f.id && { borderColor: f.color, borderWidth: 3 }]} />
+            <TouchableOpacity key={f.id} onPress={() => setSelectedFrame(Number(f.id))} style={styles.frameCard}>
+              {f.id === 1 || f.id === 2 ? (
+                <View style={[styles.miniFrameUI, selectedFrame === f.id && { borderColor: Colors.accent, borderWidth: 3 }]}>
+                  <View style={styles.variantPreviewOuter}>
+                    <View style={styles.variantPreviewTextBand} />
+                    <View style={[styles.variantPreviewAvatar, f.id === 1 ? styles.variantPreviewAvatarRight : styles.variantPreviewAvatarLeft]} />
+                    <View style={styles.variantPreviewStrip} />
+                  </View>
+                </View>
               ) : (
                 <View style={[styles.miniFrameUI, selectedFrame === f.id && { borderColor: f.color, borderWidth: 3 }, { overflow: 'hidden' }]}>
                   {f.url ? (
@@ -1233,26 +1455,64 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: 65,
-    backgroundColor: '#FCFCFC',
+    flexDirection: 'column',
+    justifyContent: 'flex-end',
+    alignItems: 'stretch',
+    backgroundColor: 'transparent',
     borderTopWidth: 0,
     overflow: 'visible',
     padding: 0,
     margin: 0,
   },
-  // Horizontally + vertically centered in strip; reserve 135px on the right for the cutout.
-  textBlockCentered: {
-    position: 'absolute',
-    zIndex: 1,
-    left: 0,
-    right: 135,
-    top: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 12,
+  /** Off-white name + designations; height grows with lines (minHeight from constant in JSX). */
+  frameTextBand: {
+    backgroundColor: '#FCFCFC',
+    paddingTop: 2,
+    paddingBottom: 2,
+    paddingHorizontal: 10,
+    zIndex: 0,
+    justifyContent: 'flex-end',
   },
-  textBlockCenteredFullWidth: { right: 0 },
+  frameTextBandFullBleed: {
+    paddingHorizontal: 10,
+  },
+  frameTextBandInner: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  frameTextBandInnerWithAvatarRight: { marginRight: 0 },
+  frameTextBandInnerWithAvatarLeft: { marginLeft: 0 },
+  framePartySocialStrip: {
+    width: '100%',
+    zIndex: 3,
+    justifyContent: 'center',
+    alignItems: 'stretch',
+  },
+  framePartySocialRow: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'nowrap',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    width: '100%',
+    paddingHorizontal: 4,
+    paddingVertical: 0,
+  },
+  framePartySocialItem: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  framePartySocialText: {
+    marginLeft: 3,
+    fontFamily: 'Poppins-Bold',
+    fontWeight: '700',
+    flexShrink: 1,
+  },
   userPhotoActual: {
     width: 135,
     height: 135,
@@ -1268,19 +1528,42 @@ const styles = StyleSheet.create({
   },
   avatarDock: {
     position: 'absolute',
-    zIndex: 2,
-    bottom: 0,
-    right: 0,
+    zIndex: 4,
     width: 135,
     height: 135,
     margin: 0,
     padding: 0,
-    alignItems: 'flex-end',
     justifyContent: 'flex-end',
   },
-  userName: { fontSize: 16, fontWeight: '700', color: '#0F172A', textAlign: 'center' },
-  userDesignation: { fontSize: 14, color: '#64748B', fontWeight: '600', textAlign: 'center' },
+  // Explicitly clear the opposite side when switching variants (prevents stale absolute offsets).
+  avatarDockRight: { right: 0, left: null as any, alignItems: 'flex-end' },
+  avatarDockLeft: { left: 0, right: null as any, alignItems: 'flex-start' },
+  userName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+    textAlign: 'center',
+    marginBottom: 0,
+    paddingBottom: 0,
+    lineHeight: 18,
+  },
+  userDesignation: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '600',
+    textAlign: 'center',
+    marginVertical: 0,
+    paddingVertical: 0,
+    lineHeight: 14,
+  },
+  userDesignationStacked: { marginTop: 0 },
   sectionTitle: { fontSize: 16, fontWeight: '700', margin: 20 },
+  variantPreviewOuter: { flex: 1, backgroundColor: '#F5F5F5' },
+  variantPreviewTextBand: { position: 'absolute', left: 0, right: 0, bottom: 12, height: 16, backgroundColor: '#FCFCFC' },
+  variantPreviewStrip: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 10, backgroundColor: '#CBD5E1' },
+  variantPreviewAvatar: { position: 'absolute', bottom: 0, width: 22, height: 22, borderRadius: 4, backgroundColor: '#94A3B8' },
+  variantPreviewAvatarRight: { right: 0 },
+  variantPreviewAvatarLeft: { left: 0 },
   framesGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 15 },
   frameCard: { width: '33.33%', height: 80, padding: 6 },
   miniFrameUI: { flex: 1, borderRadius: 10, backgroundColor: '#F5F5F5', borderWidth: 2, borderColor: '#E8E8E8', overflow: 'hidden' as const },

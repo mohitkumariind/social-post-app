@@ -34,8 +34,9 @@ export default function PartyManager() {
 
   const [formId, setFormId] = useState('');
   const [formName, setFormName] = useState('');
-  const [formLogoUrl, setFormLogoUrl] = useState('');
+  const [formLogoPublicUrl, setFormLogoPublicUrl] = useState('');
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const load = async () => {
@@ -75,14 +76,47 @@ export default function PartyManager() {
   const resetForm = () => {
     setFormId('');
     setFormName('');
-    setFormLogoUrl('');
+    setFormLogoPublicUrl('');
     setEditingId(null);
+  };
+
+  const handleImageUpload = async (file: File | null) => {
+    if (!file) return;
+    const baseId = (editingId || formId).trim();
+    if (!baseId) {
+      setError('Please enter an id before uploading a logo.');
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+    try {
+      const safeName = String(file.name || '').trim();
+      const ext = (safeName.split('.').pop() || 'png').toLowerCase();
+      const safeExt = /^[a-z0-9]+$/i.test(ext) && ext.length <= 5 ? ext : 'png';
+      const path = `${baseId}_${Date.now()}.${safeExt}`;
+
+      const { error: upErr } = await supabase.storage
+        .from('post-image')
+        .upload(path, file, { upsert: true, contentType: file.type || `image/${safeExt}` });
+      if (upErr) throw upErr;
+
+      const { data } = supabase.storage.from('post-image').getPublicUrl(path);
+      const publicUrl = data?.publicUrl ? String(data.publicUrl) : '';
+      if (!publicUrl) throw new Error('Upload succeeded but public URL is missing.');
+
+      setFormLogoPublicUrl(publicUrl);
+    } catch (e: any) {
+      setError(e?.message || 'Logo upload failed');
+    } finally {
+      setUploading(false);
+    }
   };
 
   const onSubmit = async () => {
     const id = formId.trim();
     const name = formName.trim();
-    const logo_url = formLogoUrl.trim() || null;
+    const logo_url = formLogoPublicUrl.trim() || null;
     if (!id || !name) return;
 
     setSaving(true);
@@ -113,7 +147,7 @@ export default function PartyManager() {
     setEditingId(p.id);
     setFormId(p.id);
     setFormName(p.name);
-    setFormLogoUrl(p.logo_url || '');
+    setFormLogoPublicUrl(p.logo_url || '');
   };
 
   const removeParty = async (id: string) => {
@@ -192,12 +226,40 @@ export default function PartyManager() {
             placeholder="name (e.g. Bharatiya Janata Party)"
             className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30"
           />
-          <input
-            value={formLogoUrl}
-            onChange={(e) => setFormLogoUrl(e.target.value)}
-            placeholder="logo_url (optional)"
-            className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30"
-          />
+          <div className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus-within:ring-2 focus-within:ring-blue-500/30">
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-[11px] font-black uppercase tracking-widest text-slate-500">
+                {uploading ? 'Uploading…' : 'Party logo'}
+              </label>
+              {formLogoPublicUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={formLogoPublicUrl}
+                  alt="Logo preview"
+                  className="h-8 w-8 rounded-lg object-contain bg-slate-50 border border-slate-200"
+                />
+              ) : null}
+            </div>
+            <input
+              type="file"
+              accept="image/*"
+              disabled={uploading || saving}
+              onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                void handleImageUpload(file);
+              }}
+              className="mt-2 w-full text-xs font-bold text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-xs file:font-black file:uppercase file:tracking-widest file:text-white hover:file:bg-blue-600 disabled:opacity-60"
+            />
+            {formLogoPublicUrl ? (
+              <p className="mt-2 text-[10px] font-mono text-slate-400 truncate" title={formLogoPublicUrl}>
+                {formLogoPublicUrl}
+              </p>
+            ) : (
+              <p className="mt-2 text-[10px] font-bold text-slate-400">
+                Upload an image; we’ll save the public URL into <code className="font-mono">parties.logo_url</code>.
+              </p>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-3">
