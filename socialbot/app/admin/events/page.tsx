@@ -58,6 +58,7 @@ interface CampaignEvent {
   state?: string[];
   loksabha?: string[];
   assembly?: string[];
+  target_groups?: string[];
   /** Precomputed for list cards; `posts` are only loaded on Manage. */
   assetsCount: number;
   posts: Post[];
@@ -201,6 +202,9 @@ export default function App() {
   const [newState, setNewState] = useState<string[]>([]);
   const [newLoksabha, setNewLoksabha] = useState<string[]>([]);
   const [newAssembly, setNewAssembly] = useState<string[]>([]);
+  const [newTargetGroups, setNewTargetGroups] = useState<string[]>([]);
+  const [knownGroupTags, setKnownGroupTags] = useState<string[]>([]);
+  const [newTargetGroupInput, setNewTargetGroupInput] = useState('');
   const [filterParty, setFilterParty] = useState<string>('ALL');
   const [filterState, setFilterState] = useState<string>('ALL');
   const [availableStates, setAvailableStates] = useState<{ id: string; name: string }[]>([]);
@@ -214,6 +218,30 @@ export default function App() {
   const [workerNotifyToast, setWorkerNotifyToast] = useState(false);
   const skipAutoStateRef = useRef(false);
   const skipLoksabhaResetCountRef = useRef(0);
+
+  const addTargetGroup = (raw: string) => {
+    const t = String(raw ?? '').trim();
+    if (!t) return;
+    setNewTargetGroups((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+  };
+
+  const removeTargetGroup = (t: string) => setNewTargetGroups((prev) => prev.filter((x) => x !== t));
+
+  useEffect(() => {
+    // Fetch known worker tags for Target Groups suggestions.
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/profile-tags', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const json = (await res.json()) as { tags?: string[] };
+        if (!cancelled) setKnownGroupTags((json.tags ?? []).map((x) => String(x)).filter(Boolean));
+      } catch {
+        // ignore
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   /** Fetch states from Supabase on mount. No fallback - empty on error or no rows. */
   useEffect(() => {
@@ -245,7 +273,7 @@ export default function App() {
         return;
       }
       const base: CampaignEvent[] = (data || [])
-        .map((row: { id?: string; name: string; start?: string; end?: string; language?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; captions?: unknown }) => ({
+        .map((row: { id?: string; name: string; start?: string; end?: string; language?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; target_groups?: string | string[]; captions?: unknown }) => ({
           id: String(row.id ?? '').trim(),
           name: row.name,
           start: row.start ?? '',
@@ -255,6 +283,7 @@ export default function App() {
           state: toStrArr(row.state),
           loksabha: toStrArr(row.loksabha),
           assembly: toStrArr(row.assembly),
+          target_groups: toStrArr(row.target_groups),
           assetsCount: 0,
           posts: [],
           captions: normalizeCaptionsFromDb(row.captions),
@@ -445,10 +474,12 @@ export default function App() {
     const stateArr = newState.includes('ALL') ? availableStates.map((s) => s.id) : newState.filter(Boolean);
     const loksabhaArr = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => l.id) : newLoksabha.filter(Boolean);
     const assemblyArr = newAssembly.includes('ALL') ? availableAssemblies.map((a) => a.id) : newAssembly.filter(Boolean);
+    const targetGroupsArr = newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
     if (partyArr.length > 0) payload.party = partyArr;
     if (stateArr.length > 0) payload.state = stateArr;
     if (loksabhaArr.length > 0) payload.loksabha = loksabhaArr;
     if (assemblyArr.length > 0) payload.assembly = assemblyArr;
+    payload.target_groups = targetGroupsArr;
     const { data, error } = await supabase
       .from('events')
       .insert(payload)
@@ -473,6 +504,7 @@ export default function App() {
       state: stateArr.length ? stateArr : undefined,
       loksabha: loksabhaArr.length ? loksabhaArr : undefined,
       assembly: assemblyArr.length ? assemblyArr : undefined,
+      target_groups: targetGroupsArr.length ? targetGroupsArr : undefined,
       assetsCount: 0,
       posts: [],
       captions: normalizeCaptionsFromDb(data.captions),
@@ -486,6 +518,8 @@ export default function App() {
     setNewState([]);
     setNewLoksabha([]);
     setNewAssembly([]);
+    setNewTargetGroups([]);
+    setNewTargetGroupInput('');
   };
 
   const openEvent = async (ev: CampaignEvent) => {
@@ -765,6 +799,8 @@ export default function App() {
     setNewState(stateIds);
     setNewLoksabha(toStrArr(ev.loksabha));
     setNewAssembly(toStrArr(ev.assembly));
+    setNewTargetGroups(toStrArr(ev.target_groups));
+    setNewTargetGroupInput('');
   };
 
   const handleSaveEvent = async () => {
@@ -783,10 +819,12 @@ export default function App() {
     const stateArr = newState.includes('ALL') ? availableStates.map((s) => s.id) : newState.filter(Boolean);
     const loksabhaArr = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => l.id) : newLoksabha.filter(Boolean);
     const assemblyArr = newAssembly.includes('ALL') ? availableAssemblies.map((a) => a.id) : newAssembly.filter(Boolean);
+    const targetGroupsArr = newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
     if (partyArr.length > 0) updatePayload.party = partyArr;
     if (stateArr.length > 0) updatePayload.state = stateArr;
     if (loksabhaArr.length > 0) updatePayload.loksabha = loksabhaArr;
     if (assemblyArr.length > 0) updatePayload.assembly = assemblyArr;
+    updatePayload.target_groups = targetGroupsArr;
     const { error: eventsErr } = await updateEventByIdOrName(editingEvent, updatePayload);
 
     if (eventsErr) {
@@ -806,6 +844,7 @@ export default function App() {
     if (stateArr.length > 0) postUpdatePayload.state = stateArr;
     if (loksabhaArr.length > 0) postUpdatePayload.loksabha = loksabhaArr;
     if (assemblyArr.length > 0) postUpdatePayload.assembly = assemblyArr;
+    postUpdatePayload.target_groups = targetGroupsArr;
     if (Object.keys(postUpdatePayload).length > 0) {
       let pq = supabase.from('posts').update(postUpdatePayload).eq('category', targetCategory);
       if (editingEvent.language) pq = pq.eq('language', editingEvent.language);
@@ -823,7 +862,7 @@ export default function App() {
 
     const newStart = `${startDate}T00:00:00`;
     const newEnd = `${endDate}T23:59:59`;
-    const updated: CampaignEvent = { ...editingEvent, name: targetCategory, start: newStart, end: newEnd, language: newLanguage || undefined, party: partyArr.length ? partyArr : undefined, state: stateArr.length ? stateArr : undefined, loksabha: loksabhaArr.length ? loksabhaArr : undefined, assembly: assemblyArr.length ? assemblyArr : undefined };
+    const updated: CampaignEvent = { ...editingEvent, name: targetCategory, start: newStart, end: newEnd, language: newLanguage || undefined, party: partyArr.length ? partyArr : undefined, state: stateArr.length ? stateArr : undefined, loksabha: loksabhaArr.length ? loksabhaArr : undefined, assembly: assemblyArr.length ? assemblyArr : undefined, target_groups: targetGroupsArr.length ? targetGroupsArr : undefined };
     setEvents((prev) => prev.map((ev) => (ev.id === editingEvent.id ? updated : ev)));
     if (selectedEvent?.id === editingEvent.id) {
       setSelectedEvent(updated);
@@ -838,6 +877,8 @@ export default function App() {
     setNewState([]);
     setNewLoksabha([]);
     setNewAssembly([]);
+    setNewTargetGroups([]);
+    setNewTargetGroupInput('');
 
     let workerNotifyOk = false;
     try {
@@ -965,6 +1006,64 @@ export default function App() {
                       loading={assembliesLoading}
                     />
                   </div>
+
+                  {/* Target Groups (Direct Mapping) */}
+                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Target Groups</span>
+                      {newTargetGroups.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => { setNewTargetGroups([]); setNewTargetGroupInput(''); }}
+                          className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {newTargetGroups.map((t) => (
+                        <span key={t} className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-800 px-2 py-1 rounded-xl text-[10px] font-black uppercase tracking-widest">
+                          {t}
+                          <button type="button" onClick={() => removeTargetGroup(t)} className="hover:bg-indigo-200 rounded p-0.5">
+                            <X size={12} />
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        value={newTargetGroupInput}
+                        onChange={(e) => setNewTargetGroupInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ',') {
+                            e.preventDefault();
+                            addTargetGroup(newTargetGroupInput);
+                            setNewTargetGroupInput('');
+                          } else if (e.key === 'Backspace' && !newTargetGroupInput && newTargetGroups.length > 0) {
+                            removeTargetGroup(newTargetGroups[newTargetGroups.length - 1]);
+                          }
+                        }}
+                        placeholder="Type tag and press Enter…"
+                        className="flex-1 min-w-[140px] bg-transparent outline-none font-bold text-slate-800 text-sm placeholder:text-slate-300 py-1"
+                      />
+                    </div>
+                    {knownGroupTags.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {knownGroupTags
+                          .filter((t) => !newTargetGroups.some((x) => x.toLowerCase() === String(t).toLowerCase()))
+                          .slice(0, 12)
+                          .map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => addTargetGroup(t)}
+                              className="px-3 py-1.5 rounded-2xl bg-white border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-[10px] font-black uppercase tracking-widest text-slate-700 active:scale-95 transition-all"
+                            >
+                              + {t}
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                  </div>
                   <div className="flex gap-3">
                     <div className="flex flex-col flex-1">
                       <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Activation</label>
@@ -979,7 +1078,7 @@ export default function App() {
               </div>
               <div className="shrink-0 px-4 sm:px-5 py-4 border-t border-slate-100 bg-white">
                 <div className="flex gap-4">
-                  <button onClick={() => { setEditingEvent(null); setNewName(''); setNewLanguage(''); setStartDate(''); setEndDate(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
+                  <button onClick={() => { setEditingEvent(null); setNewName(''); setNewLanguage(''); setStartDate(''); setEndDate(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); setNewTargetGroupInput(''); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
                   <button onClick={handleSaveEvent} disabled={!newName.trim() || !startDate || !endDate} className="flex-1 py-3 sm:py-4 bg-blue-600 text-white rounded-2xl font-bold disabled:opacity-30">Save</button>
                 </div>
               </div>
@@ -1083,6 +1182,67 @@ export default function App() {
               <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
             </div>
             <button onClick={createEvent} disabled={!newName || !startDate || !endDate} className="bg-blue-600 text-white px-8 py-2.5 rounded-2xl font-black text-xs hover:bg-slate-900 disabled:opacity-30 transition-all uppercase tracking-widest shrink-0">Add</button>
+          </div>
+
+          {/* Target Groups (Direct Mapping) */}
+          <div className="mt-4 bg-slate-50 border border-slate-100 rounded-2xl p-4">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Target Groups</span>
+              {newTargetGroups.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { setNewTargetGroups([]); setNewTargetGroupInput(''); }}
+                  className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {newTargetGroups.map((t) => (
+                <span key={t} className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-800 px-2 py-1 rounded-xl text-[10px] font-black uppercase tracking-widest">
+                  {t}
+                  <button type="button" onClick={() => removeTargetGroup(t)} className="hover:bg-indigo-200 rounded p-0.5">
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+              <input
+                value={newTargetGroupInput}
+                onChange={(e) => setNewTargetGroupInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    addTargetGroup(newTargetGroupInput);
+                    setNewTargetGroupInput('');
+                  } else if (e.key === 'Backspace' && !newTargetGroupInput && newTargetGroups.length > 0) {
+                    removeTargetGroup(newTargetGroups[newTargetGroups.length - 1]);
+                  }
+                }}
+                placeholder="Type tag and press Enter…"
+                className="flex-1 min-w-[160px] bg-transparent outline-none font-bold text-slate-800 text-sm placeholder:text-slate-300 py-1"
+              />
+            </div>
+            {knownGroupTags.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {knownGroupTags
+                  .filter((t) => !newTargetGroups.some((x) => x.toLowerCase() === String(t).toLowerCase()))
+                  .slice(0, 16)
+                  .map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => addTargetGroup(t)}
+                      className="px-3 py-1.5 rounded-2xl bg-white border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-[10px] font-black uppercase tracking-widest text-slate-700 active:scale-95 transition-all"
+                    >
+                      + {t}
+                    </button>
+                  ))}
+              </div>
+            )}
+            <p className="mt-3 text-[10px] font-bold text-slate-400">
+              If set, these tags will be used for direct worker targeting (overrides geography filters in the app).
+            </p>
           </div>
         </div>
 

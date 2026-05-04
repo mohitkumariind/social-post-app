@@ -46,6 +46,9 @@ type PostRow = {
   event_date?: string;
   party?: string[] | string;
   state?: string[] | string;
+  loksabha?: string[] | string;
+  assembly?: string[] | string;
+  target_groups?: string[] | string;
   captions?: string | string[];
 };
 
@@ -60,6 +63,13 @@ type EventRow = { name: string; end: string };
 
 function normalizeForCompare(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function toStrArr(v: unknown): string[] {
+  if (!v) return [];
+  if (Array.isArray(v)) return v.map((x) => String(x)).filter(Boolean);
+  const s = String(v).trim();
+  return s ? [s] : [];
 }
 
 /** Align with edit-profile mandatory fields + party selection */
@@ -140,13 +150,16 @@ export default function DashboardScreen() {
       const { data: profile } = await supabase
         .from('profiles')
         .select(
-          'state, language, loksabha_id, loksabha, assembly_id, assembly, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
+          'state, language, group_tags, loksabha_id, loksabha, assembly_id, assembly, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
         )
         .eq('id', userId)
         .single();
 
       if (profile) {
         const langRaw = String((profile as { language?: string }).language ?? '').trim();
+        const groupTags = Array.isArray((profile as any).group_tags)
+          ? ((profile as any).group_tags as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean)
+          : [];
         const rawParty = String(profile.party ?? '').trim();
         const party = normalizePartyId(rawParty) || rawParty;
         const stateStr = String(profile.state ?? '').trim();
@@ -156,6 +169,7 @@ export default function DashboardScreen() {
         setUserInfo((prev) => ({
           ...prev,
           language: langRaw || prev.language,
+          group_tags: groupTags,
           name: nameFromDb,
           phone: phoneFromDb,
           state: stateStr || prev.state,
@@ -189,14 +203,77 @@ export default function DashboardScreen() {
         setFetchError(null);
         setLoading(true);
       }
-      // Graphics only: not a reel (`is_video` true). Uses false OR NULL so legacy image rows (unset flag) still show.
-      const query = supabase
-        .from('posts')
-        .select('id,title,image_url,category,event_date,party,state,created_at,captions')
-        .or('is_video.eq.false,is_video.is.null')
-        .order('created_at', { ascending: false });
+      const normalizedUserState = normalizeForCompare(userState || '');
+      const normalizedUserParty = normalizeForCompare(normalizePartyId(userParty || '') || userParty || '');
+      const userLoksabhaId = userInfoRef.current?.loksabha_id;
+      const userAssemblyId = userInfoRef.current?.assembly_id;
+      const userGroupTags = Array.isArray(userInfoRef.current?.group_tags)
+        ? userInfoRef.current.group_tags.map((x) => String(x).trim()).filter(Boolean)
+        : [];
 
-      const { data, error } = await query;
+      // Graphics only: not a reel (`is_video` true). Uses false OR NULL so legacy image rows (unset flag) still show.
+      // DB-side filter: state + party are stored as arrays in DB (jsonb/text[]); use `.contains()` to avoid fetching everything.
+      const runGeoQuery = async () => {
+        let q = supabase
+          .from('posts')
+          .select('id,title,image_url,category,event_date,party,state,loksabha,assembly,target_groups,created_at,captions')
+          .or('is_video.eq.false,is_video.is.null')
+          .order('created_at', { ascending: false });
+
+        if (normalizedUserState) q = q.contains('state', [normalizedUserState]);
+        if (normalizedUserParty) q = q.contains('party', [normalizedUserParty]);
+        // Only non-tag-targeted content in geo query (direct mapping handled separately).
+        q = q.or('target_groups.is.null,target_groups.eq.{}');
+        return await q;
+      };
+
+      const runTargetedQuery = async () => {
+        if (userGroupTags.length === 0) return { data: [], error: null } as any;
+        const q = supabase
+          .from('posts')
+          .select('id,title,image_url,category,event_date,party,state,loksabha,assembly,target_groups,created_at,captions')
+          .or('is_video.eq.false,is_video.is.null')
+          .overlaps('target_groups', userGroupTags)
+          .order('created_at', { ascending: false });
+        return await q;
+      };
+
+      const runGlobalQuery = async () => {
+        // "Global" means all targeting arrays are empty (show to all).
+        const q = supabase
+          .from('posts')
+          .select('id,title,image_url,category,event_date,party,state,loksabha,assembly,target_groups,created_at,captions')
+          .or('is_video.eq.false,is_video.is.null')
+          .eq('state', '{}')
+          .eq('party', '{}')
+          .eq('loksabha', '{}')
+          .eq('assembly', '{}')
+          .eq('target_groups', '{}')
+          .order('created_at', { ascending: false });
+        return await q;
+      };
+
+      // Multi-query strategy:
+      // - Direct mapping content (target_groups overlap) should be visible regardless of geo/party.
+      // - Geo content is fetched via contains(state/party) and requires target_groups empty.
+      // - Global content (all targeting arrays empty) is fetched explicitly.
+      let data: any[] | null = null;
+      let error: any = null;
+      {
+        const [rTargeted, rGeo, rGlobal] = await Promise.all([runTargetedQuery(), runGeoQuery(), runGlobalQuery()]);
+        const errs = [rTargeted?.error, rGeo?.error, rGlobal?.error].filter(Boolean);
+        error = errs[0] ?? null;
+        const merged = [...(rTargeted?.data ?? []), ...(rGeo?.data ?? []), ...(rGlobal?.data ?? [])] as any[];
+        // Deduplicate by id
+        const byId = new Map<string, any>();
+        for (const row of merged) {
+          const id = String(row?.id ?? '').trim();
+          if (!id) continue;
+          if (!byId.has(id)) byId.set(id, row);
+        }
+        data = Array.from(byId.values());
+      }
+
       if (reqId !== fetchPostsReqIdRef.current) return;
       if (error) {
         setFetchError(error.message);
@@ -213,29 +290,53 @@ export default function DashboardScreen() {
         return;
       }
       const raw = (data || []) as PostRow[];
-      const normalizedUserState = normalizeForCompare(userState || '');
-      const normalizedUserParty = normalizeForCompare(normalizePartyId(userParty || '') || userParty || '');
       const filtered = raw.filter((p) => {
-        const postStates = Array.isArray(p.state) ? p.state : p.state ? [p.state] : [];
-        const postParties = Array.isArray(p.party) ? p.party : p.party ? [p.party] : [];
+        const postStates = toStrArr(p.state).map((s) => normalizeForCompare(s));
+        const postParties = toStrArr(p.party).map((pa) => normalizeForCompare(normalizePartyId(pa) || pa));
+        const postLoksabhas = toStrArr(p.loksabha).map((x) => String(x).trim()).filter(Boolean);
+        const postAssemblies = toStrArr(p.assembly).map((x) => String(x).trim()).filter(Boolean);
+        const postTargetGroups = toStrArr(p.target_groups).map((x) => String(x).trim()).filter(Boolean);
 
-        const normalizedPostStates = postStates.map((s) => normalizeForCompare(String(s)));
-        const normalizedPostParties = postParties.map((pa) =>
-          normalizeForCompare(normalizePartyId(String(pa)) || String(pa))
-        );
+        // A) Direct mapping (target_groups) has priority over geo/party.
+        if (postTargetGroups.length > 0) {
+          if (userGroupTags.length === 0) return false;
+          const userSet = new Set(userGroupTags.map((x) => x.toLowerCase()));
+          return postTargetGroups.some((tg) => userSet.has(String(tg).toLowerCase()));
+        }
 
-        const stateMatch =
-          normalizedPostStates.length === 0 ||
-          !normalizedUserState ||
-          normalizedPostStates.includes(normalizedUserState);
-        const partyMatch =
-          normalizedPostParties.length === 0 ||
-          !normalizedUserParty ||
-          normalizedPostParties.includes(normalizedUserParty);
-        return stateMatch && partyMatch;
+        // B) Geography/Party fallback (when target_groups empty)
+        // If all targeting arrays are empty, treat as global (show to all)
+        const isFullyGlobal =
+          postTargetGroups.length === 0 &&
+          postStates.length === 0 &&
+          postParties.length === 0 &&
+          postLoksabhas.length === 0 &&
+          postAssemblies.length === 0;
+        if (isFullyGlobal) return true;
+
+        // State: if post.state is empty => treat as global (all states). Otherwise must include user's state.
+        const stateMatch = postStates.length === 0 || (!!normalizedUserState && postStates.includes(normalizedUserState));
+        if (!stateMatch) return false;
+
+        // Party: if post.party is empty => all parties. Otherwise must include user's party.
+        const partyMatch = postParties.length === 0 || (!!normalizedUserParty && postParties.includes(normalizedUserParty));
+        if (!partyMatch) return false;
+
+        // Lok Sabha targeting: if empty => not targeted (global within state). Otherwise must match user's loksabha_id.
+        if (postLoksabhas.length > 0) {
+          const userLokId = userLoksabhaId == null ? '' : String(userLoksabhaId).trim();
+          if (!userLokId || !postLoksabhas.includes(userLokId)) return false;
+        }
+
+        // Assembly targeting: if empty => not targeted (global within state). Otherwise must match user's assembly_id.
+        if (postAssemblies.length > 0) {
+          const userAsmId = userAssemblyId == null ? '' : String(userAssemblyId).trim();
+          if (!userAsmId || !postAssemblies.includes(userAsmId)) return false;
+        }
+
+        return true;
       });
-      const finalPosts = filtered.length > 0 ? filtered : raw;
-      setPosts(finalPosts);
+      setPosts(filtered);
     } catch (err) {
       if (reqId !== fetchPostsReqIdRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
@@ -249,16 +350,97 @@ export default function DashboardScreen() {
 
   const fetchEvents = async () => {
     try {
-      const { data, error } = await supabase.from('events').select('name, end');
+      const normalizedUserState = normalizeForCompare((userInfo?.state ?? '').trim());
+      const normalizedUserParty = normalizeForCompare(
+        normalizePartyId((userInfo?.partyName ?? '').trim()) || (userInfo?.partyName ?? '').trim()
+      );
+      const userGroupTags = Array.isArray(userInfo?.group_tags)
+        ? userInfo.group_tags.map((x) => String(x).trim()).filter(Boolean)
+        : [];
+
+      const runTargeted = async () => {
+        if (userGroupTags.length === 0) return { data: [], error: null } as any;
+        return await supabase
+          .from('events')
+          .select('name, end, party, state, loksabha, assembly, target_groups')
+          .overlaps('target_groups', userGroupTags);
+      };
+      const runGeo = async () => {
+        let q = supabase
+          .from('events')
+          .select('name, end, party, state, loksabha, assembly, target_groups')
+          .or('target_groups.is.null,target_groups.eq.{}');
+        if (normalizedUserState) q = q.contains('state', [normalizedUserState]);
+        if (normalizedUserParty) q = q.contains('party', [normalizedUserParty]);
+        return await q;
+      };
+      const runGlobal = async () => {
+        return await supabase
+          .from('events')
+          .select('name, end, party, state, loksabha, assembly, target_groups')
+          .eq('state', '{}')
+          .eq('party', '{}')
+          .eq('loksabha', '{}')
+          .eq('assembly', '{}')
+          .eq('target_groups', '{}');
+      };
+
+      const [rT, rG, rAll] = await Promise.all([runTargeted(), runGeo(), runGlobal()]);
+      const error = (rT as any).error ?? (rG as any).error ?? (rAll as any).error ?? null;
       if (error) {
         setFetchError((prev) => prev ?? error.message);
         setEvents([]);
         return;
       }
-      const raw = (data as EventRow[]) || [];
+      const merged = [...(((rT as any).data ?? []) as any[]), ...(((rG as any).data ?? []) as any[]), ...(((rAll as any).data ?? []) as any[])]
+        .filter(Boolean);
+      const byName = new Map<string, any>();
+      for (const row of merged) {
+        const name = String(row?.name ?? '').trim();
+        if (!name) continue;
+        if (!byName.has(name)) byName.set(name, row);
+      }
+      const raw = Array.from(byName.values()) as any[];
       const today = new Date();
       today.setUTCHours(0, 0, 0, 0);
-      const filteredEvents = raw.filter((ev) => {
+      const filteredEvents = raw
+        .filter((ev) => {
+          // targeting filter (same priority rules as posts)
+          const evTargetGroups = toStrArr(ev?.target_groups);
+          const evStates = toStrArr(ev?.state).map((s) => normalizeForCompare(s));
+          const evParties = toStrArr(ev?.party).map((p) => normalizeForCompare(normalizePartyId(p) || p));
+          const evLoksabha = toStrArr(ev?.loksabha).map((x) => String(x).trim()).filter(Boolean);
+          const evAssembly = toStrArr(ev?.assembly).map((x) => String(x).trim()).filter(Boolean);
+
+          if (evTargetGroups.length > 0) {
+            if (userGroupTags.length === 0) return false;
+            const userSet = new Set(userGroupTags.map((x) => x.toLowerCase()));
+            if (!evTargetGroups.some((tg) => userSet.has(String(tg).toLowerCase()))) return false;
+          } else {
+            const isFullyGlobal =
+              evTargetGroups.length === 0 &&
+              evStates.length === 0 &&
+              evParties.length === 0 &&
+              evLoksabha.length === 0 &&
+              evAssembly.length === 0;
+            if (!isFullyGlobal) {
+              const stateOk = evStates.length === 0 || (!!normalizedUserState && evStates.includes(normalizedUserState));
+              if (!stateOk) return false;
+              const partyOk = evParties.length === 0 || (!!normalizedUserParty && evParties.includes(normalizedUserParty));
+              if (!partyOk) return false;
+              if (evLoksabha.length > 0) {
+                const userLokId = userInfo?.loksabha_id == null ? '' : String(userInfo.loksabha_id).trim();
+                if (!userLokId || !evLoksabha.includes(userLokId)) return false;
+              }
+              if (evAssembly.length > 0) {
+                const userAsmId = userInfo?.assembly_id == null ? '' : String(userInfo.assembly_id).trim();
+                if (!userAsmId || !evAssembly.includes(userAsmId)) return false;
+              }
+            }
+          }
+          return true;
+        })
+        .filter((ev) => {
         const evEndDate = new Date(ev.end);
         evEndDate.setUTCHours(0, 0, 0, 0);
         return evEndDate.getTime() >= today.getTime();

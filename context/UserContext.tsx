@@ -25,6 +25,8 @@ export interface UserInfo {
   facebook: string;
   twitter: string;
   instagram: string;
+  /** Direct mapping tags: `profiles.group_tags` */
+  group_tags: string[];
 }
 
 export const EMPTY_USER_INFO: UserInfo = {
@@ -47,6 +49,7 @@ export const EMPTY_USER_INFO: UserInfo = {
   facebook: '',
   twitter: '',
   instagram: '',
+  group_tags: [],
 };
 
 interface UserContextType {
