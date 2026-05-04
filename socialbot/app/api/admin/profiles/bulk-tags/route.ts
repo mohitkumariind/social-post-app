@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
-type Body = { ids?: string[]; group_tags?: string[] };
+type Body = { ids?: string[]; group_tags?: string[]; /** Only if you intentionally want to clear tags for all selected users. */ allowClear?: boolean };
 
 const NO_SERVICE_ROLE =
   'Bulk tag assign requires SUPABASE_SERVICE_ROLE_KEY on the server; otherwise RLS may block updates to other users and group_tags stays null.';
@@ -27,6 +27,16 @@ export async function POST(request: NextRequest) {
     : [];
 
   if (ids.length === 0) return NextResponse.json({ error: 'Missing ids' }, { status: 400 });
+
+  if (group_tags.length === 0 && !body.allowClear) {
+    return NextResponse.json(
+      {
+        error:
+          'group_tags is empty. Refusing to set all selected users to [] (prevents accidental wipe). Add at least one tag, or pass allowClear: true if you really want to clear.',
+      },
+      { status: 400 }
+    );
+  }
 
   const admin = createServiceRoleClient();
   if (!admin) {

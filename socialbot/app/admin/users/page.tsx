@@ -804,9 +804,13 @@ export default function UserManagement() {
                 Cancel
               </button>
               <button
-                disabled={bulkSaving}
+                disabled={bulkSaving || bulkTags.length === 0}
                 onClick={async () => {
                   if (selectedIdsArr.length === 0) return;
+                  if (bulkTags.length === 0) {
+                    setToastMsg('Add at least one tag before saving.');
+                    return;
+                  }
                   setBulkSaving(true);
                   try {
                     const res = await fetch('/api/admin/profiles/bulk-tags', {
@@ -827,7 +831,7 @@ export default function UserManagement() {
                     setBulkSaving(false);
                   }
                 }}
-                className="px-5 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-[10px] font-black uppercase tracking-widest text-white active:scale-95 transition-all disabled:opacity-50"
+                className="px-5 py-3 bg-slate-900 hover:bg-slate-800 rounded-2xl text-[10px] font-black uppercase tracking-widest text-white active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
               >
                 {bulkSaving ? 'Saving…' : 'Save'}
               </button>
