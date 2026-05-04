@@ -205,7 +205,13 @@ export async function runBroadcast(
     ...(payload.data ?? {}),
     broadcast_id: broadcastId,
   };
-  if (imageUrl) dataPayload.image_url = imageUrl;
+  if (imageUrl) {
+    // Common keys used by client-side push handlers / image renderers.
+    dataPayload.image = imageUrl;
+    dataPayload.url = imageUrl;
+    // Back-compat with older payload consumers.
+    dataPayload.image_url = imageUrl;
+  }
 
   const messages: ExpoPushMessage[] = uniqueTokens.map((to) => {
     const msg: ExpoPushMessage = {
@@ -215,10 +221,11 @@ export async function runBroadcast(
       sound: 'default',
       priority: 'high',
       channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
+      // Required by iOS rich notifications; harmless on Android.
+      mutableContent: true,
       data: dataPayload,
     };
     if (imageUrl) {
-      msg.mutableContent = true;
       msg.richContent = { image: imageUrl };
     }
     return msg;
@@ -233,6 +240,10 @@ export async function runBroadcast(
     for (const chunk of chunks) {
       chunkIdx += 1;
       try {
+        // Avoid logging every token; log a representative message payload for debugging.
+        if (chunk[0]) {
+          console.log('[DEBUG IMAGE PAYLOAD]:', JSON.stringify(chunk[0]));
+        }
         const tickets = await expo.sendPushNotificationsAsync(chunk);
         console.log(
           `[expo] Tickets response (chunk ${chunkIdx}/${chunks.length}, ${chunk.length} msgs):`,
