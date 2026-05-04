@@ -109,6 +109,8 @@ function PushNotificationLayer() {
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
         shouldShowAlert: true,
+        shouldShowBanner: true,
+        shouldShowList: false,
         shouldPlaySound: true,
         shouldSetBadge: false,
       }),
