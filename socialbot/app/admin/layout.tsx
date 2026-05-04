@@ -9,12 +9,14 @@ const PAGE_TITLES: Record<string, string> = {
   '/admin/events': 'Events',
   '/admin/parties': 'Parties',
   '/admin/users': 'Users',
+  '/admin/groups': 'Group Management',
   '/admin/notifications': 'Notification Broadcast Center',
 };
 
 function getTitle(pathname: string): string {
   if (PAGE_TITLES[pathname]) return PAGE_TITLES[pathname];
   if (pathname.startsWith('/admin/events')) return 'Events';
+  if (pathname.startsWith('/admin/groups')) return 'Group Management';
   if (pathname.startsWith('/admin/notifications')) return 'Notification Broadcast Center';
   return 'Admin';
 }

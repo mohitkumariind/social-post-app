@@ -203,8 +203,7 @@ export default function App() {
   const [newLoksabha, setNewLoksabha] = useState<string[]>([]);
   const [newAssembly, setNewAssembly] = useState<string[]>([]);
   const [newTargetGroups, setNewTargetGroups] = useState<string[]>([]);
-  const [knownGroupTags, setKnownGroupTags] = useState<string[]>([]);
-  const [newTargetGroupInput, setNewTargetGroupInput] = useState('');
+  const [groupOptions, setGroupOptions] = useState<{ tag: string; count: number }[]>([]);
   const [filterParty, setFilterParty] = useState<string>('ALL');
   const [filterState, setFilterState] = useState<string>('ALL');
   const [availableStates, setAvailableStates] = useState<{ id: string; name: string }[]>([]);
@@ -219,23 +218,14 @@ export default function App() {
   const skipAutoStateRef = useRef(false);
   const skipLoksabhaResetCountRef = useRef(0);
 
-  const addTargetGroup = (raw: string) => {
-    const t = String(raw ?? '').trim();
-    if (!t) return;
-    setNewTargetGroups((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
-  };
-
-  const removeTargetGroup = (t: string) => setNewTargetGroups((prev) => prev.filter((x) => x !== t));
-
   useEffect(() => {
-    // Fetch known worker tags for Target Groups suggestions.
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/admin/profile-tags', { credentials: 'same-origin' });
+        const res = await fetch('/api/admin/groups', { credentials: 'same-origin' });
         if (!res.ok) return;
-        const json = (await res.json()) as { tags?: string[] };
-        if (!cancelled) setKnownGroupTags((json.tags ?? []).map((x) => String(x)).filter(Boolean));
+        const json = (await res.json()) as { groups?: { tag: string; count: number }[] };
+        if (!cancelled) setGroupOptions(json.groups ?? []);
       } catch {
         // ignore
       }
@@ -1007,62 +997,37 @@ export default function App() {
                     />
                   </div>
 
-                  {/* Target Groups (Direct Mapping) */}
                   <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Target Groups</span>
                       {newTargetGroups.length > 0 && (
                         <button
                           type="button"
-                          onClick={() => { setNewTargetGroups([]); setNewTargetGroupInput(''); }}
+                          onClick={() => setNewTargetGroups([])}
                           className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700"
                         >
                           Clear
                         </button>
                       )}
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {newTargetGroups.map((t) => (
-                        <span key={t} className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-800 px-2 py-1 rounded-xl text-[10px] font-black uppercase tracking-widest">
-                          {t}
-                          <button type="button" onClick={() => removeTargetGroup(t)} className="hover:bg-indigo-200 rounded p-0.5">
-                            <X size={12} />
-                          </button>
-                        </span>
-                      ))}
-                      <input
-                        value={newTargetGroupInput}
-                        onChange={(e) => setNewTargetGroupInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ',') {
-                            e.preventDefault();
-                            addTargetGroup(newTargetGroupInput);
-                            setNewTargetGroupInput('');
-                          } else if (e.key === 'Backspace' && !newTargetGroupInput && newTargetGroups.length > 0) {
-                            removeTargetGroup(newTargetGroups[newTargetGroups.length - 1]);
-                          }
-                        }}
-                        placeholder="Type tag and press Enter…"
-                        className="flex-1 min-w-[140px] bg-transparent outline-none font-bold text-slate-800 text-sm placeholder:text-slate-300 py-1"
-                      />
-                    </div>
-                    {knownGroupTags.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {knownGroupTags
-                          .filter((t) => !newTargetGroups.some((x) => x.toLowerCase() === String(t).toLowerCase()))
-                          .slice(0, 12)
-                          .map((t) => (
-                            <button
-                              key={t}
-                              type="button"
-                              onClick={() => addTargetGroup(t)}
-                              className="px-3 py-1.5 rounded-2xl bg-white border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-[10px] font-black uppercase tracking-widest text-slate-700 active:scale-95 transition-all"
-                            >
-                              + {t}
-                            </button>
-                          ))}
-                      </div>
+                    {groupOptions.length === 0 ? (
+                      <p className="mt-2 text-[11px] font-bold text-slate-400">No groups yet. Create tags under Group Management or Users.</p>
+                    ) : (
+                      <select
+                        multiple
+                        size={Math.min(10, Math.max(4, groupOptions.length))}
+                        value={newTargetGroups}
+                        onChange={(e) => setNewTargetGroups(Array.from(e.target.selectedOptions, (o) => o.value))}
+                        className="mt-2 w-full rounded-xl border border-slate-100 bg-white px-3 py-2 font-bold text-sm text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/20"
+                      >
+                        {groupOptions.map((g) => (
+                          <option key={g.tag} value={g.tag}>
+                            {g.tag} ({g.count})
+                          </option>
+                        ))}
+                      </select>
                     )}
+                    <p className="mt-2 text-[10px] font-bold text-slate-400">List comes from Group Management. Hold Ctrl/Cmd (Windows/Mac) to select multiple.</p>
                   </div>
                   <div className="flex gap-3">
                     <div className="flex flex-col flex-1">
@@ -1078,7 +1043,7 @@ export default function App() {
               </div>
               <div className="shrink-0 px-4 sm:px-5 py-4 border-t border-slate-100 bg-white">
                 <div className="flex gap-4">
-                  <button onClick={() => { setEditingEvent(null); setNewName(''); setNewLanguage(''); setStartDate(''); setEndDate(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); setNewTargetGroupInput(''); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
+                  <button onClick={() => { setEditingEvent(null); setNewName(''); setNewLanguage(''); setStartDate(''); setEndDate(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
                   <button onClick={handleSaveEvent} disabled={!newName.trim() || !startDate || !endDate} className="flex-1 py-3 sm:py-4 bg-blue-600 text-white rounded-2xl font-bold disabled:opacity-30">Save</button>
                 </div>
               </div>
@@ -1184,64 +1149,38 @@ export default function App() {
             <button onClick={createEvent} disabled={!newName || !startDate || !endDate} className="bg-blue-600 text-white px-8 py-2.5 rounded-2xl font-black text-xs hover:bg-slate-900 disabled:opacity-30 transition-all uppercase tracking-widest shrink-0">Add</button>
           </div>
 
-          {/* Target Groups (Direct Mapping) */}
           <div className="mt-4 bg-slate-50 border border-slate-100 rounded-2xl p-4">
             <div className="flex items-center justify-between gap-3">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Target Groups</span>
               {newTargetGroups.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => { setNewTargetGroups([]); setNewTargetGroupInput(''); }}
+                  onClick={() => setNewTargetGroups([])}
                   className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700"
                 >
                   Clear
                 </button>
               )}
             </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {newTargetGroups.map((t) => (
-                <span key={t} className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-800 px-2 py-1 rounded-xl text-[10px] font-black uppercase tracking-widest">
-                  {t}
-                  <button type="button" onClick={() => removeTargetGroup(t)} className="hover:bg-indigo-200 rounded p-0.5">
-                    <X size={12} />
-                  </button>
-                </span>
-              ))}
-              <input
-                value={newTargetGroupInput}
-                onChange={(e) => setNewTargetGroupInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ',') {
-                    e.preventDefault();
-                    addTargetGroup(newTargetGroupInput);
-                    setNewTargetGroupInput('');
-                  } else if (e.key === 'Backspace' && !newTargetGroupInput && newTargetGroups.length > 0) {
-                    removeTargetGroup(newTargetGroups[newTargetGroups.length - 1]);
-                  }
-                }}
-                placeholder="Type tag and press Enter…"
-                className="flex-1 min-w-[160px] bg-transparent outline-none font-bold text-slate-800 text-sm placeholder:text-slate-300 py-1"
-              />
-            </div>
-            {knownGroupTags.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {knownGroupTags
-                  .filter((t) => !newTargetGroups.some((x) => x.toLowerCase() === String(t).toLowerCase()))
-                  .slice(0, 16)
-                  .map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => addTargetGroup(t)}
-                      className="px-3 py-1.5 rounded-2xl bg-white border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-[10px] font-black uppercase tracking-widest text-slate-700 active:scale-95 transition-all"
-                    >
-                      + {t}
-                    </button>
-                  ))}
-              </div>
+            {groupOptions.length === 0 ? (
+              <p className="mt-2 text-[11px] font-bold text-slate-400">No groups yet. Create tags under Group Management or Users.</p>
+            ) : (
+              <select
+                multiple
+                size={Math.min(10, Math.max(4, groupOptions.length))}
+                value={newTargetGroups}
+                onChange={(e) => setNewTargetGroups(Array.from(e.target.selectedOptions, (o) => o.value))}
+                className="mt-2 w-full rounded-xl border border-slate-100 bg-white px-3 py-2 font-bold text-sm text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/20"
+              >
+                {groupOptions.map((g) => (
+                  <option key={g.tag} value={g.tag}>
+                    {g.tag} ({g.count})
+                  </option>
+                ))}
+              </select>
             )}
-            <p className="mt-3 text-[10px] font-bold text-slate-400">
-              If set, these tags will be used for direct worker targeting (overrides geography filters in the app).
+            <p className="mt-2 text-[10px] font-bold text-slate-400">
+              Centralized list from Group Management. Hold Ctrl/Cmd to select multiple. If set, targeting overrides geo filters in the app.
             </p>
           </div>
         </div>

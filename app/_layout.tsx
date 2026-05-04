@@ -108,10 +108,9 @@ function PushNotificationLayer() {
   useEffect(() => {
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
-        shouldShowBanner: false,
-        shouldShowList: false,
+        shouldShowAlert: true,
         shouldPlaySound: true,
-        shouldSetBadge: true,
+        shouldSetBadge: false,
       }),
     });
   }, []);

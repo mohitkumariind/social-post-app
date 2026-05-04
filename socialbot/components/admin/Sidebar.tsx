@@ -6,6 +6,7 @@ import {
   Building2,
   Users,
   Bell,
+  Tags,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -15,6 +16,7 @@ const navItems = [
   { href: '/admin/events', label: 'Events', icon: Calendar },
   { href: '/admin/parties', label: 'Parties', icon: Building2 },
   { href: '/admin/users', label: 'Users', icon: Users },
+  { href: '/admin/groups', label: 'Group Management', icon: Tags },
   { href: '/admin/notifications', label: 'Broadcast', icon: Bell },
 ];
 
