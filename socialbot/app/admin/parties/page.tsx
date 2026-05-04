@@ -97,11 +97,11 @@ export default function PartyManager() {
       const path = `${baseId}_${Date.now()}.${safeExt}`;
 
       const { error: upErr } = await supabase.storage
-        .from('post-image')
+        .from('post-images')
         .upload(path, file, { upsert: true, contentType: file.type || `image/${safeExt}` });
       if (upErr) throw upErr;
 
-      const { data } = supabase.storage.from('post-image').getPublicUrl(path);
+      const { data } = supabase.storage.from('post-images').getPublicUrl(path);
       const publicUrl = data?.publicUrl ? String(data.publicUrl) : '';
       if (!publicUrl) throw new Error('Upload succeeded but public URL is missing.');
 
