@@ -509,7 +509,6 @@ export default function App() {
     setNewLoksabha([]);
     setNewAssembly([]);
     setNewTargetGroups([]);
-    setNewTargetGroupInput('');
   };
 
   const openEvent = async (ev: CampaignEvent) => {
@@ -790,7 +789,6 @@ export default function App() {
     setNewLoksabha(toStrArr(ev.loksabha));
     setNewAssembly(toStrArr(ev.assembly));
     setNewTargetGroups(toStrArr(ev.target_groups));
-    setNewTargetGroupInput('');
   };
 
   const handleSaveEvent = async () => {
@@ -868,7 +866,6 @@ export default function App() {
     setNewLoksabha([]);
     setNewAssembly([]);
     setNewTargetGroups([]);
-    setNewTargetGroupInput('');
 
     let workerNotifyOk = false;
     try {
