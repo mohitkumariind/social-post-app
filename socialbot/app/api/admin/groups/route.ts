@@ -112,10 +112,11 @@ async function fetchMembersForTag(admin: SupabaseClient, tag: string) {
   const out: Record<string, unknown>[] = [];
   let from = 0;
   for (;;) {
+    /** `contains` = array includes this tag (PostgREST `@>`). `overlaps` can 400 on some array / schema setups. */
     const { data, error } = await admin
       .from('profiles')
-      .select('id, name, phone, phone_number, avatar_url, group_tags')
-      .overlaps('group_tags', [tag])
+      .select('id, name, phone, avatar_url, group_tags')
+      .contains('group_tags', [tag])
       .order('id', { ascending: true })
       .range(from, from + pageSize - 1);
     if (error) throw new Error(error.message);
@@ -148,16 +149,16 @@ export async function GET(request: NextRequest) {
       const rows = await fetchMembersForTag(admin, tag);
       console.log('[admin/groups][GET] members raw', {
         tag,
-        selectColumns: 'id, name, phone, phone_number, avatar_url, group_tags',
+        selectColumns: 'id, name, phone, avatar_url, group_tags',
         table: 'profiles',
-        overlapFilter: { column: 'group_tags', overlaps: [tag] },
+        arrayFilter: { column: 'group_tags', contains: [tag] },
         rowCount: rows.length,
         sample: rows.slice(0, 5).map((r) => rawRowDebug({ id: String(r.id ?? ''), group_tags: r.group_tags })),
       });
       const members = rows.map((r) => ({
         id: String(r.id ?? ''),
         name: String(r.name ?? ''),
-        phone: String(r.phone ?? r.phone_number ?? ''),
+        phone: String(r.phone ?? ''),
         avatar_url: String(r.avatar_url ?? ''),
         group_tags: toStrArr(r.group_tags),
       }));
@@ -205,7 +206,7 @@ export async function DELETE(request: NextRequest) {
   const tag = (request.nextUrl.searchParams.get('tag') ?? '').trim();
   if (!tag) return NextResponse.json({ error: 'Missing tag' }, { status: 400 });
 
-  const { data: rows, error: fetchErr } = await admin.from('profiles').select('id, group_tags').overlaps('group_tags', [tag]);
+  const { data: rows, error: fetchErr } = await admin.from('profiles').select('id, group_tags').contains('group_tags', [tag]);
   if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 });
 
   let updated = 0;
