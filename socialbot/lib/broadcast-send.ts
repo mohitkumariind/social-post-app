@@ -229,15 +229,30 @@ export async function runBroadcast(
 
   if (messages.length > 0) {
     const chunks = expo.chunkPushNotifications(messages);
+    let chunkIdx = 0;
     for (const chunk of chunks) {
+      chunkIdx += 1;
       try {
         const tickets = await expo.sendPushNotificationsAsync(chunk);
+        console.log(
+          `[expo] Tickets response (chunk ${chunkIdx}/${chunks.length}, ${chunk.length} msgs):`,
+          JSON.stringify(tickets)
+        );
         for (const t of tickets) {
-          if (t.status === 'ok') deliveredTotal += 1;
-          else failedTotal += 1;
+          if (t.status === 'ok') {
+            deliveredTotal += 1;
+            continue;
+          }
+          failedTotal += 1;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const details = (t as any)?.details as { error?: string } | undefined;
+          console.error(
+            `[expo] Ticket error: ${t.message ?? 'unknown'}${details?.error ? ` (${details.error})` : ''}`
+          );
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        console.error('[expo] sendPushNotificationsAsync threw:', msg);
         await admin
           .from('notification_broadcasts')
           .update({

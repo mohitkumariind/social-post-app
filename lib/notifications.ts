@@ -155,11 +155,47 @@ export async function saveTokenToSupabase(token: string): Promise<boolean> {
       return true;
     }
 
-    if (__DEV__) console.warn('[notifications] push_tokens upsert failed:', error.message, error.code ?? '');
+    // If the DB hasn't applied the "one token per user" migration yet, `onConflict: 'user_id'`
+    // can fail with Postgres 42P10 (no matching unique constraint). Fall back to the older
+    // composite unique index (user_id, token).
+    const code = (error as any)?.code ?? null;
+    if (code === '42P10') {
+      const { error: fallbackErr } = await supabase.from('push_tokens').upsert(
+        {
+          user_id: user.id,
+          token,
+          device_name: deviceName,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,token' }
+      );
+      if (!fallbackErr) {
+        console.warn('[notifications] push_tokens upsert fallback succeeded (onConflict user_id,token)', { userId: user.id });
+        return true;
+      }
+      console.warn('[notifications] push_tokens upsert fallback failed', {
+        message: fallbackErr.message,
+        code: (fallbackErr as any)?.code ?? null,
+        details: (fallbackErr as any)?.details ?? null,
+        hint: (fallbackErr as any)?.hint ?? null,
+        userId: user.id,
+      });
+      return false;
+    }
+
+    // Log in all environments so RLS/constraints are visible in production logs.
+    console.warn('[notifications] push_tokens upsert failed', {
+      message: error.message,
+      code,
+      details: (error as any)?.details ?? null,
+      hint: (error as any)?.hint ?? null,
+      userId: user.id,
+    });
     return false;
   }
 
-  if (__DEV__) console.warn('[notifications] saveTokenToSupabase: no session after retries');
+  // Log in all environments so auth/session issues are visible in production logs.
+  console.warn('[notifications] saveTokenToSupabase: no session after retries');
   return false;
 }
 
