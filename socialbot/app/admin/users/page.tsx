@@ -52,7 +52,6 @@ interface AppUser {
   joinDate: string;
   dob: string;
   gender: string;
-  address: string;
   personalFrames: UserFrame[];
 }
 
@@ -93,7 +92,6 @@ export default function UserManagement() {
     joinDate: (row.join_date ?? row.created_at) ? new Date(String(row.join_date ?? row.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
     dob: row.dob ? new Date(String(row.dob)).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '',
     gender: String(row.gender ?? ''),
-    address: String(row.address ?? ''),
     personalFrames: [],
   });
 
@@ -399,7 +397,6 @@ export default function UserManagement() {
                             <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><MapPin size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{selectedUser.constituency}</p></div>
                         </div>
                     </div>
-                    <div className="p-6 bg-slate-50 rounded-[30px] border border-slate-100 shadow-inner"><p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Address</p><p className="text-sm font-bold text-slate-600 leading-relaxed italic">"{selectedUser.address}"</p></div>
                 </div>
 
                 {/* UPDATED: USER FRAMES SECTION */}
