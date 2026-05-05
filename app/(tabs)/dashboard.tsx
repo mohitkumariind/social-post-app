@@ -297,7 +297,12 @@ export default function DashboardScreen() {
         const postAssemblies = toStrArr(p.assembly).map((x) => String(x).trim()).filter(Boolean);
         const postTargetGroups = toStrArr(p.target_groups).map((x) => String(x).trim()).filter(Boolean);
 
-        // A) Direct mapping (target_groups) has priority over geo/party.
+        /**
+         * Priority rule (must match admin behavior):
+         * - If `post.target_groups` is set (non-empty), it OVERRIDES geo targeting.
+         *   Only show to users whose `profiles.group_tags` intersects the post target groups.
+         * - Otherwise, apply geo targeting (state/party/loksabha/assembly) with "empty means global".
+         */
         if (postTargetGroups.length > 0) {
           if (userGroupTags.length === 0) return false;
           const userSet = new Set(userGroupTags.map((x) => x.toLowerCase()));
