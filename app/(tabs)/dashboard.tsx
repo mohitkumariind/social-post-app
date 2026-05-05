@@ -212,7 +212,8 @@ export default function DashboardScreen() {
         : [];
 
       // Graphics only: not a reel (`is_video` true). Uses false OR NULL so legacy image rows (unset flag) still show.
-      // DB-side filter: state + party are stored as arrays in DB (jsonb/text[]); use `.contains()` to avoid fetching everything.
+      // NOTE: We intentionally avoid DB-side `contains(state/party, ...)` here because NULL/empty targeting
+      // should be treated as "global" on the client. DB-side filters can accidentally exclude global rows.
       const runGeoQuery = async () => {
         let q = supabase
           .from('posts')
@@ -220,8 +221,6 @@ export default function DashboardScreen() {
           .or('is_video.eq.false,is_video.is.null')
           .order('created_at', { ascending: false });
 
-        if (normalizedUserState) q = q.contains('state', [normalizedUserState]);
-        if (normalizedUserParty) q = q.contains('party', [normalizedUserParty]);
         // Only non-tag-targeted content in geo query (direct mapping handled separately).
         q = q.or('target_groups.is.null,target_groups.eq.{}');
         return await q;
@@ -261,6 +260,13 @@ export default function DashboardScreen() {
       let error: any = null;
       {
         const [rTargeted, rGeo, rGlobal] = await Promise.all([runTargetedQuery(), runGeoQuery(), runGlobalQuery()]);
+        if (__DEV__) {
+          console.log('[gfx] fetchPosts queryCounts', {
+            targeted: (rTargeted as any)?.data?.length ?? 0,
+            geo: (rGeo as any)?.data?.length ?? 0,
+            global: (rGlobal as any)?.data?.length ?? 0,
+          });
+        }
         const errs = [rTargeted?.error, rGeo?.error, rGlobal?.error].filter(Boolean);
         error = errs[0] ?? null;
         const merged = [...(rTargeted?.data ?? []), ...(rGeo?.data ?? []), ...(rGlobal?.data ?? [])] as any[];
@@ -412,8 +418,7 @@ export default function DashboardScreen() {
           .from('events')
           .select('name, end, party, state, loksabha, assembly, target_groups')
           .or('target_groups.is.null,target_groups.eq.{}');
-        if (normalizedUserState) q = q.contains('state', [normalizedUserState]);
-        if (normalizedUserParty) q = q.contains('party', [normalizedUserParty]);
+        // NOTE: Avoid DB-side geo filters here; NULL/empty targeting must remain eligible (treated as global on client).
         return await q;
       };
       const runGlobal = async () => {
