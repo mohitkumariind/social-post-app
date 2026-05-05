@@ -269,7 +269,11 @@ export default function DashboardScreen() {
               geo: (rGeo as any)?.data?.length ?? 0,
               global: (rGlobal as any)?.data?.length ?? 0,
             });
-            console.log('[gfx] userGeo', { normalizedUserState, normalizedUserParty, userLoksabhaId, userAssemblyId });
+            // Stringify to keep it on one log line in logcat.
+            console.log(
+              '[gfx] userGeo',
+              JSON.stringify({ normalizedUserState, normalizedUserParty, userLoksabhaId, userAssemblyId })
+            );
             globalAny.__dbgFetchCounts += 1;
           }
         }
@@ -393,6 +397,30 @@ export default function DashboardScreen() {
 
         return true;
       });
+      {
+        const globalAny = globalThis as any;
+        globalAny.__dbgFilterCounts = typeof globalAny.__dbgFilterCounts === 'number' ? globalAny.__dbgFilterCounts : 0;
+        if (globalAny.__dbgFilterCounts < 5) {
+          console.log('[gfx] filterCounts', JSON.stringify({ raw: raw.length, kept: filtered.length }));
+          if (filtered.length === 0 && raw.length > 0) {
+            console.log(
+              '[gfx] rawSample',
+              JSON.stringify(
+                raw.slice(0, 5).map((p) => ({
+                  id: p.id,
+                  category: p.category,
+                  target_groups: (p as any).target_groups,
+                  state: (p as any).state,
+                  party: (p as any).party,
+                  loksabha: (p as any).loksabha,
+                  assembly: (p as any).assembly,
+                }))
+              )
+            );
+          }
+          globalAny.__dbgFilterCounts += 1;
+        }
+      }
       setPosts(filtered);
     } catch (err) {
       if (reqId !== fetchPostsReqIdRef.current) return;
