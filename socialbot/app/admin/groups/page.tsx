@@ -1,6 +1,6 @@
 'use client';
 
-import { Search, Tags, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { Eye, Plus, Search, Tags, Trash2, Users, X } from 'lucide-react';
 import React, { useCallback, useEffect, useState } from 'react';
 
 type GroupRow = { tag: string; count: number };
@@ -18,6 +18,15 @@ export default function GroupManagementPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  // Create Group modal
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createSearch, setCreateSearch] = useState('');
+  const [createSearching, setCreateSearching] = useState(false);
+  const [createSearchResults, setCreateSearchResults] = useState<MemberRow[]>([]);
+  const [createSelected, setCreateSelected] = useState<MemberRow[]>([]);
+  const [createBusy, setCreateBusy] = useState(false);
 
   const [detailTag, setDetailTag] = useState<string | null>(null);
   const [members, setMembers] = useState<MemberRow[]>([]);
@@ -90,7 +99,7 @@ export default function GroupManagementPage() {
       const rows = (json.profiles ?? []).map((r) => ({
         id: String(r.id ?? ''),
         name: String(r.name ?? ''),
-        phone: String(r.phone ?? r.phone_number ?? ''),
+        phone: String(r.phone ?? ''),
         avatar_url: String(r.avatar_url ?? ''),
         group_tags: Array.isArray(r.group_tags)
           ? (r.group_tags as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean)
@@ -187,13 +196,28 @@ export default function GroupManagementPage() {
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => void loadGroups()}
-          className="rounded-2xl bg-slate-900 px-6 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-lg transition-all hover:bg-slate-800 active:scale-95"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setCreateName('');
+              setCreateSearch('');
+              setCreateSearchResults([]);
+              setCreateSelected([]);
+              setCreateOpen(true);
+            }}
+            className="rounded-2xl bg-slate-900 px-6 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-lg transition-all hover:bg-slate-800 active:scale-95"
+          >
+            Create Group
+          </button>
+          <button
+            type="button"
+            onClick={() => void loadGroups()}
+            className="rounded-2xl border border-slate-200 bg-white px-6 py-3 text-[10px] font-black uppercase tracking-widest text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50 active:scale-95"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -207,57 +231,261 @@ export default function GroupManagementPage() {
           <p className="text-sm font-black uppercase tracking-widest text-slate-400 italic">No group tags yet. Assign tags from Users or add members below.</p>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-[32px] border border-slate-100 bg-white shadow-sm">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-100 bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-400">
-              <tr>
-                <th className="px-6 py-4">Group</th>
-                <th className="px-6 py-4">Members</th>
-                <th className="px-6 py-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map((g) => (
-                <tr key={g.tag} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/80">
-                  <td className="px-6 py-4">
-                    <span className="inline-flex items-center rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-black uppercase tracking-widest text-indigo-800">
-                      {g.tag}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 font-bold text-slate-800">{g.count}</td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex flex-wrap justify-end gap-2">
+        <div className="space-y-3">
+          {groups.map((g) => (
+            <div
+              key={g.tag}
+              className="flex items-center gap-4 rounded-[26px] border border-slate-100 bg-white px-5 py-4 shadow-sm hover:bg-slate-50/60"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-black text-slate-900">{g.tag}</p>
+              </div>
+
+              <div className="shrink-0">
+                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-slate-700">
+                  {g.count} members
+                </span>
+              </div>
+
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void openDetail(g.tag)}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50 active:scale-95"
+                  aria-label="View"
+                  title="View"
+                >
+                  <Eye size={18} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void openDetail(g.tag);
+                    setAddSearch('');
+                  }}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50 active:scale-95"
+                  aria-label="Add user"
+                  title="Add user"
+                >
+                  <Plus size={18} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmTag(g.tag)}
+                  disabled={busyTag === g.tag}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 text-rose-700 shadow-sm transition-all hover:bg-rose-100 active:scale-95 disabled:opacity-50"
+                  aria-label="Delete"
+                  title="Delete"
+                >
+                  <Trash2 size={18} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create Group */}
+      {createOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl overflow-hidden rounded-[40px] border border-slate-100 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Create Group</p>
+                <p className="text-lg font-black text-slate-900">New group tag + members</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCreateOpen(false)}
+                className="rounded-xl p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-900"
+                aria-label="Close"
+              >
+                <X size={22} />
+              </button>
+            </div>
+
+            <div className="space-y-5 px-6 py-5">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Group name</p>
+                <input
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  placeholder="e.g. Team_Test"
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none placeholder:text-slate-300 focus:border-blue-300"
+                />
+              </div>
+
+              <div className="rounded-[26px] border border-slate-100 bg-slate-50 p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Search users (name or phone)</p>
+                <div className="mt-2 flex gap-2">
+                  <div className="flex flex-1 items-center gap-2 rounded-2xl border border-slate-100 bg-white px-3 py-2">
+                    <Search size={16} className="text-slate-400" />
+                    <input
+                      value={createSearch}
+                      onChange={(e) => setCreateSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const q = createSearch.trim();
+                          if (!q) return;
+                          void (async () => {
+                            setCreateSearching(true);
+                            try {
+                              const usp = new URLSearchParams();
+                              usp.set('search_query', q);
+                              const res = await fetch(`/api/admin/profiles?${usp.toString()}`, { credentials: 'same-origin' });
+                              const json = (await res.json()) as { profiles?: Record<string, unknown>[]; error?: string };
+                              if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+                              const rows = (json.profiles ?? []).map((r) => ({
+                                id: String(r.id ?? ''),
+                                name: String(r.name ?? ''),
+                                phone: String(r.phone ?? ''),
+                                avatar_url: String(r.avatar_url ?? ''),
+                                group_tags: Array.isArray(r.group_tags)
+                                  ? (r.group_tags as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean)
+                                  : [],
+                              }));
+                              setCreateSearchResults(rows.filter((r) => r.id));
+                            } catch (e2) {
+                              setToast(e2 instanceof Error ? e2.message : 'Search failed');
+                              setCreateSearchResults([]);
+                            } finally {
+                              setCreateSearching(false);
+                            }
+                          })();
+                        }
+                      }}
+                      placeholder="Type and press Enter…"
+                      className="min-w-0 flex-1 bg-transparent text-sm font-bold text-slate-900 outline-none placeholder:text-slate-300"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={createSearching}
+                    onClick={() => {
+                      const q = createSearch.trim();
+                      if (!q) {
+                        setCreateSearchResults([]);
+                        return;
+                      }
+                      void (async () => {
+                        setCreateSearching(true);
+                        try {
+                          const usp = new URLSearchParams();
+                          usp.set('search_query', q);
+                          const res = await fetch(`/api/admin/profiles?${usp.toString()}`, { credentials: 'same-origin' });
+                          const json = (await res.json()) as { profiles?: Record<string, unknown>[]; error?: string };
+                          if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+                          const rows = (json.profiles ?? []).map((r) => ({
+                            id: String(r.id ?? ''),
+                            name: String(r.name ?? ''),
+                            phone: String(r.phone ?? ''),
+                            avatar_url: String(r.avatar_url ?? ''),
+                            group_tags: Array.isArray(r.group_tags)
+                              ? (r.group_tags as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean)
+                              : [],
+                          }));
+                          setCreateSearchResults(rows.filter((r) => r.id));
+                        } catch (e2) {
+                          setToast(e2 instanceof Error ? e2.message : 'Search failed');
+                          setCreateSearchResults([]);
+                        } finally {
+                          setCreateSearching(false);
+                        }
+                      })();
+                    }}
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-50"
+                  >
+                    {createSearching ? '…' : 'Search'}
+                  </button>
+                </div>
+
+                {createSelected.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {createSelected.map((u) => (
                       <button
+                        key={u.id}
                         type="button"
-                        onClick={() => void openDetail(g.tag)}
-                        className="rounded-xl bg-slate-900 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white transition-all hover:bg-slate-800 active:scale-95"
+                        onClick={() => setCreateSelected((prev) => prev.filter((x) => x.id !== u.id))}
+                        className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50"
+                        title="Remove"
                       >
-                        View Members
+                        <span className="max-w-[200px] truncate">{u.name || '—'} · {u.phone || '—'}</span>
+                        <X size={14} className="text-slate-400" />
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void openDetail(g.tag);
-                          setAddSearch('');
-                        }}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-700 transition-all hover:border-blue-300 hover:bg-blue-50 active:scale-95"
-                      >
-                        Add User
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteConfirmTag(g.tag)}
-                        disabled={busyTag === g.tag}
-                        className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-rose-700 transition-all hover:bg-rose-100 active:scale-95 disabled:opacity-50"
-                      >
-                        Delete Group
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    ))}
+                  </div>
+                )}
+
+                {createSearchResults.length > 0 && (
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {createSearchResults.map((u) => {
+                      const selected = createSelected.some((x) => x.id === u.id);
+                      return (
+                        <button
+                          key={u.id}
+                          type="button"
+                          onClick={() => {
+                            if (selected) return;
+                            setCreateSelected((prev) => [...prev, u]);
+                          }}
+                          disabled={selected}
+                          className="flex items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 text-left text-xs font-bold text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          <span className="min-w-0 flex-1 truncate">{u.name || '—'} · {u.phone || '—'}</span>
+                          <span className="shrink-0 rounded-full bg-indigo-50 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-indigo-700">
+                            {selected ? 'Selected' : 'Add'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-white px-6 py-5">
+              <button
+                type="button"
+                onClick={() => setCreateOpen(false)}
+                className="rounded-2xl bg-slate-100 px-5 py-3 text-[10px] font-black uppercase tracking-widest text-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={createBusy || !createName.trim() || createSelected.length === 0}
+                onClick={() => {
+                  const tag = createName.trim();
+                  if (!tag) return;
+                  const userIds = createSelected.map((u) => u.id).filter(Boolean);
+                  if (userIds.length === 0) return;
+                  void (async () => {
+                    setCreateBusy(true);
+                    try {
+                      const res = await fetch('/api/admin/groups', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tag, userIds }),
+                      });
+                      const json = (await res.json().catch(() => ({}))) as { error?: string; updated?: number };
+                      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+                      setToast(`Created “${tag}” (${json.updated ?? 0} users)`);
+                      setCreateOpen(false);
+                      await loadGroups();
+                    } catch (e2) {
+                      setToast(e2 instanceof Error ? e2.message : 'Create group failed');
+                    } finally {
+                      setCreateBusy(false);
+                    }
+                  })();
+                }}
+                className="rounded-2xl bg-slate-900 px-5 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-50"
+              >
+                {createBusy ? 'Working…' : 'Create'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -386,7 +614,7 @@ export default function GroupManagementPage() {
             </div>
 
             <div className="shrink-0 border-t border-slate-100 bg-slate-50 px-5 py-3 text-center text-[10px] font-bold text-slate-400">
-              <UserPlus className="mx-auto mb-1 inline text-slate-300" size={16} /> Use search above to attach more workers to this tag.
+              Use search above to attach more workers to this tag.
             </div>
           </div>
         </div>

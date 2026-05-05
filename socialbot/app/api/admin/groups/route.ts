@@ -224,6 +224,53 @@ export async function DELETE(request: NextRequest) {
 
 type PatchBody = { userId?: string; add?: string[]; remove?: string[] };
 
+type CreateBody = { tag?: string; userIds?: string[] };
+
+export async function POST(request: NextRequest) {
+  const supabase = await createSupabaseServerClient();
+  const auth = await validateAdminSession(supabase);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
+  }
+
+  const admin = createServiceRoleClient();
+  if (!admin) {
+    return NextResponse.json({ error: NO_SERVICE_ROLE }, { status: 503 });
+  }
+
+  let body: CreateBody = {};
+  try {
+    body = (await request.json()) as CreateBody;
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const tag = String(body.tag ?? '').trim();
+  const userIds = Array.isArray(body.userIds) ? body.userIds.map((x) => String(x).trim()).filter(Boolean) : [];
+
+  if (!tag) return NextResponse.json({ error: 'Missing tag' }, { status: 400 });
+  if (userIds.length === 0) return NextResponse.json({ error: 'Select at least one user' }, { status: 400 });
+
+  // Read current tags for selected users, then update with a case-insensitive union.
+  const { data: rows, error: readErr } = await admin.from('profiles').select('id, group_tags').in('id', userIds);
+  if (readErr) return NextResponse.json({ error: readErr.message }, { status: 500 });
+
+  const tagLower = tag.toLowerCase();
+  let updated = 0;
+
+  for (const r of rows ?? []) {
+    const id = String((r as { id?: unknown }).id ?? '').trim();
+    if (!id) continue;
+    const existing = toStrArr((r as { group_tags?: unknown }).group_tags);
+    const next = existing.some((t) => t.toLowerCase() === tagLower) ? existing : [...existing, tag];
+    const { error: upErr } = await admin.from('profiles').update({ group_tags: next }).eq('id', id);
+    if (upErr) return NextResponse.json({ error: upErr.message, updated }, { status: 500 });
+    updated += 1;
+  }
+
+  return NextResponse.json({ ok: true, tag, requested: userIds.length, updated }, { headers: { 'Cache-Control': 'no-store' } });
+}
+
 export async function PATCH(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
