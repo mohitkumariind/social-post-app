@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
 
     if (searchQueryRaw) {
       const s = searchQueryRaw.replace(/[%]/g, '\\%');
-      q = q.or(`name.ilike.%${s}%,phone.ilike.%${s}%,phone_number.ilike.%${s}%`);
+      q = q.or(`name.ilike.%${s}%,phone.ilike.%${s}%`);
     }
 
     return q.order(orderBy, { ascending: false });
