@@ -140,15 +140,6 @@ export default function DashboardScreen() {
       const id = stateName ? await getUserStateId(stateName) : '';
       if (cancelled) return;
       normalizedUserStateIdRef.current = id;
-      // Debug logs (requested) — capped.
-      const globalAny = globalThis as any;
-      globalAny.__dbgProfileChanged = typeof globalAny.__dbgProfileChanged === 'number' ? globalAny.__dbgProfileChanged : 0;
-      if (globalAny.__dbgProfileChanged < 10) {
-        console.log('[gfx] Profile Changed. New State:', userProfile?.state);
-        console.log('[gfx] Re-mapped State ID:', id);
-        globalAny.__dbgProfileChanged += 1;
-      }
-
       // Ensure graphics refetch after remap (state name -> id).
       setRefreshKey((p) => p + 1);
     })();
@@ -313,29 +304,7 @@ export default function DashboardScreen() {
       let error: any = null;
       {
         const [rTargeted, rGeo, rGlobal] = await Promise.all([runTargetedQuery(), runGeoQuery(), runGlobalQuery()]);
-        {
-          const globalAny = globalThis as any;
-          globalAny.__dbgFetchCounts = typeof globalAny.__dbgFetchCounts === 'number' ? globalAny.__dbgFetchCounts : 0;
-          if (globalAny.__dbgFetchCounts < 5) {
-            console.log('[gfx] fetchPosts queryCounts', {
-              targeted: (rTargeted as any)?.data?.length ?? 0,
-              geo: (rGeo as any)?.data?.length ?? 0,
-              global: (rGlobal as any)?.data?.length ?? 0,
-            });
-            // Stringify to keep it on one log line in logcat.
-            console.log(
-              '[gfx] userGeo',
-              JSON.stringify({
-                normalizedUserState,
-                normalizedUserStateId,
-                normalizedUserParty,
-                userLoksabhaId,
-                userAssemblyId,
-              })
-            );
-            globalAny.__dbgFetchCounts += 1;
-          }
-        }
+        // debug logs removed
         const errs = [rTargeted?.error, rGeo?.error, rGlobal?.error].filter(Boolean);
         error = errs[0] ?? null;
         const merged = [...(rTargeted?.data ?? []), ...(rGeo?.data ?? []), ...(rGlobal?.data ?? [])] as any[];
@@ -385,41 +354,9 @@ export default function DashboardScreen() {
             ? ((userProfile as any).group_tags as unknown[]).map((x) => String(x).trim()).filter(Boolean)
             : [];
 
-          // Debug logs (requested)
-          // Debug logs (requested) — emit a small capped sample even in production.
-          {
-            const globalAny = globalThis as any;
-            globalAny.__dbgTargetGroupLogs = typeof globalAny.__dbgTargetGroupLogs === 'number' ? globalAny.__dbgTargetGroupLogs : 0;
-            if (globalAny.__dbgTargetGroupLogs < 15) {
-              console.log('User Group Tags:', userTags);
-              console.log('Post Target Groups:', (p as any).target_groups);
-              console.log(
-                'Matching Result:',
-                Array.isArray((p as any).target_groups) && userTags.length > 0
-                  ? ((p as any).target_groups as unknown[]).some((tg) => userTags.includes(String(tg)))
-                  : false
-              );
-              globalAny.__dbgTargetGroupLogs += 1;
-            }
-          }
-
           if (userTags.length === 0) return false;
           const userSet = new Set(userTags.map((x) => x.toLowerCase()));
           return postTargetGroups.some((tg) => userSet.has(String(tg).toLowerCase()));
-        }
-
-        // Debug logs (requested): user state + post state + category
-        // Debug logs (requested) — emit a small capped sample even in production.
-        {
-          const globalAny = globalThis as any;
-          globalAny.__dbgGeoLogs = typeof globalAny.__dbgGeoLogs === 'number' ? globalAny.__dbgGeoLogs : 0;
-          if (globalAny.__dbgGeoLogs < 15) {
-            const userProfile = userInfoRef.current ?? ({} as any);
-            console.log('User State:', (userProfile as any).state);
-            console.log('Post State Target:', (p as any).state);
-            console.log('Graphic Category:', (p as any).category);
-            globalAny.__dbgGeoLogs += 1;
-          }
         }
 
         // B) Geography/Party fallback (when target_groups empty)
@@ -465,82 +402,6 @@ export default function DashboardScreen() {
 
         return true;
       });
-      {
-        const globalAny = globalThis as any;
-        globalAny.__dbgFilterCounts = typeof globalAny.__dbgFilterCounts === 'number' ? globalAny.__dbgFilterCounts : 0;
-        if (globalAny.__dbgFilterCounts < 5) {
-          console.log('[gfx] filterCounts', JSON.stringify({ raw: raw.length, kept: filtered.length }));
-          if (filtered.length === 0 && raw.length > 0) {
-            console.log(
-              '[gfx] filterContext',
-              JSON.stringify({
-                normalizedUserState,
-                normalizedUserStateId,
-                normalizedUserParty,
-                userLoksabhaId,
-                userAssemblyId,
-              })
-            );
-            console.log(
-              '[gfx] rawSample',
-              JSON.stringify(
-                raw.slice(0, 5).map((p) => ({
-                  id: p.id,
-                  category: p.category,
-                  target_groups: (p as any).target_groups,
-                  state: (p as any).state,
-                  party: (p as any).party,
-                  loksabha: (p as any).loksabha,
-                  assembly: (p as any).assembly,
-                }))
-              )
-            );
-
-            // Log pass/fail reasons for first few posts.
-            console.log(
-              '[gfx] evalSample',
-              JSON.stringify(
-                raw.slice(0, 3).map((p) => {
-                  const postStates = toStrArr((p as any).state ?? []).map((s) => normalizeForCompare(s));
-                  const postParties = toStrArr((p as any).party ?? []).map((pa) => normalizeForCompare(normalizePartyId(pa) || pa));
-                  const postLoksabhas = toStrArr((p as any).loksabha ?? []).map((x) => String(x).trim()).filter(Boolean);
-                  const postAssemblies = toStrArr((p as any).assembly ?? []).map((x) => String(x).trim()).filter(Boolean);
-                  const postTargetGroups = toStrArr((p as any).target_groups ?? []).map((x) => String(x).trim()).filter(Boolean);
-                  const postStatesAreIds = postStates.length > 0 && postStates.every((s) => /^[0-9]+$/.test(String(s)));
-                  const stateOk =
-                    postStates.length === 0 ||
-                    (!normalizedUserState && !normalizedUserStateId) ||
-                    (postStatesAreIds
-                      ? !!normalizedUserStateId && postStates.includes(normalizedUserStateId)
-                      : !!normalizedUserState && postStates.includes(normalizedUserState));
-                  const partyOk = postParties.length === 0 || !normalizedUserParty || postParties.includes(normalizedUserParty);
-                  const lokOk =
-                    postLoksabhas.length === 0 ||
-                    (userLoksabhaId != null && postLoksabhas.includes(String(userLoksabhaId).trim()));
-                  const asmOk =
-                    postAssemblies.length === 0 ||
-                    (userAssemblyId != null && postAssemblies.includes(String(userAssemblyId).trim()));
-                  const ok =
-                    postTargetGroups.length > 0
-                      ? 'targeted-branch'
-                      : stateOk && partyOk && lokOk && asmOk;
-                  return {
-                    id: p.id,
-                    category: p.category,
-                    postStatesAreIds,
-                    stateOk,
-                    partyOk,
-                    lokOk,
-                    asmOk,
-                    ok,
-                  };
-                })
-              )
-            );
-          }
-          globalAny.__dbgFilterCounts += 1;
-        }
-      }
       setPosts(filtered);
     } catch (err) {
       if (reqId !== fetchPostsReqIdRef.current) return;
