@@ -110,6 +110,25 @@ export default function DashboardScreen() {
   const fetchPostsReqIdRef = useRef(0);
   const safeUserInfo = userInfo ?? { name: '', phone: '', state: '', partyName: '' };
   const realtimeChannelRef = useRef<any>(null);
+  const stateNameToIdRef = useRef<Map<string, string>>(new Map());
+
+  const getUserStateId = React.useCallback(async (normalizedStateName: string): Promise<string> => {
+    const key = String(normalizedStateName ?? '').trim().toLowerCase();
+    if (!key) return '';
+    const cached = stateNameToIdRef.current.get(key);
+    if (cached) return cached;
+    try {
+      // Best-effort lookup: profiles.state is state name, posts.state is state_id (string) in many rows.
+      const { data, error } = await supabase.from('states').select('id,name').ilike('name', key).limit(1);
+      if (error) return '';
+      const first = Array.isArray(data) ? data[0] : null;
+      const id = first?.id != null ? String(first.id) : '';
+      if (id) stateNameToIdRef.current.set(key, id);
+      return id;
+    } catch {
+      return '';
+    }
+  }, []);
 
   const clearDashboardExpandParams = React.useCallback(() => {
     // `setParams` has differed across Expo Router versions / navigators.
@@ -205,6 +224,7 @@ export default function DashboardScreen() {
       }
       const normalizedUserState = normalizeForCompare(userState || '');
       const normalizedUserParty = normalizeForCompare(normalizePartyId(userParty || '') || userParty || '');
+      const normalizedUserStateId = normalizedUserState ? await getUserStateId(normalizedUserState) : '';
       const userLoksabhaId = userInfoRef.current?.loksabha_id;
       const userAssemblyId = userInfoRef.current?.assembly_id;
       const userGroupTags = Array.isArray(userInfoRef.current?.group_tags)
@@ -272,7 +292,13 @@ export default function DashboardScreen() {
             // Stringify to keep it on one log line in logcat.
             console.log(
               '[gfx] userGeo',
-              JSON.stringify({ normalizedUserState, normalizedUserParty, userLoksabhaId, userAssemblyId })
+              JSON.stringify({
+                normalizedUserState,
+                normalizedUserStateId,
+                normalizedUserParty,
+                userLoksabhaId,
+                userAssemblyId,
+              })
             );
             globalAny.__dbgFetchCounts += 1;
           }
@@ -373,9 +399,17 @@ export default function DashboardScreen() {
           postAssemblies.length === 0;
         if (isFullyGlobal) return true;
 
-        // State: if post.state is empty => treat as global (all states). Otherwise must include user's state.
-        // If user hasn't completed profile (missing state), don't block non-global content from rendering.
-        const stateMatch = postStates.length === 0 || !normalizedUserState || postStates.includes(normalizedUserState);
+        // State targeting:
+        // - If post state list is empty => global.
+        // - If post states look like numeric IDs, compare against user's mapped state_id.
+        // - Otherwise compare against normalized state name.
+        const postStatesAreIds = postStates.length > 0 && postStates.every((s) => /^[0-9]+$/.test(String(s)));
+        const stateMatch =
+          postStates.length === 0 ||
+          (!normalizedUserState && !normalizedUserStateId) ||
+          (postStatesAreIds
+            ? !!normalizedUserStateId && postStates.includes(normalizedUserStateId)
+            : !!normalizedUserState && postStates.includes(normalizedUserState));
         if (!stateMatch) return false;
 
         // Party: if post.party is empty => all parties. Otherwise must include user's party.
