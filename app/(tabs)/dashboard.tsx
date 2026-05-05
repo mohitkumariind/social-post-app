@@ -450,16 +450,17 @@ export default function DashboardScreen() {
         const partyMatch = postParties.length === 0 || !normalizedUserParty || postParties.includes(normalizedUserParty);
         if (!partyMatch) return false;
 
-        // Lok Sabha targeting: if empty => not targeted (global within state). Otherwise must match user's loksabha_id.
+        // Lok Sabha targeting: if post is targeted but user has no loksabha_id, don't block.
+        // (User profile may be incomplete; they should still see state/party matched content.)
         if (postLoksabhas.length > 0) {
           const userLokId = userLoksabhaId == null ? '' : String(userLoksabhaId).trim();
-          if (!userLokId || !postLoksabhas.includes(userLokId)) return false;
+          if (userLokId && !postLoksabhas.includes(userLokId)) return false;
         }
 
-        // Assembly targeting: if empty => not targeted (global within state). Otherwise must match user's assembly_id.
+        // Assembly targeting: same rule as Lok Sabha.
         if (postAssemblies.length > 0) {
           const userAsmId = userAssemblyId == null ? '' : String(userAssemblyId).trim();
-          if (!userAsmId || !postAssemblies.includes(userAsmId)) return false;
+          if (userAsmId && !postAssemblies.includes(userAsmId)) return false;
         }
 
         return true;
