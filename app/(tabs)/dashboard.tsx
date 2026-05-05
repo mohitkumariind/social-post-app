@@ -269,6 +269,7 @@ export default function DashboardScreen() {
               geo: (rGeo as any)?.data?.length ?? 0,
               global: (rGlobal as any)?.data?.length ?? 0,
             });
+            console.log('[gfx] userGeo', { normalizedUserState, normalizedUserParty, userLoksabhaId, userAssemblyId });
             globalAny.__dbgFetchCounts += 1;
           }
         }
@@ -369,11 +370,13 @@ export default function DashboardScreen() {
         if (isFullyGlobal) return true;
 
         // State: if post.state is empty => treat as global (all states). Otherwise must include user's state.
-        const stateMatch = postStates.length === 0 || (!!normalizedUserState && postStates.includes(normalizedUserState));
+        // If user hasn't completed profile (missing state), don't block non-global content from rendering.
+        const stateMatch = postStates.length === 0 || !normalizedUserState || postStates.includes(normalizedUserState);
         if (!stateMatch) return false;
 
         // Party: if post.party is empty => all parties. Otherwise must include user's party.
-        const partyMatch = postParties.length === 0 || (!!normalizedUserParty && postParties.includes(normalizedUserParty));
+        // Same rule for party: if user party missing, don't block.
+        const partyMatch = postParties.length === 0 || !normalizedUserParty || postParties.includes(normalizedUserParty);
         if (!partyMatch) return false;
 
         // Lok Sabha targeting: if empty => not targeted (global within state). Otherwise must match user's loksabha_id.
