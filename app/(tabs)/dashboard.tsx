@@ -291,11 +291,12 @@ export default function DashboardScreen() {
       }
       const raw = (data || []) as PostRow[];
       const filtered = raw.filter((p) => {
-        const postStates = toStrArr(p.state).map((s) => normalizeForCompare(s));
-        const postParties = toStrArr(p.party).map((pa) => normalizeForCompare(normalizePartyId(pa) || pa));
-        const postLoksabhas = toStrArr(p.loksabha).map((x) => String(x).trim()).filter(Boolean);
-        const postAssemblies = toStrArr(p.assembly).map((x) => String(x).trim()).filter(Boolean);
-        const postTargetGroups = toStrArr(p.target_groups).map((x) => String(x).trim()).filter(Boolean);
+        // Always treat NULL/undefined targeting columns as empty arrays.
+        const postStates = toStrArr((p as any).state ?? []).map((s) => normalizeForCompare(s));
+        const postParties = toStrArr((p as any).party ?? []).map((pa) => normalizeForCompare(normalizePartyId(pa) || pa));
+        const postLoksabhas = toStrArr((p as any).loksabha ?? []).map((x) => String(x).trim()).filter(Boolean);
+        const postAssemblies = toStrArr((p as any).assembly ?? []).map((x) => String(x).trim()).filter(Boolean);
+        const postTargetGroups = toStrArr((p as any).target_groups ?? []).map((x) => String(x).trim()).filter(Boolean);
 
         /**
          * Priority rule (must match admin behavior):
@@ -304,9 +305,45 @@ export default function DashboardScreen() {
          * - Otherwise, apply geo targeting (state/party/loksabha/assembly) with "empty means global".
          */
         if (postTargetGroups.length > 0) {
-          if (userGroupTags.length === 0) return false;
-          const userSet = new Set(userGroupTags.map((x) => x.toLowerCase()));
+          const userProfile = userInfoRef.current ?? ({} as any);
+          const userTags = Array.isArray((userProfile as any).group_tags)
+            ? ((userProfile as any).group_tags as unknown[]).map((x) => String(x).trim()).filter(Boolean)
+            : [];
+
+          // Debug logs (requested)
+          if (__DEV__) {
+            // Keep log volume reasonable: only log for first few targeted posts in each fetch cycle.
+            const globalAny = globalThis as any;
+            globalAny.__dbgTargetGroupLogs = typeof globalAny.__dbgTargetGroupLogs === 'number' ? globalAny.__dbgTargetGroupLogs : 0;
+            if (globalAny.__dbgTargetGroupLogs < 15) {
+              console.log('User Group Tags:', userTags);
+              console.log('Post Target Groups:', (p as any).target_groups);
+              console.log(
+                'Matching Result:',
+                Array.isArray((p as any).target_groups) && userTags.length > 0
+                  ? ((p as any).target_groups as unknown[]).some((tg) => userTags.includes(String(tg)))
+                  : false
+              );
+              globalAny.__dbgTargetGroupLogs += 1;
+            }
+          }
+
+          if (userTags.length === 0) return false;
+          const userSet = new Set(userTags.map((x) => x.toLowerCase()));
           return postTargetGroups.some((tg) => userSet.has(String(tg).toLowerCase()));
+        }
+
+        // Debug logs (requested): user state + post state + category
+        if (__DEV__) {
+          const globalAny = globalThis as any;
+          globalAny.__dbgGeoLogs = typeof globalAny.__dbgGeoLogs === 'number' ? globalAny.__dbgGeoLogs : 0;
+          if (globalAny.__dbgGeoLogs < 15) {
+            const userProfile = userInfoRef.current ?? ({} as any);
+            console.log('User State:', (userProfile as any).state);
+            console.log('Post State Target:', (p as any).state);
+            console.log('Graphic Category:', (p as any).category);
+            globalAny.__dbgGeoLogs += 1;
+          }
         }
 
         // B) Geography/Party fallback (when target_groups empty)
@@ -589,22 +626,35 @@ export default function DashboardScreen() {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     if (safeEvents.length === 0) return postsByCategory;
-    const activeEventNames = new Set(safeEvents.map((e) => e.name));
-    const eventEndByName = new Map(safeEvents.map((e) => [e.name, e.end]));
+    // Event name matching must be case-insensitive (category ↔ event.name).
+    const activeEventNamesLower = new Set(safeEvents.map((e) => String(e.name ?? '').trim().toLowerCase()).filter(Boolean));
+    const eventEndByNameLower = new Map(safeEvents.map((e) => [String(e.name ?? '').trim().toLowerCase(), e.end] as const));
     const filtered = postsByCategory.filter((cat) => {
-      if (!activeEventNames.has(cat.name)) return false;
-      const evEnd = eventEndByName.get(cat.name);
+      const catNameLower = String(cat.name ?? '').trim().toLowerCase();
+      if (!catNameLower) return false;
+      if (!activeEventNamesLower.has(catNameLower)) return false;
+      const evEnd = eventEndByNameLower.get(catNameLower);
       if (!evEnd) return false;
       const evEndDate = new Date(evEnd);
       evEndDate.setUTCHours(0, 0, 0, 0);
       return evEndDate.getTime() >= today.getTime();
     });
+    // Debug logs (requested): event name + category match (capped)
+    if (__DEV__) {
+      const globalAny = globalThis as any;
+      globalAny.__dbgEventMatchLogs = typeof globalAny.__dbgEventMatchLogs === 'number' ? globalAny.__dbgEventMatchLogs : 0;
+      if (globalAny.__dbgEventMatchLogs < 10) {
+        console.log('Event Name:', safeEvents?.[0]?.name);
+        console.log('Graphic Category:', postsByCategory?.[0]?.name);
+        globalAny.__dbgEventMatchLogs += 1;
+      }
+    }
     const result =
       filtered.length === 0
         ? []
         : filtered.sort((a, b) => {
-            const endA = eventEndByName.get(a.name);
-            const endB = eventEndByName.get(b.name);
+            const endA = eventEndByNameLower.get(String(a.name ?? '').trim().toLowerCase());
+            const endB = eventEndByNameLower.get(String(b.name ?? '').trim().toLowerCase());
             if (!endA || !endB) return 0;
             return new Date(endA).getTime() - new Date(endB).getTime();
           });
