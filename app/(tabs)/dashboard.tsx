@@ -148,6 +148,9 @@ export default function DashboardScreen() {
         console.log('[gfx] Re-mapped State ID:', id);
         globalAny.__dbgProfileChanged += 1;
       }
+
+      // Ensure graphics refetch after remap (state name -> id).
+      setRefreshKey((p) => p + 1);
     })();
     return () => {
       cancelled = true;
@@ -468,6 +471,16 @@ export default function DashboardScreen() {
           console.log('[gfx] filterCounts', JSON.stringify({ raw: raw.length, kept: filtered.length }));
           if (filtered.length === 0 && raw.length > 0) {
             console.log(
+              '[gfx] filterContext',
+              JSON.stringify({
+                normalizedUserState,
+                normalizedUserStateId,
+                normalizedUserParty,
+                userLoksabhaId,
+                userAssemblyId,
+              })
+            );
+            console.log(
               '[gfx] rawSample',
               JSON.stringify(
                 raw.slice(0, 5).map((p) => ({
@@ -479,6 +492,48 @@ export default function DashboardScreen() {
                   loksabha: (p as any).loksabha,
                   assembly: (p as any).assembly,
                 }))
+              )
+            );
+
+            // Log pass/fail reasons for first few posts.
+            console.log(
+              '[gfx] evalSample',
+              JSON.stringify(
+                raw.slice(0, 3).map((p) => {
+                  const postStates = toStrArr((p as any).state ?? []).map((s) => normalizeForCompare(s));
+                  const postParties = toStrArr((p as any).party ?? []).map((pa) => normalizeForCompare(normalizePartyId(pa) || pa));
+                  const postLoksabhas = toStrArr((p as any).loksabha ?? []).map((x) => String(x).trim()).filter(Boolean);
+                  const postAssemblies = toStrArr((p as any).assembly ?? []).map((x) => String(x).trim()).filter(Boolean);
+                  const postTargetGroups = toStrArr((p as any).target_groups ?? []).map((x) => String(x).trim()).filter(Boolean);
+                  const postStatesAreIds = postStates.length > 0 && postStates.every((s) => /^[0-9]+$/.test(String(s)));
+                  const stateOk =
+                    postStates.length === 0 ||
+                    (!normalizedUserState && !normalizedUserStateId) ||
+                    (postStatesAreIds
+                      ? !!normalizedUserStateId && postStates.includes(normalizedUserStateId)
+                      : !!normalizedUserState && postStates.includes(normalizedUserState));
+                  const partyOk = postParties.length === 0 || !normalizedUserParty || postParties.includes(normalizedUserParty);
+                  const lokOk =
+                    postLoksabhas.length === 0 ||
+                    (userLoksabhaId != null && postLoksabhas.includes(String(userLoksabhaId).trim()));
+                  const asmOk =
+                    postAssemblies.length === 0 ||
+                    (userAssemblyId != null && postAssemblies.includes(String(userAssemblyId).trim()));
+                  const ok =
+                    postTargetGroups.length > 0
+                      ? 'targeted-branch'
+                      : stateOk && partyOk && lokOk && asmOk;
+                  return {
+                    id: p.id,
+                    category: p.category,
+                    postStatesAreIds,
+                    stateOk,
+                    partyOk,
+                    lokOk,
+                    asmOk,
+                    ok,
+                  };
+                })
               )
             );
           }
