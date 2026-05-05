@@ -1,6 +1,6 @@
 'use client';
 
-import { Eye, Plus, Search, Tags, Trash2, Users, X } from 'lucide-react';
+import { Search, Tags, Trash2, Users, X } from 'lucide-react';
 import React, { useCallback, useEffect, useState } from 'react';
 
 type GroupRow = { tag: string; count: number };
@@ -251,11 +251,9 @@ export default function GroupManagementPage() {
                 <button
                   type="button"
                   onClick={() => void openDetail(g.tag)}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50 active:scale-95"
-                  aria-label="View"
-                  title="View"
+                  className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-widest text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50 active:scale-95"
                 >
-                  <Eye size={18} />
+                  View
                 </button>
                 <button
                   type="button"
@@ -263,21 +261,17 @@ export default function GroupManagementPage() {
                     void openDetail(g.tag);
                     setAddSearch('');
                   }}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50 active:scale-95"
-                  aria-label="Add user"
-                  title="Add user"
+                  className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-widest text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50 active:scale-95"
                 >
-                  <Plus size={18} />
+                  Add
                 </button>
                 <button
                   type="button"
                   onClick={() => setDeleteConfirmTag(g.tag)}
                   disabled={busyTag === g.tag}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 text-rose-700 shadow-sm transition-all hover:bg-rose-100 active:scale-95 disabled:opacity-50"
-                  aria-label="Delete"
-                  title="Delete"
+                  className="inline-flex h-10 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 px-4 text-[10px] font-black uppercase tracking-widest text-rose-700 shadow-sm transition-all hover:bg-rose-100 active:scale-95 disabled:opacity-50"
                 >
-                  <Trash2 size={18} />
+                  Delete
                 </button>
               </div>
             </div>
