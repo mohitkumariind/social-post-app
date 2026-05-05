@@ -111,6 +111,7 @@ export default function DashboardScreen() {
   const safeUserInfo = userInfo ?? { name: '', phone: '', state: '', partyName: '' };
   const realtimeChannelRef = useRef<any>(null);
   const stateNameToIdRef = useRef<Map<string, string>>(new Map());
+  const normalizedUserStateIdRef = useRef<string>('');
 
   const getUserStateId = React.useCallback(async (normalizedStateName: string): Promise<string> => {
     const key = String(normalizedStateName ?? '').trim().toLowerCase();
@@ -129,6 +130,29 @@ export default function DashboardScreen() {
       return '';
     }
   }, []);
+
+  // Recompute state-name -> state_id mapping whenever profile state changes.
+  useEffect(() => {
+    let cancelled = false;
+    const userProfile = userInfoRef.current;
+    const stateName = normalizeForCompare(String(userProfile?.state ?? ''));
+    (async () => {
+      const id = stateName ? await getUserStateId(stateName) : '';
+      if (cancelled) return;
+      normalizedUserStateIdRef.current = id;
+      // Debug logs (requested) — capped.
+      const globalAny = globalThis as any;
+      globalAny.__dbgProfileChanged = typeof globalAny.__dbgProfileChanged === 'number' ? globalAny.__dbgProfileChanged : 0;
+      if (globalAny.__dbgProfileChanged < 10) {
+        console.log('[gfx] Profile Changed. New State:', userProfile?.state);
+        console.log('[gfx] Re-mapped State ID:', id);
+        globalAny.__dbgProfileChanged += 1;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userInfo?.state, getUserStateId]);
 
   const clearDashboardExpandParams = React.useCallback(() => {
     // `setParams` has differed across Expo Router versions / navigators.
@@ -224,7 +248,13 @@ export default function DashboardScreen() {
       }
       const normalizedUserState = normalizeForCompare(userState || '');
       const normalizedUserParty = normalizeForCompare(normalizePartyId(userParty || '') || userParty || '');
-      const normalizedUserStateId = normalizedUserState ? await getUserStateId(normalizedUserState) : '';
+      // Prefer the mapped state_id computed from the current profile (updated on profile change).
+      const normalizedUserStateId =
+        normalizedUserState && normalizeForCompare(String(userInfoRef.current?.state ?? '')) === normalizedUserState
+          ? normalizedUserStateIdRef.current
+          : normalizedUserState
+            ? await getUserStateId(normalizedUserState)
+            : '';
       const userLoksabhaId = userInfoRef.current?.loksabha_id;
       const userAssemblyId = userInfoRef.current?.assembly_id;
       const userGroupTags = Array.isArray(userInfoRef.current?.group_tags)
