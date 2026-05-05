@@ -82,6 +82,9 @@ function MultiSelectDropdown<T extends { id: string | number }>({
   allLabel = 'ALL',
   loading = false,
   optionLeading,
+  showAllOption = true,
+  searchable = false,
+  searchPlaceholder = 'Search…',
 }: {
   label: string;
   options: T[];
@@ -93,8 +96,12 @@ function MultiSelectDropdown<T extends { id: string | number }>({
   loading?: boolean;
   /** e.g. neutral icon for special parties like "Other" */
   optionLeading?: (o: T) => React.ReactNode;
+  showAllOption?: boolean;
+  searchable?: boolean;
+  searchPlaceholder?: string;
 }) {
   const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState('');
   const ref = React.useRef<HTMLDivElement>(null);
   const isAll = selected.includes('ALL');
   const displayItems = isAll ? [{ val: 'ALL', lbl: allLabel }] : selected.map((v) => {
@@ -108,6 +115,15 @@ function MultiSelectDropdown<T extends { id: string | number }>({
     document.addEventListener('click', h);
     return () => document.removeEventListener('click', h);
   }, []);
+
+  React.useEffect(() => {
+    if (!open) setQuery('');
+  }, [open]);
+
+  const filteredOptions =
+    !searchable || !query.trim()
+      ? options
+      : options.filter((o) => getLabel(o).toLowerCase().includes(query.trim().toLowerCase()));
 
   const toggle = (val: string) => {
     if (val === 'ALL') {
@@ -125,7 +141,7 @@ function MultiSelectDropdown<T extends { id: string | number }>({
   };
 
   return (
-    <div className="flex flex-col flex-1 min-w-[140px]" ref={ref}>
+    <div className="flex flex-col w-full" ref={ref}>
       <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{label}</span>
       <div className="relative">
         <div
@@ -155,14 +171,26 @@ function MultiSelectDropdown<T extends { id: string | number }>({
         </div>
         {open && (
           <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-48 overflow-y-auto py-2">
-            <label className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer">
-              <input type="checkbox" checked={isAll} onChange={() => toggle('ALL')} className="rounded" />
-              <span className="text-sm font-bold">{allLabel}</span>
-            </label>
-            {options.map((o) => {
+            {searchable && (
+              <div className="px-3 pb-2">
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder={searchPlaceholder}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/20"
+                />
+              </div>
+            )}
+            {showAllOption && (
+              <label className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer">
+                <input type="checkbox" checked={isAll} onChange={() => toggle('ALL')} className="rounded" />
+                <span className="text-sm font-bold">{allLabel}</span>
+              </label>
+            )}
+            {filteredOptions.map((o) => {
               const v = String(getValue(o));
               const checked = isAll || selected.some((s) => String(s) === v);
-              const disabled = isAll;
+              const disabled = isAll && showAllOption;
               return (
                 <label key={String(o.id)} className={`flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
                   <input type="checkbox" checked={checked} disabled={disabled} onChange={() => !disabled && toggle(v)} className="rounded" />
@@ -947,84 +975,88 @@ export default function App() {
                       {LANGUAGE_OPTIONS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
                     </select>
                   </div>
-                  <div className="flex gap-3 flex-wrap">
-                    <MultiSelectDropdown
-                      label="State"
-                      options={availableStates}
-                      selected={newState}
-                      onSelect={setNewState}
-                      getValue={(s) => s.id}
-                      getLabel={(s) => s.name}
-                      allLabel="All States"
-                      loading={statesLoading}
-                    />
-                    <MultiSelectDropdown
-                      label="Party"
-                      options={PARTIES_DATA}
-                      selected={newParty}
-                      onSelect={setNewParty}
-                      getValue={(p) => p.id}
-                      getLabel={(p) => p.shortName}
-                      allLabel="All Parties"
-                      optionLeading={(p) =>
-                        isPartyOtherId(String(p.id)) ? (
-                          <Users size={16} className="text-slate-500 shrink-0" aria-hidden />
-                        ) : null
-                      }
-                    />
-                    <MultiSelectDropdown
-                      label="Lok Sabha"
-                      options={availableLoksabhas}
-                      selected={newLoksabha}
-                      onSelect={setNewLoksabha}
-                      getValue={(l) => l.id}
-                      getLabel={(l) => l.name}
-                      allLabel="All LS Seats"
-                      loading={loksabhasLoading}
-                    />
-                    <MultiSelectDropdown
-                      label="Assembly"
-                      options={availableAssemblies}
-                      selected={newAssembly}
-                      onSelect={setNewAssembly}
-                      getValue={(a) => a.id}
-                      getLabel={(a) => a.name}
-                      allLabel="All Assembly Seats"
-                      loading={assembliesLoading}
-                    />
-                  </div>
-
-                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Target Groups</span>
-                      {newTargetGroups.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setNewTargetGroups([])}
-                          className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700"
-                        >
-                          Clear
-                        </button>
-                      )}
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-1">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                      <MultiSelectDropdown
+                        label="State"
+                        options={availableStates}
+                        selected={newState}
+                        onSelect={setNewState}
+                        getValue={(s) => s.id}
+                        getLabel={(s) => s.name}
+                        allLabel="All States"
+                        loading={statesLoading}
+                        searchable
+                      />
                     </div>
-                    {groupOptions.length === 0 ? (
-                      <p className="mt-2 text-[11px] font-bold text-slate-400">No groups yet. Create tags under Group Management or Users.</p>
-                    ) : (
-                      <select
-                        multiple
-                        size={Math.min(10, Math.max(4, groupOptions.length))}
-                        value={newTargetGroups}
-                        onChange={(e) => setNewTargetGroups(Array.from(e.target.selectedOptions, (o) => o.value))}
-                        className="mt-2 w-full rounded-xl border border-slate-100 bg-white px-3 py-2 font-bold text-sm text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/20"
-                      >
-                        {groupOptions.map((g) => (
-                          <option key={g.tag} value={g.tag}>
-                            {g.tag} ({g.count})
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <p className="mt-2 text-[10px] font-bold text-slate-400">List comes from Group Management. Hold Ctrl/Cmd (Windows/Mac) to select multiple.</p>
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                      <MultiSelectDropdown
+                        label="Party"
+                        options={PARTIES_DATA}
+                        selected={newParty}
+                        onSelect={setNewParty}
+                        getValue={(p) => p.id}
+                        getLabel={(p) => p.shortName}
+                        allLabel="All Parties"
+                        searchable
+                        optionLeading={(p) =>
+                          isPartyOtherId(String(p.id)) ? (
+                            <Users size={16} className="text-slate-500 shrink-0" aria-hidden />
+                          ) : null
+                        }
+                      />
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                      <MultiSelectDropdown
+                        label="Lok Sabha"
+                        options={availableLoksabhas}
+                        selected={newLoksabha}
+                        onSelect={setNewLoksabha}
+                        getValue={(l) => l.id}
+                        getLabel={(l) => l.name}
+                        allLabel="All LS Seats"
+                        loading={loksabhasLoading}
+                        searchable
+                      />
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                      <MultiSelectDropdown
+                        label="Assembly"
+                        options={availableAssemblies}
+                        selected={newAssembly}
+                        onSelect={setNewAssembly}
+                        getValue={(a) => a.id}
+                        getLabel={(a) => a.name}
+                        allLabel="All Assembly Seats"
+                        loading={assembliesLoading}
+                        searchable
+                      />
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-2">
+                      <MultiSelectDropdown
+                        label="Target Groups"
+                        options={groupOptions.map((g) => ({ id: g.tag, tag: g.tag, count: g.count }))}
+                        selected={newTargetGroups}
+                        onSelect={setNewTargetGroups}
+                        getValue={(g) => g.tag}
+                        getLabel={(g) => `${g.tag} (${g.count})`}
+                        showAllOption={false}
+                        searchable
+                        searchPlaceholder="Search groups…"
+                      />
+                      <div className="mt-2 flex items-center justify-between gap-3">
+                        <p className="text-[10px] font-bold text-slate-400">List comes from Group Management.</p>
+                        {newTargetGroups.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setNewTargetGroups([])}
+                            className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
                   <div className="flex gap-3">
                     <div className="flex flex-col flex-1">
@@ -1079,106 +1111,114 @@ export default function App() {
 
         {/* Create Event Strip - Language-First: Language → State (auto) → Party */}
         <div className="bg-white p-4 rounded-[35px] border border-slate-200 shadow-lg">
-          <div className="flex flex-wrap lg:flex-nowrap items-end gap-3">
-            <div className="flex flex-col flex-1 min-w-[120px]">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 items-end mb-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</span>
               <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm" />
             </div>
-            <div className="flex flex-col flex-1 min-w-[100px]">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Language</span>
               <select value={newLanguage} onChange={e => setNewLanguage(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
                 <option value="">Select…</option>
                 {LANGUAGE_OPTIONS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
             </div>
-            <MultiSelectDropdown
-              label="State"
-              options={availableStates}
-              selected={newState}
-              onSelect={setNewState}
-              getValue={(s) => s.id}
-              getLabel={(s) => s.name}
-              allLabel="All States"
-              loading={statesLoading}
-            />
-            <MultiSelectDropdown
-              label="Party"
-              options={PARTIES_DATA}
-              selected={newParty}
-              onSelect={setNewParty}
-              getValue={(p) => p.id}
-              getLabel={(p) => p.shortName}
-              allLabel="All Parties"
-              optionLeading={(p) =>
-                isPartyOtherId(String(p.id)) ? (
-                  <Users size={16} className="text-slate-500 shrink-0" aria-hidden />
-                ) : null
-              }
-            />
-            <MultiSelectDropdown
-              label="Lok Sabha"
-              options={availableLoksabhas}
-              selected={newLoksabha}
-              onSelect={setNewLoksabha}
-              getValue={(l) => l.id}
-              getLabel={(l) => l.name}
-              allLabel="All LS Seats"
-              loading={loksabhasLoading}
-            />
-            <MultiSelectDropdown
-              label="Assembly"
-              options={availableAssemblies}
-              selected={newAssembly}
-              onSelect={setNewAssembly}
-              getValue={(a) => a.id}
-              getLabel={(a) => a.name}
-              allLabel="All Assembly Seats"
-              loading={assembliesLoading}
-            />
-            <div className="flex flex-col flex-1 min-w-[120px]">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <MultiSelectDropdown
+                label="State"
+                options={availableStates}
+                selected={newState}
+                onSelect={setNewState}
+                getValue={(s) => s.id}
+                getLabel={(s) => s.name}
+                allLabel="All States"
+                loading={statesLoading}
+                searchable
+              />
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <MultiSelectDropdown
+                label="Party"
+                options={PARTIES_DATA}
+                selected={newParty}
+                onSelect={setNewParty}
+                getValue={(p) => p.id}
+                getLabel={(p) => p.shortName}
+                allLabel="All Parties"
+                searchable
+                optionLeading={(p) =>
+                  isPartyOtherId(String(p.id)) ? (
+                    <Users size={16} className="text-slate-500 shrink-0" aria-hidden />
+                  ) : null
+                }
+              />
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <MultiSelectDropdown
+                label="Lok Sabha"
+                options={availableLoksabhas}
+                selected={newLoksabha}
+                onSelect={setNewLoksabha}
+                getValue={(l) => l.id}
+                getLabel={(l) => l.name}
+                allLabel="All LS Seats"
+                loading={loksabhasLoading}
+                searchable
+              />
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <MultiSelectDropdown
+                label="Assembly"
+                options={availableAssemblies}
+                selected={newAssembly}
+                onSelect={setNewAssembly}
+                getValue={(a) => a.id}
+                getLabel={(a) => a.name}
+                allLabel="All Assembly Seats"
+                loading={assembliesLoading}
+                searchable
+              />
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Activation</span>
               <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
             </div>
-            <div className="flex flex-col flex-1 min-w-[120px]">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-[9px] font-black text-rose-400 uppercase tracking-widest mb-1">Expiry</span>
               <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
             </div>
-            <button onClick={createEvent} disabled={!newName || !startDate || !endDate} className="bg-blue-600 text-white px-8 py-2.5 rounded-2xl font-black text-xs hover:bg-slate-900 disabled:opacity-30 transition-all uppercase tracking-widest shrink-0">Add</button>
-          </div>
-
-          <div className="mt-4 bg-slate-50 border border-slate-100 rounded-2xl p-4">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Target Groups</span>
-              {newTargetGroups.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setNewTargetGroups([])}
-                  className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700"
-                >
-                  Clear
-                </button>
-              )}
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
+              <MultiSelectDropdown
+                label="Target Groups"
+                options={groupOptions.map((g) => ({ id: g.tag, tag: g.tag, count: g.count }))}
+                selected={newTargetGroups}
+                onSelect={setNewTargetGroups}
+                getValue={(g) => g.tag}
+                getLabel={(g) => `${g.tag} (${g.count})`}
+                showAllOption={false}
+                searchable
+                searchPlaceholder="Search groups…"
+              />
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <p className="text-[10px] font-bold text-slate-400">
+                  Centralized list from Group Management. If set, targeting overrides geo filters in the app.
+                </p>
+                {newTargetGroups.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setNewTargetGroups([])}
+                    className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
-            {groupOptions.length === 0 ? (
-              <p className="mt-2 text-[11px] font-bold text-slate-400">No groups yet. Create tags under Group Management or Users.</p>
-            ) : (
-              <select
-                multiple
-                size={Math.min(10, Math.max(4, groupOptions.length))}
-                value={newTargetGroups}
-                onChange={(e) => setNewTargetGroups(Array.from(e.target.selectedOptions, (o) => o.value))}
-                className="mt-2 w-full rounded-xl border border-slate-100 bg-white px-3 py-2 font-bold text-sm text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/20"
-              >
-                {groupOptions.map((g) => (
-                  <option key={g.tag} value={g.tag}>
-                    {g.tag} ({g.count})
-                  </option>
-                ))}
-              </select>
-            )}
-            <p className="mt-2 text-[10px] font-bold text-slate-400">
-              Centralized list from Group Management. Hold Ctrl/Cmd to select multiple. If set, targeting overrides geo filters in the app.
-            </p>
+            <div className="col-span-2 lg:col-span-3 flex justify-end">
+              <button onClick={createEvent} disabled={!newName || !startDate || !endDate} className="bg-blue-600 text-white px-8 py-2.5 rounded-2xl font-black text-xs hover:bg-slate-900 disabled:opacity-30 transition-all uppercase tracking-widest shrink-0">
+                Add
+              </button>
+            </div>
           </div>
         </div>
 
