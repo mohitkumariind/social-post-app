@@ -260,12 +260,17 @@ export default function DashboardScreen() {
       let error: any = null;
       {
         const [rTargeted, rGeo, rGlobal] = await Promise.all([runTargetedQuery(), runGeoQuery(), runGlobalQuery()]);
-        if (__DEV__) {
-          console.log('[gfx] fetchPosts queryCounts', {
-            targeted: (rTargeted as any)?.data?.length ?? 0,
-            geo: (rGeo as any)?.data?.length ?? 0,
-            global: (rGlobal as any)?.data?.length ?? 0,
-          });
+        {
+          const globalAny = globalThis as any;
+          globalAny.__dbgFetchCounts = typeof globalAny.__dbgFetchCounts === 'number' ? globalAny.__dbgFetchCounts : 0;
+          if (globalAny.__dbgFetchCounts < 5) {
+            console.log('[gfx] fetchPosts queryCounts', {
+              targeted: (rTargeted as any)?.data?.length ?? 0,
+              geo: (rGeo as any)?.data?.length ?? 0,
+              global: (rGlobal as any)?.data?.length ?? 0,
+            });
+            globalAny.__dbgFetchCounts += 1;
+          }
         }
         const errs = [rTargeted?.error, rGeo?.error, rGlobal?.error].filter(Boolean);
         error = errs[0] ?? null;
@@ -317,8 +322,8 @@ export default function DashboardScreen() {
             : [];
 
           // Debug logs (requested)
-          if (__DEV__) {
-            // Keep log volume reasonable: only log for first few targeted posts in each fetch cycle.
+          // Debug logs (requested) — emit a small capped sample even in production.
+          {
             const globalAny = globalThis as any;
             globalAny.__dbgTargetGroupLogs = typeof globalAny.__dbgTargetGroupLogs === 'number' ? globalAny.__dbgTargetGroupLogs : 0;
             if (globalAny.__dbgTargetGroupLogs < 15) {
@@ -340,7 +345,8 @@ export default function DashboardScreen() {
         }
 
         // Debug logs (requested): user state + post state + category
-        if (__DEV__) {
+        // Debug logs (requested) — emit a small capped sample even in production.
+        {
           const globalAny = globalThis as any;
           globalAny.__dbgGeoLogs = typeof globalAny.__dbgGeoLogs === 'number' ? globalAny.__dbgGeoLogs : 0;
           if (globalAny.__dbgGeoLogs < 15) {
