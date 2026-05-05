@@ -493,10 +493,18 @@ export default function App() {
     const loksabhaArr = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => l.id) : newLoksabha.filter(Boolean);
     const assemblyArr = newAssembly.includes('ALL') ? availableAssemblies.map((a) => a.id) : newAssembly.filter(Boolean);
     const targetGroupsArr = newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
-    if (partyArr.length > 0) payload.party = partyArr;
-    if (stateArr.length > 0) payload.state = stateArr;
-    if (loksabhaArr.length > 0) payload.loksabha = loksabhaArr;
-    if (assemblyArr.length > 0) payload.assembly = assemblyArr;
+    // Priority rule: if target_groups is set, it overrides geo filters (store geo arrays empty).
+    if (targetGroupsArr.length > 0) {
+      payload.party = [];
+      payload.state = [];
+      payload.loksabha = [];
+      payload.assembly = [];
+    } else {
+      if (partyArr.length > 0) payload.party = partyArr;
+      if (stateArr.length > 0) payload.state = stateArr;
+      if (loksabhaArr.length > 0) payload.loksabha = loksabhaArr;
+      if (assemblyArr.length > 0) payload.assembly = assemblyArr;
+    }
     payload.target_groups = targetGroupsArr;
     const { data, error } = await supabase
       .from('events')
@@ -628,14 +636,21 @@ export default function App() {
         is_video: false,
       };
       if (selectedEvent.language) postPayload.language = selectedEvent.language;
+      const targetGroupsArr = toStrArr(selectedEvent.target_groups);
       const partyArr = toStrArr(selectedEvent.party);
       const stateArr = toStrArr(selectedEvent.state);
       const loksabhaArr = toStrArr(selectedEvent.loksabha);
       const assemblyArr = toStrArr(selectedEvent.assembly);
-      if (partyArr.length > 0) postPayload.party = partyArr;
-      if (stateArr.length > 0) postPayload.state = stateArr;
-      if (loksabhaArr.length > 0) postPayload.loksabha = loksabhaArr;
-      if (assemblyArr.length > 0) postPayload.assembly = assemblyArr;
+      postPayload.target_groups = targetGroupsArr;
+      // Priority rule: if target_groups is set, ignore geo filters on the post row.
+      if (targetGroupsArr.length > 0) {
+        // Don't set party/state/loksabha/assembly.
+      } else {
+        if (partyArr.length > 0) postPayload.party = partyArr;
+        if (stateArr.length > 0) postPayload.state = stateArr;
+        if (loksabhaArr.length > 0) postPayload.loksabha = loksabhaArr;
+        if (assemblyArr.length > 0) postPayload.assembly = assemblyArr;
+      }
       postPayload.captions = batchCaptions;
       let { data: insertData, error: insertErr } = await supabase.from('posts').insert(postPayload).select('id').single();
 
@@ -836,11 +851,19 @@ export default function App() {
     const loksabhaArr = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => l.id) : newLoksabha.filter(Boolean);
     const assemblyArr = newAssembly.includes('ALL') ? availableAssemblies.map((a) => a.id) : newAssembly.filter(Boolean);
     const targetGroupsArr = newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
-    if (partyArr.length > 0) updatePayload.party = partyArr;
-    if (stateArr.length > 0) updatePayload.state = stateArr;
-    if (loksabhaArr.length > 0) updatePayload.loksabha = loksabhaArr;
-    if (assemblyArr.length > 0) updatePayload.assembly = assemblyArr;
     updatePayload.target_groups = targetGroupsArr;
+    // Priority rule: if target_groups is set, it overrides geo filters (clear geo arrays).
+    if (targetGroupsArr.length > 0) {
+      updatePayload.party = [];
+      updatePayload.state = [];
+      updatePayload.loksabha = [];
+      updatePayload.assembly = [];
+    } else {
+      if (partyArr.length > 0) updatePayload.party = partyArr;
+      if (stateArr.length > 0) updatePayload.state = stateArr;
+      if (loksabhaArr.length > 0) updatePayload.loksabha = loksabhaArr;
+      if (assemblyArr.length > 0) updatePayload.assembly = assemblyArr;
+    }
     const { error: eventsErr } = await updateEventByIdOrName(editingEvent, updatePayload);
 
     if (eventsErr) {
@@ -856,11 +879,18 @@ export default function App() {
       await catQ;
     }
     const postUpdatePayload: Record<string, unknown> = {};
-    if (partyArr.length > 0) postUpdatePayload.party = partyArr;
-    if (stateArr.length > 0) postUpdatePayload.state = stateArr;
-    if (loksabhaArr.length > 0) postUpdatePayload.loksabha = loksabhaArr;
-    if (assemblyArr.length > 0) postUpdatePayload.assembly = assemblyArr;
     postUpdatePayload.target_groups = targetGroupsArr;
+    if (targetGroupsArr.length > 0) {
+      postUpdatePayload.party = [];
+      postUpdatePayload.state = [];
+      postUpdatePayload.loksabha = [];
+      postUpdatePayload.assembly = [];
+    } else {
+      if (partyArr.length > 0) postUpdatePayload.party = partyArr;
+      if (stateArr.length > 0) postUpdatePayload.state = stateArr;
+      if (loksabhaArr.length > 0) postUpdatePayload.loksabha = loksabhaArr;
+      if (assemblyArr.length > 0) postUpdatePayload.assembly = assemblyArr;
+    }
     if (Object.keys(postUpdatePayload).length > 0) {
       let pq = supabase.from('posts').update(postUpdatePayload).eq('category', targetCategory);
       if (editingEvent.language) pq = pq.eq('language', editingEvent.language);
@@ -878,7 +908,18 @@ export default function App() {
 
     const newStart = `${startDate}T00:00:00`;
     const newEnd = `${endDate}T23:59:59`;
-    const updated: CampaignEvent = { ...editingEvent, name: targetCategory, start: newStart, end: newEnd, language: newLanguage || undefined, party: partyArr.length ? partyArr : undefined, state: stateArr.length ? stateArr : undefined, loksabha: loksabhaArr.length ? loksabhaArr : undefined, assembly: assemblyArr.length ? assemblyArr : undefined, target_groups: targetGroupsArr.length ? targetGroupsArr : undefined };
+    const updated: CampaignEvent = {
+      ...editingEvent,
+      name: targetCategory,
+      start: newStart,
+      end: newEnd,
+      language: newLanguage || undefined,
+      party: targetGroupsArr.length > 0 ? undefined : partyArr.length ? partyArr : undefined,
+      state: targetGroupsArr.length > 0 ? undefined : stateArr.length ? stateArr : undefined,
+      loksabha: targetGroupsArr.length > 0 ? undefined : loksabhaArr.length ? loksabhaArr : undefined,
+      assembly: targetGroupsArr.length > 0 ? undefined : assemblyArr.length ? assemblyArr : undefined,
+      target_groups: targetGroupsArr.length ? targetGroupsArr : undefined,
+    };
     setEvents((prev) => prev.map((ev) => (ev.id === editingEvent.id ? updated : ev)));
     if (selectedEvent?.id === editingEvent.id) {
       setSelectedEvent(updated);
