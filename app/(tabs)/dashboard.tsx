@@ -223,19 +223,29 @@ export default function DashboardScreen() {
 
   /** Fetch authenticated user profile from profiles table. */
   const fetchUserProfile = React.useCallback(async () => {
+    let resolved = false;
     try {
       await supabase.auth.refreshSession();
       const { data: sessionData } = await supabase.auth.getSession();
       const userId = sessionData?.session?.user?.id ?? null;
       if (!userId) throw new Error('Auth session missing');
 
-      const { data: profile } = await supabase
+      const { data: profile, error } = await supabase
         .from('profiles')
         .select(
           'id, state, state_id, loksabha_id, assembly_id, party_id, group_id, language, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
         )
         .eq('id', userId)
         .single();
+
+      if (error) {
+        // Explicit error path: resolve "not loaded" state and unblock UI.
+        console.error('[gfx] Profile Fetch Error (supabase):', error.message);
+        setProfileLoaded(false);
+        profileLoadedRef.current = false;
+        resolved = true;
+        return { state: '', party: '' };
+      }
 
       if (profile) {
         const langRaw = String((profile as { language?: string }).language ?? '').trim();
@@ -301,14 +311,28 @@ export default function DashboardScreen() {
         setIsProfileLoading(false);
         profileLoadedRef.current = true;
         setProfileLoaded(true);
+        resolved = true;
         return { state: '', party };
       }
+
+      // Success response but no profile row returned (null). Resolve as "failed" to prevent deadlock.
+      setUserInfo((prev) => ({ ...prev, profile_id: String(userId) }));
+      setProfileLoaded(false);
+      profileLoadedRef.current = false;
+      resolved = true;
+      return { state: '', party: '' };
     } catch (e) {
       console.error('[gfx] Profile Fetch Error: ', e);
       setProfileLoaded(false);
       profileLoadedRef.current = false;
-      setIsProfileLoading(false);
+      resolved = true;
     }
+    // Always unblock the dashboard even if profile fetch failed.
+    if (!resolved) {
+      setProfileLoaded(false);
+      profileLoadedRef.current = false;
+    }
+    setIsProfileLoading(false);
     return { state: '', party: '' };
   }, [setUserInfo, setProfileLoaded]);
 
@@ -663,7 +687,13 @@ export default function DashboardScreen() {
       }
 
       // Hard gate: do not fetch feed until profile is loaded from server.
-      if (!profileLoaded) return;
+      if (!profileLoaded) {
+        // Prevent permanent spinner when profile row is missing / fetch failed.
+        setPosts([]);
+        setEvents([]);
+        setLoading(false);
+        return;
+      }
 
       // Profile is loaded; fetch posts now.
       await fetchPosts('', '');
