@@ -140,6 +140,8 @@ export default function DashboardScreen() {
   const [dailyLocalByUrl, setDailyLocalByUrl] = useState<Record<string, string>>({});
   const dailyInFlightRef = useRef<Set<string>>(new Set());
   const fetchPostsReqIdRef = useRef(0);
+  const postsSchemaOkRef = useRef<boolean | null>(null);
+  const eventsSchemaOkRef = useRef<boolean | null>(null);
   const safeUserInfo = userInfo ?? { name: '', phone: '', state: '', partyName: '' };
   const realtimeChannelRef = useRef<any>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(true);
@@ -398,6 +400,13 @@ export default function DashboardScreen() {
           .order('created_at', { ascending: false })
           .limit(300);
 
+      // If we already detected missing columns, skip querying to avoid repeated errors.
+      if (postsSchemaOkRef.current === false) {
+        setPosts([]);
+        setLoading(false);
+        return;
+      }
+
       let data: any[] | null = null;
       let error: any = null;
       {
@@ -417,7 +426,13 @@ export default function DashboardScreen() {
 
       if (reqId !== fetchPostsReqIdRef.current) return;
       if (error) {
-        setFetchError(error.message);
+        const msg = String(error.message ?? 'Failed to load posts');
+        if (msg.includes('does not exist')) {
+          postsSchemaOkRef.current = false;
+          setFetchError('DB schema missing required numeric columns for posts. Please add posts.state_id/loksabha_id/assembly_id/party_id.');
+        } else {
+          setFetchError(msg);
+        }
         if (__DEV__) {
           console.warn('[Dashboard fetchPosts] Supabase error:', {
             message: error.message,
@@ -464,6 +479,12 @@ export default function DashboardScreen() {
           .order('end', { ascending: true })
           .limit(500);
 
+      // If we already detected missing columns, skip querying to avoid repeated errors.
+      if (eventsSchemaOkRef.current === false) {
+        setEvents([]);
+        return;
+      }
+
       let data: any[] | null = null;
       let error: any = null;
       {
@@ -472,7 +493,13 @@ export default function DashboardScreen() {
         error = (r as any)?.error ?? null;
       }
       if (error) {
-        setFetchError((prev) => prev ?? error.message);
+        const msg = String(error.message ?? 'Failed to load events');
+        if (msg.includes('does not exist')) {
+          eventsSchemaOkRef.current = false;
+          setFetchError((prev) => prev ?? 'DB schema missing required numeric columns for events. Please add events.state_id/loksabha_id/assembly_id/party_id.');
+        } else {
+          setFetchError((prev) => prev ?? msg);
+        }
         setEvents([]);
         return;
       }
