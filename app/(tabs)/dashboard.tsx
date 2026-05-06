@@ -136,7 +136,13 @@ export default function DashboardScreen() {
     if (cached) return cached;
     try {
       // Best-effort lookup: profiles.state is state name, posts.state is state_id (string) in many rows.
-      const { data, error } = await supabase.from('states').select('id,name').ilike('name', key).limit(1);
+      const escaped = key.replace(/[%_]/g, (m) => `\\${m}`);
+      const { data, error } = await supabase
+        .from('states')
+        .select('id,name')
+        .ilike('name', `%${escaped}%`)
+        .order('name', { ascending: true })
+        .limit(1);
       if (error) return '';
       const first = Array.isArray(data) ? data[0] : null;
       const id = first?.id != null ? String(first.id) : '';
@@ -462,6 +468,8 @@ export default function DashboardScreen() {
         const postStatesAreIds = postStates.length > 0 && postStates.every((s) => /^[0-9]+$/.test(String(s)));
         const isStateMatch =
           postStates.length === 0 ||
+          // If post uses numeric IDs but we couldn't resolve user's state_id, don't block everything.
+          (postStatesAreIds && !resolvedUserStateId) ||
           postStates.some((s) => String(s) === String(resolvedUserStateId)) ||
           (!resolvedUserStateId && (!normalizedUserState || postStates.includes(normalizedUserState)));
         if (!isStateMatch) return false;
