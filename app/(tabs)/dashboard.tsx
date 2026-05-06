@@ -359,13 +359,18 @@ export default function DashboardScreen() {
     // More specific targeting can only reduce visibility:
     // LokSabha / Assembly checks apply only if content targets them.
     if (lokIds.length > 0) {
-      // Fail-safe: if user loksabha_id missing, deny targeted content.
-      if (uLok == null) return false;
-      if (!lokIds.includes(0) && !lokIds.includes(uLok)) return false;
+      // ALL (0) means visible to everyone for this dimension.
+      if (!lokIds.includes(0)) {
+        // Fail-safe: if user loksabha_id missing, deny targeted content.
+        if (uLok == null) return false;
+        if (!lokIds.includes(uLok)) return false;
+      }
     }
     if (asmIds.length > 0) {
-      if (uAsm == null) return false;
-      if (!asmIds.includes(0) && !asmIds.includes(uAsm)) return false;
+      if (!asmIds.includes(0)) {
+        if (uAsm == null) return false;
+        if (!asmIds.includes(uAsm)) return false;
+      }
     }
     if (groupIds.length > 0) {
       if (uGroup == null) return false;
