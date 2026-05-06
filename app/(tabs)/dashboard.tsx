@@ -355,27 +355,29 @@ export default function DashboardScreen() {
       return result;
     }
 
-    if (content?.party_id != null && partyIds.length === 0) {
+    // Empty arrays mean "no restriction" and are valid.
+    // Only treat as invalid when the raw array is non-empty but parsing yields empty.
+    if (Array.isArray(content?.party_id) && content.party_id.length > 0 && partyIds.length === 0) {
       result.reason = 'invalid_party_id_array';
       return result;
     }
-    if (content?.state_id != null && stateIds.length === 0) {
+    if (Array.isArray(content?.state_id) && content.state_id.length > 0 && stateIds.length === 0) {
       result.reason = 'invalid_state_id_array';
       return result;
     }
-    if (content?.loksabha_id != null && lokIds.length === 0) {
+    if (Array.isArray(content?.loksabha_id) && content.loksabha_id.length > 0 && lokIds.length === 0) {
       result.reason = 'invalid_loksabha_id_array';
       return result;
     }
-    if (content?.assembly_id != null && asmIds.length === 0) {
+    if (Array.isArray(content?.assembly_id) && content.assembly_id.length > 0 && asmIds.length === 0) {
       result.reason = 'invalid_assembly_id_array';
       return result;
     }
-    if (content?.group_id != null && groupIds.length === 0) {
+    if (Array.isArray(content?.group_id) && content.group_id.length > 0 && groupIds.length === 0) {
       result.reason = 'invalid_group_id_array';
       return result;
     }
-    if (content?.profile_ids != null && profileIds.length === 0) {
+    if (Array.isArray(content?.profile_ids) && content.profile_ids.length > 0 && profileIds.length === 0) {
       result.reason = 'invalid_profile_ids_array';
       return result;
     }
