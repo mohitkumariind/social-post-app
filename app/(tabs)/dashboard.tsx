@@ -310,21 +310,22 @@ export default function DashboardScreen() {
     return Number.isFinite(n) ? n : null;
   }
 
-  function canUserSeeContent(user: any, content: any): boolean {
-    // Default deny
-    if (!profileLoaded) return false;
-    // Force numeric casting to avoid string-vs-number issues.
+  function explainVisibility(user: any, content: any) {
+    const result: any = {
+      ok: false,
+      reason: 'unknown',
+    };
+    if (!profileLoaded) {
+      result.reason = 'profile_not_loaded';
+      return result;
+    }
+
     const uParty = normalizeStrictId(Number(user?.party_id));
     const uState = normalizeStrictId(Number(user?.state_id));
     const uLok = normalizeStrictId(Number(user?.loksabha_id));
     const uAsm = normalizeStrictId(Number(user?.assembly_id));
     const uGroup = normalizeStrictId(user?.group_id);
     const uProfileId = String(user?.profile_id ?? '').trim();
-
-    if (!uProfileId) return false;
-    // Hard requirements (to prevent leakage):
-    // - party_id + state_id must exist on user for any non-global content
-    if (uParty == null || uState == null) return false;
 
     const partyIds = toNumArr(content?.party_id);
     const stateIds = toNumArr(content?.state_id);
@@ -333,15 +334,45 @@ export default function DashboardScreen() {
     const groupIds = toNumArr(content?.group_id);
     const profileIds = toStrArr(content?.profile_ids).map((x) => String(x).trim()).filter(Boolean);
 
-    // Any invalid targeting value => deny (strict)
-    if (content?.party_id != null && partyIds.length === 0) return false;
-    if (content?.state_id != null && stateIds.length === 0) return false;
-    if (content?.loksabha_id != null && lokIds.length === 0) return false;
-    if (content?.assembly_id != null && asmIds.length === 0) return false;
-    if (content?.group_id != null && groupIds.length === 0) return false;
-    if (content?.profile_ids != null && profileIds.length === 0) return false;
+    Object.assign(result, {
+      u: { uParty, uState, uLok, uAsm, uGroup, uProfileId },
+      c: { partyIds, stateIds, lokIds, asmIds, groupIds, profileIds },
+    });
 
-    // Global only when all arrays empty
+    if (!uProfileId) {
+      result.reason = 'missing_user_profile_id';
+      return result;
+    }
+    if (uParty == null || uState == null) {
+      result.reason = 'missing_user_party_or_state';
+      return result;
+    }
+
+    if (content?.party_id != null && partyIds.length === 0) {
+      result.reason = 'invalid_party_id_array';
+      return result;
+    }
+    if (content?.state_id != null && stateIds.length === 0) {
+      result.reason = 'invalid_state_id_array';
+      return result;
+    }
+    if (content?.loksabha_id != null && lokIds.length === 0) {
+      result.reason = 'invalid_loksabha_id_array';
+      return result;
+    }
+    if (content?.assembly_id != null && asmIds.length === 0) {
+      result.reason = 'invalid_assembly_id_array';
+      return result;
+    }
+    if (content?.group_id != null && groupIds.length === 0) {
+      result.reason = 'invalid_group_id_array';
+      return result;
+    }
+    if (content?.profile_ids != null && profileIds.length === 0) {
+      result.reason = 'invalid_profile_ids_array';
+      return result;
+    }
+
     const isGlobal =
       partyIds.length === 0 &&
       stateIds.length === 0 &&
@@ -349,38 +380,65 @@ export default function DashboardScreen() {
       asmIds.length === 0 &&
       groupIds.length === 0 &&
       profileIds.length === 0;
-    if (isGlobal) return true;
+    if (isGlobal) {
+      result.ok = true;
+      result.reason = 'global';
+      return result;
+    }
 
-    // Strict matching with ALL (0) wildcard (requested):
-    // post shows only if BOTH state and party match.
     const stateMatch = stateIds.length === 0 ? true : stateIds.includes(0) || stateIds.includes(uState);
-    if (!stateMatch) return false;
+    if (!stateMatch) {
+      result.reason = 'state_mismatch';
+      return result;
+    }
     const partyMatch = partyIds.length === 0 ? true : partyIds.includes(0) || partyIds.includes(uParty);
-    if (!partyMatch) return false;
+    if (!partyMatch) {
+      result.reason = 'party_mismatch';
+      return result;
+    }
 
-    // More specific targeting can only reduce visibility:
-    // LokSabha / Assembly checks apply only if content targets them.
-    if (lokIds.length > 0) {
-      // ALL (0) means visible to everyone for this dimension.
-      if (!lokIds.includes(0)) {
-        // Fail-safe: if user loksabha_id missing, deny targeted content.
-        if (uLok == null) return false;
-        if (!lokIds.includes(uLok)) return false;
+    if (lokIds.length > 0 && !lokIds.includes(0)) {
+      if (uLok == null) {
+        result.reason = 'missing_user_loksabha_id';
+        return result;
+      }
+      if (!lokIds.includes(uLok)) {
+        result.reason = 'loksabha_mismatch';
+        return result;
       }
     }
-    if (asmIds.length > 0) {
-      if (!asmIds.includes(0)) {
-        if (uAsm == null) return false;
-        if (!asmIds.includes(uAsm)) return false;
+    if (asmIds.length > 0 && !asmIds.includes(0)) {
+      if (uAsm == null) {
+        result.reason = 'missing_user_assembly_id';
+        return result;
+      }
+      if (!asmIds.includes(uAsm)) {
+        result.reason = 'assembly_mismatch';
+        return result;
       }
     }
     if (groupIds.length > 0) {
-      if (uGroup == null) return false;
-      if (!groupIds.includes(0) && !groupIds.includes(uGroup)) return false;
+      if (uGroup == null) {
+        result.reason = 'missing_user_group_id';
+        return result;
+      }
+      if (!groupIds.includes(0) && !groupIds.includes(uGroup)) {
+        result.reason = 'group_mismatch';
+        return result;
+      }
     }
-    if (profileIds.length > 0 && !profileIds.includes(uProfileId)) return false;
+    if (profileIds.length > 0 && !profileIds.includes(uProfileId)) {
+      result.reason = 'profile_id_mismatch';
+      return result;
+    }
 
-    return true;
+    result.ok = true;
+    result.reason = 'ok';
+    return result;
+  }
+
+  function canUserSeeContent(user: any, content: any): boolean {
+    return explainVisibility(user, content).ok;
   }
 
   const fetchPosts = React.useCallback(async (_userState: string, _userParty: string, silent = false) => {
@@ -471,7 +529,8 @@ export default function DashboardScreen() {
       const raw = (data || []) as PostRow[];
       let rejectedLogged = false;
       const filtered = raw.filter((p) => {
-        const ok = canUserSeeContent(userInfoRef.current, p);
+        const ex = explainVisibility(userInfoRef.current, p);
+        const ok = ex.ok;
         if (!ok && !rejectedLogged) {
           rejectedLogged = true;
           gfxLogCapped('rejectSample', {
@@ -488,6 +547,7 @@ export default function DashboardScreen() {
               profile_id: (userInfoRef.current as any)?.profile_id ?? '',
             },
           });
+          gfxLogCapped('rejectReason', ex, 5);
         }
         return ok;
       });
