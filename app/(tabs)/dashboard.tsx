@@ -142,6 +142,7 @@ export default function DashboardScreen() {
   const fetchPostsReqIdRef = useRef(0);
   const postsSchemaOkRef = useRef<boolean | null>(null);
   const eventsSchemaOkRef = useRef<boolean | null>(null);
+  const profileLoadedRef = useRef<boolean>(false);
   const safeUserInfo = userInfo ?? { name: '', phone: '', state: '', partyName: '' };
   const realtimeChannelRef = useRef<any>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(true);
@@ -151,6 +152,10 @@ export default function DashboardScreen() {
   // Persistence logs (requested): whenever sync inputs change.
   useEffect(() => {
     console.log('[gfx] Sync Check - ProfileReady:', profileLoaded);
+  }, [profileLoaded]);
+
+  useEffect(() => {
+    profileLoadedRef.current = !!profileLoaded;
   }, [profileLoaded]);
 
   // Full worker context (requested)
@@ -293,12 +298,14 @@ export default function DashboardScreen() {
           twitter: String((profile as { twitter?: string }).twitter ?? prev.twitter ?? ''),
         }));
         setIsProfileLoading(false);
+        profileLoadedRef.current = true;
         setProfileLoaded(true);
         return { state: '', party };
       }
     } catch (e) {
       console.error('[gfx] Profile Fetch Error: ', e);
       setProfileLoaded(false);
+      profileLoadedRef.current = false;
       setIsProfileLoading(false);
     }
     return { state: '', party: '' };
@@ -315,7 +322,7 @@ export default function DashboardScreen() {
       ok: false,
       reason: 'unknown',
     };
-    if (!profileLoaded) {
+    if (!profileLoadedRef.current) {
       result.reason = 'profile_not_loaded';
       return result;
     }
