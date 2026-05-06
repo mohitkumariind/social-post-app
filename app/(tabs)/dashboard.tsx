@@ -594,7 +594,9 @@ export default function DashboardScreen() {
       if (__DEV__) console.warn('[Dashboard fetchPosts] exception:', err);
       setPosts([]);
     } finally {
-      if (reqId === fetchPostsReqIdRef.current && !silent) setLoading(false);
+      // Always clear loading for the latest request.
+      // Otherwise a silent refetch can supersede a non-silent one and prevent the spinner from ever clearing.
+      if (reqId === fetchPostsReqIdRef.current) setLoading(false);
     }
   }, []);
 
