@@ -311,15 +311,18 @@ export default function DashboardScreen() {
   function canUserSeeContent(user: any, content: any): boolean {
     // Default deny
     if (!profileLoaded) return false;
-    const uParty = normalizeStrictId(user?.party_id);
-    const uState = normalizeStrictId(user?.state_id);
-    const uLok = normalizeStrictId(user?.loksabha_id);
-    const uAsm = normalizeStrictId(user?.assembly_id);
+    // Force numeric casting to avoid string-vs-number issues.
+    const uParty = normalizeStrictId(Number(user?.party_id));
+    const uState = normalizeStrictId(Number(user?.state_id));
+    const uLok = normalizeStrictId(Number(user?.loksabha_id));
+    const uAsm = normalizeStrictId(Number(user?.assembly_id));
     const uGroup = normalizeStrictId(user?.group_id);
     const uProfileId = String(user?.profile_id ?? '').trim();
 
     if (!uProfileId) return false;
-    if (uParty == null || uState == null || uLok == null || uAsm == null) return false;
+    // Hard requirements (to prevent leakage):
+    // - party_id + state_id must exist on user for any non-global content
+    if (uParty == null || uState == null) return false;
 
     const partyIds = toNumArr(content?.party_id);
     const stateIds = toNumArr(content?.state_id);
@@ -346,11 +349,24 @@ export default function DashboardScreen() {
       profileIds.length === 0;
     if (isGlobal) return true;
 
-    // Strict matching: any non-empty targeting array must include user's id
-    if (partyIds.length > 0 && !partyIds.includes(0) && !partyIds.includes(uParty)) return false;
-    if (stateIds.length > 0 && !stateIds.includes(0) && !stateIds.includes(uState)) return false;
-    if (lokIds.length > 0 && !lokIds.includes(0) && !lokIds.includes(uLok)) return false;
-    if (asmIds.length > 0 && !asmIds.includes(0) && !asmIds.includes(uAsm)) return false;
+    // Strict matching with ALL (0) wildcard (requested):
+    // post shows only if BOTH state and party match.
+    const stateMatch = stateIds.length === 0 ? true : stateIds.includes(0) || stateIds.includes(uState);
+    if (!stateMatch) return false;
+    const partyMatch = partyIds.length === 0 ? true : partyIds.includes(0) || partyIds.includes(uParty);
+    if (!partyMatch) return false;
+
+    // More specific targeting can only reduce visibility:
+    // LokSabha / Assembly checks apply only if content targets them.
+    if (lokIds.length > 0) {
+      // Fail-safe: if user loksabha_id missing, deny targeted content.
+      if (uLok == null) return false;
+      if (!lokIds.includes(0) && !lokIds.includes(uLok)) return false;
+    }
+    if (asmIds.length > 0) {
+      if (uAsm == null) return false;
+      if (!asmIds.includes(0) && !asmIds.includes(uAsm)) return false;
+    }
     if (groupIds.length > 0) {
       if (uGroup == null) return false;
       if (!groupIds.includes(0) && !groupIds.includes(uGroup)) return false;
