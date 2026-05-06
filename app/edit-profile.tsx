@@ -627,7 +627,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
             </View>
             <View style={styles.partyValueRow}>
               <Text style={styles.partyValueText} numberOfLines={1}>
-                {selectedParty ? `${selectedParty.shortName} – ${selectedParty.fullName}` : t('party_name')}
+                {selectedParty ? selectedParty.fullName : t('party_name')}
               </Text>
               <Ionicons name="chevron-forward" size={18} color="#999" />
             </View>
