@@ -253,7 +253,7 @@ export default function DashboardScreen() {
       const { data: profile } = await supabase
         .from('profiles')
         .select(
-          'state, language, group_tags, loksabha_id, loksabha, assembly_id, assembly, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
+          'state, state_id, language, group_tags, loksabha_id, loksabha, assembly_id, assembly, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
         )
         .eq('id', userId)
         .single();
@@ -266,6 +266,12 @@ export default function DashboardScreen() {
         const rawParty = String(profile.party ?? '').trim();
         const party = normalizePartyId(rawParty) || rawParty;
         const stateStr = String(profile.state ?? '').trim();
+        const stateIdFromDb =
+          typeof (profile as any).state_id === 'number'
+            ? (profile as any).state_id
+            : (profile as any).state_id != null
+              ? Number((profile as any).state_id)
+              : null;
         const nameFromDb = String(profile.name ?? '').trim();
         const phoneFromDb = String(profile.phone ?? '').trim();
         const avatarUrl = String((profile as { avatar_url?: string }).avatar_url ?? '').trim();
@@ -276,6 +282,7 @@ export default function DashboardScreen() {
           name: nameFromDb,
           phone: phoneFromDb,
           state: stateStr || prev.state,
+          state_id: Number.isNaN(stateIdFromDb as number) ? prev.state_id : stateIdFromDb,
           loksabha_id: profile.loksabha_id ?? prev.loksabha_id,
           loksabha: String((profile as { loksabha?: string }).loksabha ?? prev.loksabha ?? ''),
           assembly_id: profile.assembly_id ?? prev.assembly_id,
@@ -291,6 +298,16 @@ export default function DashboardScreen() {
           instagram: String((profile as { instagram?: string }).instagram ?? prev.instagram ?? ''),
           twitter: String((profile as { twitter?: string }).twitter ?? prev.twitter ?? ''),
         }));
+
+        // Initial sync (requested): if state name exists but state_id is null, resolve it and update local userInfo.
+        if (stateStr && (stateIdFromDb == null || Number.isNaN(stateIdFromDb as number))) {
+          const resolved = await getUserStateId(normalizeForCompare(stateStr));
+          const resolvedNum = resolved ? Number(resolved) : NaN;
+          if (!Number.isNaN(resolvedNum)) {
+            setUserInfo((prev) => ({ ...prev, state_id: resolvedNum }));
+            setNormalizedUserStateId(String(resolvedNum));
+          }
+        }
         return { state: stateStr, party };
       }
     } catch (e) {

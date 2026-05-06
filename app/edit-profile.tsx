@@ -294,7 +294,8 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         avatar_url: avatarUrl,
         partyName: partyCanon,
         state: String(p.state ?? '').trim(),
-        stateId: null,
+        stateId:
+          typeof p.state_id === 'number' ? p.state_id : p.state_id != null ? Number(p.state_id) : null,
         loksabha_id: typeof p.loksabha_id === 'number' ? p.loksabha_id : p.loksabha_id != null ? Number(p.loksabha_id) : null,
         assembly_id: typeof p.assembly_id === 'number' ? p.assembly_id : p.assembly_id != null ? Number(p.assembly_id) : null,
         loksabha: String(p.loksabha ?? '').trim(),
@@ -481,6 +482,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         designation3: (formData.designation3 ?? '').trim(),
         designation4: (formData.designation4 ?? '').trim(),
         state: (formData.state ?? '').trim(),
+        state_id: formData.stateId == null ? null : Number(formData.stateId),
         loksabha_id: formData.loksabha_id,
         loksabha: (selectedLoksabha?.name ?? formData.loksabha ?? '').trim(),
         assembly_id: formData.assembly_id,
@@ -491,6 +493,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         instagram: (formData.instagram ?? '').trim(),
         twitter: (formData.twitter ?? '').trim(),
       };
+      console.log('[gfx] Saving to Supabase:', { state_id: formData.stateId, uid });
       const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
       if (error) {
         if (__DEV__) console.warn('Profile save failed', error.message, error);
@@ -502,6 +505,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         const { stateId: _sid, ...userOnly } = formData;
         setUserInfo({
           ...userOnly,
+          state_id: formData.stateId == null ? null : Number(formData.stateId),
           avatar_url: resolvedAvatarUrl,
         });
       } catch (syncErr) {

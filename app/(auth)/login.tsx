@@ -159,6 +159,12 @@ export default function LoginScreen() {
           name: String(row.name ?? '').trim() || baseUser.name,
           phone: String(row.phone ?? '').trim() || prev.phone,
           state: String(row.state ?? '').trim() || prev.state,
+          state_id:
+            typeof row.state_id === 'number'
+              ? row.state_id
+              : row.state_id != null
+                ? Number(row.state_id)
+                : prev.state_id,
           loksabha_id:
             typeof row.loksabha_id === 'number'
               ? row.loksabha_id

@@ -15,6 +15,8 @@ export interface UserInfo {
   partyName: string;
   /** Maps to `profiles.state` (e.g. state name) — not `state_id` */
   state: string;
+  /** Maps to `profiles.state_id` (numeric id) */
+  state_id: number | null;
   loksabha_id: number | null;
   /** Human-readable Lok Sabha name (for poster labels). Maps to `profiles.loksabha` */
   loksabha: string;
@@ -41,6 +43,7 @@ export const EMPTY_USER_INFO: UserInfo = {
   avatar_url: '',
   partyName: '',
   state: '',
+  state_id: null,
   loksabha_id: null,
   assembly_id: null,
   loksabha: '',
