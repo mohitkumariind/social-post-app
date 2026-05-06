@@ -382,6 +382,7 @@ export default function DashboardScreen() {
       const workerStateId = userProfile?.state_id ?? null;
       const workerLoksabhaId = userProfile?.loksabha_id ?? null;
       const workerAssemblyId = userProfile?.assembly_id ?? null;
+      const workerPartyId = userProfile?.party_id ?? null;
       const workerGroupId = userProfile?.group_id ?? null;
       const workerProfileId = String(userProfile?.profile_id ?? '').trim();
 
@@ -393,7 +394,7 @@ export default function DashboardScreen() {
         await supabase
           .from('posts')
           .select(
-            'id,title,image_url,category,event_date,created_at,captions,state_id,loksabha_id,assembly_id,group_id,profile_ids'
+            'id,title,image_url,category,event_date,created_at,captions,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids'
           )
           .or('is_video.eq.false,is_video.is.null')
           .order('created_at', { ascending: false })
@@ -401,7 +402,7 @@ export default function DashboardScreen() {
       const runLegacy = async () =>
         await supabase
           .from('posts')
-          .select('id,title,image_url,category,event_date,created_at,captions,state,loksabha,assembly')
+          .select('id,title,image_url,category,event_date,created_at,captions,state,loksabha,assembly,party')
           .or('is_video.eq.false,is_video.is.null')
           .order('created_at', { ascending: false })
           .limit(300);
@@ -425,6 +426,7 @@ export default function DashboardScreen() {
         state_id: workerStateId,
         loksabha_id: workerLoksabhaId,
         assembly_id: workerAssemblyId,
+        party_id: workerPartyId,
         group_id: workerGroupId,
         profile_id: workerProfileId,
       });
@@ -450,6 +452,7 @@ export default function DashboardScreen() {
         const postStateIds = toNumArr((p as any).state_id ?? toStrArr((p as any).state));
         const postLoksabhaIds = toNumArr((p as any).loksabha_id ?? toStrArr((p as any).loksabha));
         const postAssemblyIds = toNumArr((p as any).assembly_id ?? toStrArr((p as any).assembly));
+        const postPartyIds = toNumArr((p as any).party_id ?? toStrArr((p as any).party));
         const postGroupIds = toNumArr((p as any).group_id); // legacy has no numeric group targeting
         const postProfileIds = toStrArr((p as any).profile_ids).map((x) => String(x).trim()).filter(Boolean);
 
@@ -458,11 +461,15 @@ export default function DashboardScreen() {
           postLoksabhaIds.length === 0 || (workerLoksabhaId != null && postLoksabhaIds.includes(Number(workerLoksabhaId)));
         const isAssemblyMatch =
           postAssemblyIds.length === 0 || (workerAssemblyId != null && postAssemblyIds.includes(Number(workerAssemblyId)));
+        const isPartyMatch =
+          postPartyIds.length === 0
+            ? true
+            : workerPartyId != null && postPartyIds.includes(Number(workerPartyId));
         const isGroupMatch = postGroupIds.length === 0 || (workerGroupId != null && postGroupIds.includes(Number(workerGroupId)));
         const isProfileMatch = postProfileIds.length === 0 || (workerProfileId && postProfileIds.includes(workerProfileId));
 
         // Global content only when all arrays empty => these checks naturally return true.
-        return isStateMatch && isLoksabhaMatch && isAssemblyMatch && isGroupMatch && isProfileMatch;
+        return isStateMatch && isLoksabhaMatch && isAssemblyMatch && isPartyMatch && isGroupMatch && isProfileMatch;
       });
       gfxLogCapped('filterCounts', { raw: raw.length, kept: filtered.length });
       setPosts(filtered);
@@ -483,19 +490,20 @@ export default function DashboardScreen() {
       const workerStateId = userProfile?.state_id ?? null;
       const workerLoksabhaId = userProfile?.loksabha_id ?? null;
       const workerAssemblyId = userProfile?.assembly_id ?? null;
+      const workerPartyId = userProfile?.party_id ?? null;
       const workerGroupId = userProfile?.group_id ?? null;
       const workerProfileId = String(userProfile?.profile_id ?? '').trim();
 
       const runNumeric = async () =>
         await supabase
           .from('events')
-          .select('name,end,state_id,loksabha_id,assembly_id,group_id,profile_ids')
+          .select('name,end,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids')
           .order('end', { ascending: true })
           .limit(500);
       const runLegacy = async () =>
         await supabase
           .from('events')
-          .select('name,end,state,loksabha,assembly')
+          .select('name,end,state,loksabha,assembly,party')
           .order('end', { ascending: true })
           .limit(500);
 
@@ -526,6 +534,7 @@ export default function DashboardScreen() {
           const evStateIds = toNumArr(ev?.state_id ?? toStrArr(ev?.state));
           const evLoksabhaIds = toNumArr(ev?.loksabha_id ?? toStrArr(ev?.loksabha));
           const evAssemblyIds = toNumArr(ev?.assembly_id ?? toStrArr(ev?.assembly));
+          const evPartyIds = toNumArr(ev?.party_id ?? toStrArr(ev?.party));
           const evGroupIds = toNumArr(ev?.group_id);
           const evProfileIds = toStrArr(ev?.profile_ids).map((x) => String(x).trim()).filter(Boolean);
 
@@ -534,10 +543,14 @@ export default function DashboardScreen() {
             evLoksabhaIds.length === 0 || (workerLoksabhaId != null && evLoksabhaIds.includes(Number(workerLoksabhaId)));
           const isAssemblyMatch =
             evAssemblyIds.length === 0 || (workerAssemblyId != null && evAssemblyIds.includes(Number(workerAssemblyId)));
+          const isPartyMatch =
+            evPartyIds.length === 0
+              ? true
+              : workerPartyId != null && evPartyIds.includes(Number(workerPartyId));
           const isGroupMatch = evGroupIds.length === 0 || (workerGroupId != null && evGroupIds.includes(Number(workerGroupId)));
           const isProfileMatch = evProfileIds.length === 0 || (workerProfileId && evProfileIds.includes(workerProfileId));
 
-          return isStateMatch && isLoksabhaMatch && isAssemblyMatch && isGroupMatch && isProfileMatch;
+          return isStateMatch && isLoksabhaMatch && isAssemblyMatch && isPartyMatch && isGroupMatch && isProfileMatch;
         })
         .filter((ev) => {
         const evEndDate = new Date(ev.end);

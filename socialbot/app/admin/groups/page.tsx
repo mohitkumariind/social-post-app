@@ -3,14 +3,14 @@
 import { Search, Tags, Trash2, Users, X } from 'lucide-react';
 import React, { useCallback, useEffect, useState } from 'react';
 
-type GroupRow = { tag: string; count: number };
+type GroupRow = { tag: string; count: number }; // tag = group_id as string
 
 type MemberRow = {
   id: string;
   name: string;
   phone: string;
   avatar_url: string;
-  group_tags: string[];
+  group_id: number | null;
 };
 
 export default function GroupManagementPage() {
@@ -21,7 +21,7 @@ export default function GroupManagementPage() {
 
   // Create Group modal
   const [createOpen, setCreateOpen] = useState(false);
-  const [createName, setCreateName] = useState('');
+  const [createName, setCreateName] = useState(''); // group id (number) as string
   const [createSearch, setCreateSearch] = useState('');
   const [createSearching, setCreateSearching] = useState(false);
   const [createSearchResults, setCreateSearchResults] = useState<MemberRow[]>([]);
@@ -101,9 +101,12 @@ export default function GroupManagementPage() {
         name: String(r.name ?? ''),
         phone: String(r.phone ?? ''),
         avatar_url: String(r.avatar_url ?? ''),
-        group_tags: Array.isArray(r.group_tags)
-          ? (r.group_tags as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean)
-          : [],
+        group_id:
+          typeof (r as any).group_id === 'number'
+            ? (r as any).group_id
+            : (r as any).group_id != null
+              ? Number((r as any).group_id)
+              : null,
       }));
       setSearchResults(rows.filter((r) => r.id));
     } catch (e) {
@@ -334,9 +337,12 @@ export default function GroupManagementPage() {
                                 name: String(r.name ?? ''),
                                 phone: String(r.phone ?? ''),
                                 avatar_url: String(r.avatar_url ?? ''),
-                                group_tags: Array.isArray(r.group_tags)
-                                  ? (r.group_tags as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean)
-                                  : [],
+                                group_id:
+                                  typeof (r as any).group_id === 'number'
+                                    ? (r as any).group_id
+                                    : (r as any).group_id != null
+                                      ? Number((r as any).group_id)
+                                      : null,
                               }));
                               setCreateSearchResults(rows.filter((r) => r.id));
                             } catch (e2) {
@@ -374,9 +380,12 @@ export default function GroupManagementPage() {
                             name: String(r.name ?? ''),
                             phone: String(r.phone ?? ''),
                             avatar_url: String(r.avatar_url ?? ''),
-                            group_tags: Array.isArray(r.group_tags)
-                              ? (r.group_tags as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean)
-                              : [],
+                            group_id:
+                              typeof (r as any).group_id === 'number'
+                                ? (r as any).group_id
+                                : (r as any).group_id != null
+                                  ? Number((r as any).group_id)
+                                  : null,
                           }));
                           setCreateSearchResults(rows.filter((r) => r.id));
                         } catch (e2) {
@@ -557,7 +566,8 @@ export default function GroupManagementPage() {
                 {searchResults.length > 0 && (
                   <ul className="mt-3 max-h-40 space-y-2 overflow-y-auto">
                     {searchResults.map((r) => {
-                      const already = members.some((m) => m.id === r.id) || r.group_tags.some((t) => t.toLowerCase() === detailTag.toLowerCase());
+                      const already =
+                        members.some((m) => m.id === r.id) || (r.group_id != null && String(r.group_id) === String(detailTag));
                       return (
                         <li key={r.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2 text-xs font-bold">
                           <span className="truncate text-slate-800">{r.name || '—'} · {r.phone || '—'}</span>
