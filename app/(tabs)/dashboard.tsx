@@ -219,14 +219,17 @@ export default function DashboardScreen() {
   // Full worker context (requested)
   useEffect(() => {
     const u: any = userInfoRef.current;
-    console.log('[gfx] Full Worker Context:', {
-      state_id: u?.state_id ?? null,
-      loksabha_id: u?.loksabha_id ?? null,
-      assembly_id: u?.assembly_id ?? null,
-      party_id: u?.party_id ?? null,
-      group_id: u?.group_id ?? null,
-      profile_id: u?.profile_id ?? '',
-    });
+    console.log(
+      '[gfx] Full Worker Context:',
+      JSON.stringify({
+        state_id: u?.state_id ?? null,
+        loksabha_id: u?.loksabha_id ?? null,
+        assembly_id: u?.assembly_id ?? null,
+        party_id: u?.party_id ?? null,
+        group_id: u?.group_id ?? null,
+        profile_id: u?.profile_id ?? '',
+      })
+    );
   }, [
     (userInfo as any)?.state_id,
     (userInfo as any)?.loksabha_id,
