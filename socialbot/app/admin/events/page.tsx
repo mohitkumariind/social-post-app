@@ -78,10 +78,12 @@ function toNumArrFromStrIds(v: string[]): number[] {
 }
 
 // Simple Number Conversion Helper (strict numeric arrays)
-const toNumArr = (val: any) =>
-  !val || val === 'ALL' || (Array.isArray(val) && val.includes('ALL'))
-    ? [0]
-    : (Array.isArray(val) ? val : [val]).map((id) => Number(id));
+const toNumArr = (val: any): number[] => {
+  if (val == null || val === '' || (Array.isArray(val) && val.length === 0)) return [];
+  if (val === 'ALL' || (Array.isArray(val) && val.includes('ALL'))) return [0];
+  const arr = Array.isArray(val) ? val : [val];
+  return arr.map((id) => Number(id)).filter((n) => Number.isFinite(n));
+};
 
 /** Multi-select dropdown with checkboxes, ALL option, and tag display */
 function MultiSelectDropdown<T extends { id: string | number }>({
