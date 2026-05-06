@@ -117,7 +117,7 @@ export default function DashboardScreen() {
   const { width } = useWindowDimensions();
   const router = useRouter();
   const dashParams = useLocalSearchParams();
-  const { userInfo, setUserInfo, profileLoaded, setProfileLoaded } = useUser();
+  const { userInfo, setUserInfo, profileLoaded, setProfileLoaded, profileRefreshSeq } = useUser();
   const { t, lang } = useLang();
   const [activeCategory, setActiveCategory] = useState<Category | null>(null);
   const [posts, setPosts] = useState<PostRow[]>([]);
@@ -232,7 +232,7 @@ export default function DashboardScreen() {
       const { data: profile } = await supabase
         .from('profiles')
         .select(
-          'id, state_id, loksabha_id, assembly_id, party_id, group_id, language, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
+          'id, state, state_id, loksabha_id, assembly_id, party_id, group_id, language, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
         )
         .eq('id', userId)
         .single();
@@ -273,6 +273,7 @@ export default function DashboardScreen() {
               : null;
         const nameFromDb = String(profile.name ?? '').trim();
         const phoneFromDb = String(profile.phone ?? '').trim();
+        const stateFromDb = String((profile as any).state ?? '').trim();
         const avatarUrl = String((profile as { avatar_url?: string }).avatar_url ?? '').trim();
         setUserInfo((prev) => ({
           ...prev,
@@ -280,7 +281,7 @@ export default function DashboardScreen() {
           language: langRaw || prev.language,
           name: nameFromDb,
           phone: phoneFromDb,
-          state: prev.state, // unused in strict numeric-id mode
+          state: stateFromDb || prev.state,
           state_id: Number.isNaN(stateIdFromDb as number) ? prev.state_id : stateIdFromDb,
           party_id: Number.isNaN(partyIdFromDb as number) ? prev.party_id : partyIdFromDb,
           loksabha_id: Number.isNaN(lokIdFromDb as number) ? prev.loksabha_id : lokIdFromDb,
@@ -679,8 +680,18 @@ export default function DashboardScreen() {
     fetchPosts,
   ]);
 
+  // After a successful profile refresh (e.g., after saving Edit Profile), refetch feed using fresh IDs.
   useEffect(() => {
-    if (!authReady || !dashboardProfileLoaded) {
+    if (!authReady) return;
+    if (!profileLoaded) return;
+    void (async () => {
+      await fetchPosts('', '', true);
+      await fetchEvents();
+    })();
+  }, [authReady, profileLoaded, profileRefreshSeq, fetchPosts]);
+
+  useEffect(() => {
+    if (!authReady || !profileLoaded || !dashboardProfileLoaded) {
       setEditProfileDelayedVisible(false);
       return;
     }
@@ -707,8 +718,9 @@ export default function DashboardScreen() {
     editProfileDelayedVisible && authReady && dashboardProfileLoaded && isProfileIncomplete(safeUserInfo);
 
   const handleProfileSaved = React.useCallback(() => {
+    // EditProfileScreen now runs: upsert → refetch profile → hydrate context → bump profileRefreshSeq.
+    // Here we only ensure our local "first-run" bootstrap refetches from server as well.
     void fetchUserProfile();
-    setRefreshKey((p) => p + 1);
   }, [fetchUserProfile]);
 
   useEffect(() => {

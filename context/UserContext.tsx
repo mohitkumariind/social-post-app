@@ -72,6 +72,12 @@ interface UserContextType {
   /** True only after we fetched the authenticated user's profile from Supabase. */
   profileLoaded: boolean;
   setProfileLoaded: React.Dispatch<React.SetStateAction<boolean>>;
+  /**
+   * Bumped after a successful profile refetch + hydration.
+   * Consumers (Dashboard) can refetch posts/events when this changes.
+   */
+  profileRefreshSeq: number;
+  setProfileRefreshSeq: React.Dispatch<React.SetStateAction<number>>;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
@@ -80,9 +86,21 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userInfo, setUserInfo] = useState<UserInfo>({ ...EMPTY_USER_INFO });
   const [profileLoaded, setProfileLoaded] = useState(false);
+  const [profileRefreshSeq, setProfileRefreshSeq] = useState(0);
 
   return (
-    <UserContext.Provider value={{ userInfo, setUserInfo, isLoggedIn, setIsLoggedIn, profileLoaded, setProfileLoaded }}>
+    <UserContext.Provider
+      value={{
+        userInfo,
+        setUserInfo,
+        isLoggedIn,
+        setIsLoggedIn,
+        profileLoaded,
+        setProfileLoaded,
+        profileRefreshSeq,
+        setProfileRefreshSeq,
+      }}
+    >
       {children}
     </UserContext.Provider>
   );

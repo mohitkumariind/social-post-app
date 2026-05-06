@@ -145,7 +145,7 @@ export type EditProfileScreenProps = {
 export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true }: EditProfileScreenProps = {}) {
   const router = useRouter();
   const { t } = useLang();
-  const { userInfo, setUserInfo } = useUser();
+  const { userInfo, setUserInfo, setProfileLoaded, setProfileRefreshSeq } = useUser();
   const [formData, setFormData] = useState<ProfileFormData>(() => ({
     ...userInfo,
     avatar_url: userInfo.avatar_url ?? '',
@@ -501,19 +501,54 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         return;
       }
       setFormData((prev) => ({ ...prev, avatar_url: resolvedAvatarUrl }));
-      try {
-        const { stateId: _sid, ...userOnly } = formData;
-        setUserInfo({
-          ...userOnly,
-          state_id: formData.stateId == null ? null : Number(formData.stateId),
-          avatar_url: resolvedAvatarUrl,
-        });
-      } catch (syncErr) {
-        if (__DEV__) console.warn('[EditProfile] setUserInfo after save failed:', syncErr);
-        Alert.alert('', 'Profile saved but could not update app state');
+
+      // Refresh pipeline (single source of truth): refetch from backend, hydrate global context,
+      // then notify dashboard to refetch posts/events.
+      const { data: latest, error: refErr } = await supabase
+        .from('profiles')
+        .select('id,name,phone,state,party,party_id,state_id,loksabha_id,assembly_id,group_id,avatar_url,designation1,designation2,designation3,designation4,whatsapp,facebook,instagram,twitter,language,loksabha,assembly,email')
+        .eq('id', uid)
+        .single();
+      if (refErr || !latest) {
+        if (__DEV__) console.warn('[EditProfile] profile refetch after save failed:', refErr?.message, refErr);
+        Alert.alert('', refErr?.message || 'Profile saved but could not refresh');
         return;
       }
-      onSaved?.();
+
+      const row: any = latest;
+      const rawParty = String(row.party ?? '').trim();
+      const partyCanon = normalizePartyId(rawParty, parties) || rawParty;
+      setUserInfo((prev) => ({
+        ...prev,
+        profile_id: String(row.id ?? uid),
+        language: String(row.language ?? prev.language ?? '').trim(),
+        name: String(row.name ?? '').trim(),
+        phone: String(row.phone ?? '').trim(),
+        email: String(row.email ?? '').trim(),
+        partyName: partyCanon,
+        party_id: typeof row.party_id === 'number' ? row.party_id : row.party_id != null ? Number(row.party_id) : null,
+        state: String(row.state ?? '').trim(),
+        state_id: typeof row.state_id === 'number' ? row.state_id : row.state_id != null ? Number(row.state_id) : null,
+        loksabha_id:
+          typeof row.loksabha_id === 'number' ? row.loksabha_id : row.loksabha_id != null ? Number(row.loksabha_id) : null,
+        assembly_id:
+          typeof row.assembly_id === 'number' ? row.assembly_id : row.assembly_id != null ? Number(row.assembly_id) : null,
+        group_id: typeof row.group_id === 'number' ? row.group_id : row.group_id != null ? Number(row.group_id) : null,
+        avatar_url: String(row.avatar_url ?? resolvedAvatarUrl ?? '').trim(),
+        designation1: String(row.designation1 ?? prev.designation1 ?? '').trim(),
+        designation2: String(row.designation2 ?? prev.designation2 ?? '').trim(),
+        designation3: String(row.designation3 ?? prev.designation3 ?? '').trim(),
+        designation4: String(row.designation4 ?? prev.designation4 ?? '').trim(),
+        whatsapp: String(row.whatsapp ?? prev.whatsapp ?? '').trim(),
+        facebook: String(row.facebook ?? prev.facebook ?? '').trim(),
+        instagram: String(row.instagram ?? prev.instagram ?? '').trim(),
+        twitter: String(row.twitter ?? prev.twitter ?? '').trim(),
+        loksabha: String(row.loksabha ?? prev.loksabha ?? '').trim(),
+        assembly: String(row.assembly ?? prev.assembly ?? '').trim(),
+      }));
+      setProfileLoaded(true);
+      setProfileRefreshSeq((p) => p + 1);
+      await Promise.resolve(onSaved?.());
       await AsyncStorage.setItem(PROFILE_REDIRECT_DONE_KEY, 'true');
       if (embedMode) {
         return;
