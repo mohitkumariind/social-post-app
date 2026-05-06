@@ -216,6 +216,26 @@ export default function DashboardScreen() {
     );
   }, [isProfileLoading, normalizedUserStateId, (userInfo as any)?.group_tags]);
 
+  // Full worker context (requested)
+  useEffect(() => {
+    const u: any = userInfoRef.current;
+    console.log('[gfx] Full Worker Context:', {
+      state_id: u?.state_id ?? null,
+      loksabha_id: u?.loksabha_id ?? null,
+      assembly_id: u?.assembly_id ?? null,
+      party_id: u?.party_id ?? null,
+      group_id: u?.group_id ?? null,
+      profile_id: u?.profile_id ?? '',
+    });
+  }, [
+    (userInfo as any)?.state_id,
+    (userInfo as any)?.loksabha_id,
+    (userInfo as any)?.assembly_id,
+    (userInfo as any)?.party_id,
+    (userInfo as any)?.group_id,
+    (userInfo as any)?.profile_id,
+  ]);
+
   // Debug logs for stuck state (requested)
   useEffect(() => {
     const payload = {
@@ -267,7 +287,7 @@ export default function DashboardScreen() {
       const { data: profile } = await supabase
         .from('profiles')
         .select(
-          'id, state_id, loksabha_id, assembly_id, group_id, language, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
+          'id, state_id, loksabha_id, assembly_id, party_id, group_id, language, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
         )
         .eq('id', userId)
         .single();
@@ -281,6 +301,12 @@ export default function DashboardScreen() {
             ? (profile as any).state_id
             : (profile as any).state_id != null
               ? Number((profile as any).state_id)
+              : null;
+        const partyIdFromDb =
+          typeof (profile as any).party_id === 'number'
+            ? (profile as any).party_id
+            : (profile as any).party_id != null
+              ? Number((profile as any).party_id)
               : null;
         const lokIdFromDb =
           typeof (profile as any).loksabha_id === 'number'
@@ -311,6 +337,7 @@ export default function DashboardScreen() {
           phone: phoneFromDb,
           state: prev.state, // unused in strict numeric-id mode
           state_id: Number.isNaN(stateIdFromDb as number) ? prev.state_id : stateIdFromDb,
+          party_id: Number.isNaN(partyIdFromDb as number) ? prev.party_id : partyIdFromDb,
           loksabha_id: Number.isNaN(lokIdFromDb as number) ? prev.loksabha_id : lokIdFromDb,
           assembly_id: Number.isNaN(asmIdFromDb as number) ? prev.assembly_id : asmIdFromDb,
           group_id: Number.isNaN(groupIdFromDb as number) ? (prev as any).group_id : groupIdFromDb,

@@ -15,6 +15,8 @@ export interface UserInfo {
   avatar_url: string;
   /** Maps to `profiles.party` */
   partyName: string;
+  /** Maps to `profiles.party_id` (numeric id) */
+  party_id: number | null;
   /** Maps to `profiles.state` (e.g. state name) — not `state_id` */
   state: string;
   /** Maps to `profiles.state_id` (numeric id) */
@@ -47,6 +49,7 @@ export const EMPTY_USER_INFO: UserInfo = {
   designation4: '',
   avatar_url: '',
   partyName: '',
+  party_id: null,
   state: '',
   state_id: null,
   loksabha_id: null,

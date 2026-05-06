@@ -151,12 +151,15 @@ export default function LoginScreen() {
 
       if (hasLang && hasParty) {
         changeLanguage(langRaw);
+        const partyIdFromDb =
+          typeof row.party_id === 'number' ? row.party_id : row.party_id != null ? Number(row.party_id) : null;
         setUserInfo((prev) => ({
           ...prev,
           ...baseUser,
           profile_id: sbUser.id,
           language: langRaw,
           partyName: partyCanon,
+          party_id: Number.isNaN(partyIdFromDb as number) ? prev.party_id : partyIdFromDb,
           name: String(row.name ?? '').trim() || baseUser.name,
           phone: String(row.phone ?? '').trim() || prev.phone,
           state: String(row.state ?? '').trim() || prev.state,
