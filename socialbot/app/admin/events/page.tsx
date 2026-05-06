@@ -245,7 +245,7 @@ export default function App() {
   const [newLoksabha, setNewLoksabha] = useState<string[]>([]);
   const [newAssembly, setNewAssembly] = useState<string[]>([]);
   const [newTargetGroups, setNewTargetGroups] = useState<string[]>([]);
-  const [groupOptions, setGroupOptions] = useState<{ tag: string; count: number }[]>([]);
+  const [groupOptions, setGroupOptions] = useState<{ tag: string; name?: string; count: number }[]>([]);
   const [filterParty, setFilterParty] = useState<string>('ALL');
   const [filterState, setFilterState] = useState<string>('ALL');
   const [availableStates, setAvailableStates] = useState<{ id: string; name: string }[]>([]);
@@ -266,7 +266,7 @@ export default function App() {
       try {
         const res = await fetch('/api/admin/groups', { credentials: 'same-origin' });
         if (!res.ok) return;
-        const json = (await res.json()) as { groups?: { tag: string; count: number }[] };
+        const json = (await res.json()) as { groups?: { tag: string; name?: string; count: number }[] };
         if (!cancelled) setGroupOptions(json.groups ?? []);
       } catch {
         // ignore
@@ -1124,11 +1124,11 @@ export default function App() {
                     <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-2">
                       <MultiSelectDropdown
                         label="Target Groups"
-                        options={groupOptions.map((g) => ({ id: g.tag, tag: g.tag, count: g.count }))}
+                        options={groupOptions.map((g) => ({ id: g.tag, tag: g.tag, name: g.name || g.tag, count: g.count }))}
                         selected={newTargetGroups}
                         onSelect={setNewTargetGroups}
                         getValue={(g) => g.tag}
-                        getLabel={(g) => `${g.tag} (${g.count})`}
+                        getLabel={(g) => `${g.name || g.tag} (${g.count})`}
                         showAllOption={false}
                         searchable
                         searchPlaceholder="Search groups…"
@@ -1279,11 +1279,11 @@ export default function App() {
             <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
               <MultiSelectDropdown
                 label="Target Groups"
-                options={groupOptions.map((g) => ({ id: g.tag, tag: g.tag, count: g.count }))}
+                options={groupOptions.map((g) => ({ id: g.tag, tag: g.tag, name: g.name || g.tag, count: g.count }))}
                 selected={newTargetGroups}
                 onSelect={setNewTargetGroups}
                 getValue={(g) => g.tag}
-                getLabel={(g) => `${g.tag} (${g.count})`}
+                getLabel={(g) => `${g.name || g.tag} (${g.count})`}
                 showAllOption={false}
                 searchable
                 searchPlaceholder="Search groups…"
