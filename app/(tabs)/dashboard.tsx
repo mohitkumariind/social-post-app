@@ -198,12 +198,14 @@ export default function DashboardScreen() {
 
   // Debug logs for stuck state (requested)
   useEffect(() => {
-    console.log('[gfx] Current Profile State:', {
-      name: (userInfo as any)?.name,
-      state: (userInfo as any)?.state,
+    const payload = {
+      name: (userInfo as any)?.name ?? '',
+      state: (userInfo as any)?.state ?? '',
       loading: isProfileLoading,
       timedOut: profileFetchTimedOut,
-    });
+    };
+    // Single-line output for logcat readability
+    console.log('[gfx] Current Profile State:', JSON.stringify(payload));
   }, [isProfileLoading, profileFetchTimedOut, userInfo?.name, userInfo?.state]);
 
   const clearDashboardExpandParams = React.useCallback(() => {
