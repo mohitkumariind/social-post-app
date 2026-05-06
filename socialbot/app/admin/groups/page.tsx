@@ -3,7 +3,7 @@
 import { Search, Tags, Trash2, Users, X } from 'lucide-react';
 import React, { useCallback, useEffect, useState } from 'react';
 
-type GroupRow = { tag: string; count: number }; // tag = group_id as string
+type GroupRow = { tag: string; name?: string; count: number }; // tag = group_id as string
 
 type MemberRow = {
   id: string;
@@ -21,7 +21,7 @@ export default function GroupManagementPage() {
 
   // Create Group modal
   const [createOpen, setCreateOpen] = useState(false);
-  const [createName, setCreateName] = useState(''); // group id (number) as string
+  const [createName, setCreateName] = useState(''); // group name or id
   const [createSearch, setCreateSearch] = useState('');
   const [createSearching, setCreateSearching] = useState(false);
   const [createSearchResults, setCreateSearchResults] = useState<MemberRow[]>([]);
@@ -241,7 +241,7 @@ export default function GroupManagementPage() {
               className="flex items-center gap-4 rounded-[26px] border border-slate-100 bg-white px-5 py-4 shadow-sm hover:bg-slate-50/60"
             >
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-black text-slate-900">{g.tag}</p>
+                <p className="truncate text-sm font-black text-slate-900">{g.name || g.tag}</p>
               </div>
 
               <div className="shrink-0">

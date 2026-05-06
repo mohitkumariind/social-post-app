@@ -48,6 +48,46 @@ function aggregateGroupIds(rows: { id: string; group_id: unknown }[]): { tag: st
     .sort((a, b) => Number(a.tag) - Number(b.tag));
 }
 
+type DbGroupRow = { id: number; name: string };
+
+async function getGroupById(admin: SupabaseClient, id: number): Promise<DbGroupRow | null> {
+  const { data, error } = await admin.from('groups').select('id, name').eq('id', id).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return { id: Number((data as any).id), name: String((data as any).name ?? '') };
+}
+
+async function getGroupByName(admin: SupabaseClient, name: string): Promise<DbGroupRow | null> {
+  const n = String(name ?? '').trim();
+  if (!n) return null;
+  const { data, error } = await admin.from('groups').select('id, name').eq('name', n).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return { id: Number((data as any).id), name: String((data as any).name ?? '') };
+}
+
+async function createGroup(admin: SupabaseClient, name: string): Promise<DbGroupRow> {
+  const n = String(name ?? '').trim();
+  const { data, error } = await admin.from('groups').insert({ name: n }).select('id, name').single();
+  if (error) throw new Error(error.message);
+  return { id: Number((data as any).id), name: String((data as any).name ?? '') };
+}
+
+async function resolveGroup(admin: SupabaseClient, tag: string, opts?: { createIfMissing?: boolean }): Promise<DbGroupRow | null> {
+  const raw = String(tag ?? '').trim();
+  if (!raw) return null;
+
+  const asNum = Number(raw);
+  if (Number.isFinite(asNum)) {
+    return await getGroupById(admin, asNum);
+  }
+
+  const existing = await getGroupByName(admin, raw);
+  if (existing) return existing;
+  if (opts?.createIfMissing) return await createGroup(admin, raw);
+  return null;
+}
+
 /** Paginate through all profiles (PostgREST often caps ~1k rows per request). */
 async function fetchAllProfileIdAndGroupId(admin: SupabaseClient): Promise<{ id: string; group_id: unknown }[]> {
   const pageSize = 1000;
@@ -120,12 +160,12 @@ export async function GET(request: NextRequest) {
   }
 
   const tag = (request.nextUrl.searchParams.get('tag') ?? '').trim();
-  const groupId = tag ? Number(tag) : NaN;
 
   try {
     if (tag) {
-      if (!Number.isFinite(groupId)) return NextResponse.json({ error: 'Invalid group id' }, { status: 400 });
-      const rows = await fetchMembersForGroupId(admin, groupId);
+      const grp = await resolveGroup(admin, tag);
+      if (!grp) return NextResponse.json({ error: 'Invalid group id/name' }, { status: 400 });
+      const rows = await fetchMembersForGroupId(admin, grp.id);
       const members = rows.map((r) => ({
         id: String(r.id ?? ''),
         name: String(r.name ?? ''),
@@ -134,11 +174,23 @@ export async function GET(request: NextRequest) {
         group_id: toNum((r as any).group_id),
       }));
 
-      return NextResponse.json({ tag, members }, { headers: { 'Cache-Control': 'no-store' } });
+      return NextResponse.json({ tag: String(grp.id), name: grp.name, members }, { headers: { 'Cache-Control': 'no-store' } });
     }
 
-    const rows = await fetchAllProfileIdAndGroupId(admin);
-    const groups = aggregateGroupIds(rows);
+    // Prefer authoritative group list from `groups` table; join with counts from profiles.
+    const { data: groupRows, error: gErr } = await admin.from('groups').select('id, name').order('id', { ascending: true });
+    if (gErr) throw new Error(gErr.message);
+
+    const countsRows = await fetchAllProfileIdAndGroupId(admin);
+    const counts = new Map<string, number>();
+    for (const g of aggregateGroupIds(countsRows)) counts.set(g.tag, g.count);
+
+    const groups = ((groupRows ?? []) as any[]).map((g) => ({
+      tag: String(g.id ?? ''),
+      name: String(g.name ?? ''),
+      count: counts.get(String(g.id ?? '')) ?? 0,
+    }));
+
     return NextResponse.json({ groups }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Failed to load groups';
@@ -159,13 +211,20 @@ export async function DELETE(request: NextRequest) {
   }
 
   const tag = (request.nextUrl.searchParams.get('tag') ?? '').trim();
-  const groupId = tag ? Number(tag) : NaN;
-  if (!tag || !Number.isFinite(groupId)) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
+  if (!tag) return NextResponse.json({ error: 'Missing group id/name' }, { status: 400 });
+  const grp = await resolveGroup(admin, tag);
+  if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
 
-  const { error: upErr } = await admin.from('profiles').update({ group_id: null }).eq('group_id', groupId);
+  const { error: upErr } = await admin.from('profiles').update({ group_id: null }).eq('group_id', grp.id);
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
 
-  return NextResponse.json({ ok: true, group_id: groupId }, { headers: { 'Cache-Control': 'no-store' } });
+  // Best-effort: remove group row itself.
+  const { error: delErr } = await admin.from('groups').delete().eq('id', grp.id);
+  if (delErr) {
+    return NextResponse.json({ ok: true, group_id: grp.id, warning: delErr.message }, { headers: { 'Cache-Control': 'no-store' } });
+  }
+
+  return NextResponse.json({ ok: true, group_id: grp.id }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
 type PatchBody = { userId?: string; add?: string[]; remove?: string[] };
@@ -192,20 +251,21 @@ export async function POST(request: NextRequest) {
   }
 
   const tag = String(body.tag ?? '').trim();
-  const parsed = tag ? Number(tag) : NaN;
   const userIds = Array.isArray(body.userIds) ? body.userIds.map((x) => String(x).trim()).filter(Boolean) : [];
 
   if (!tag) return NextResponse.json({ error: 'Missing group name/id' }, { status: 400 });
   if (userIds.length === 0) return NextResponse.json({ error: 'Select at least one user' }, { status: 400 });
 
-  // Allow "group name" input in UI. If it's not numeric, allocate next numeric group_id.
-  const groupId = Number.isFinite(parsed) ? parsed : await allocateNextGroupId(admin);
+  // Foreign key constraint requires that `profiles.group_id` exists in `groups` table.
+  // If tag is numeric, it must already exist. If tag is a name, create group row if missing.
+  const grp = await resolveGroup(admin, tag, { createIfMissing: true });
+  if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
 
-  const { error: upErr } = await admin.from('profiles').update({ group_id: groupId }).in('id', userIds);
+  const { error: upErr } = await admin.from('profiles').update({ group_id: grp.id }).in('id', userIds);
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
 
   return NextResponse.json(
-    { ok: true, group_id: groupId, requested: userIds.length, updated: userIds.length },
+    { ok: true, group_id: grp.id, name: grp.name, requested: userIds.length, updated: userIds.length },
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }
