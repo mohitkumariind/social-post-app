@@ -45,16 +45,11 @@ type PostRow = {
   image_url: string;
   category: string;
   event_date?: string;
-  // Legacy targeting (string arrays)
-  party?: string[] | string;
-  state?: string[] | string;
-  loksabha?: string[] | string;
-  assembly?: string[] | string;
-  target_groups?: string[] | string;
-  // Numeric targeting arrays (new)
+  // Strict numeric-ID targeting arrays
   state_id?: number[] | number | null;
   loksabha_id?: number[] | number | null;
   assembly_id?: number[] | number | null;
+  party_id?: number[] | number | null;
   group_id?: number[] | number | null;
   profile_ids?: string[] | string | null;
   captions?: string | string[];
@@ -67,7 +62,16 @@ function postCaptionsForNavigation(c: string | string[] | null | undefined): str
   if (Array.isArray(c)) return JSON.stringify(c);
   return '';
 }
-type EventRow = { name: string; end: string };
+type EventRow = {
+  name: string;
+  end: string;
+  state_id?: number[] | number | null;
+  loksabha_id?: number[] | number | null;
+  assembly_id?: number[] | number | null;
+  party_id?: number[] | number | null;
+  group_id?: number[] | number | null;
+  profile_ids?: string[] | string | null;
+};
 
 function normalizeForCompare(value: string): string {
   return value.trim().toLowerCase();
@@ -113,7 +117,7 @@ export default function DashboardScreen() {
   const { width } = useWindowDimensions();
   const router = useRouter();
   const dashParams = useLocalSearchParams();
-  const { userInfo, setUserInfo } = useUser();
+  const { userInfo, setUserInfo, profileLoaded, setProfileLoaded } = useUser();
   const { t, lang } = useLang();
   const [activeCategory, setActiveCategory] = useState<Category | null>(null);
   const [posts, setPosts] = useState<PostRow[]>([]);
@@ -138,83 +142,14 @@ export default function DashboardScreen() {
   const fetchPostsReqIdRef = useRef(0);
   const safeUserInfo = userInfo ?? { name: '', phone: '', state: '', partyName: '' };
   const realtimeChannelRef = useRef<any>(null);
-  const stateNameToIdRef = useRef<Map<string, string>>(new Map());
-  const [normalizedUserStateId, setNormalizedUserStateId] = useState<string>('');
   const [isProfileLoading, setIsProfileLoading] = useState(true);
-  const [profileFetchTimedOut, setProfileFetchTimedOut] = useState(false);
 
-  const getUserStateId = React.useCallback(async (normalizedStateName: string): Promise<string> => {
-    const key = String(normalizedStateName ?? '').trim().toLowerCase();
-    if (!key) return '';
-    const cached = stateNameToIdRef.current.get(key);
-    if (cached) return cached;
-    try {
-      // Best-effort lookup: profiles.state is state name, posts.state is state_id (string) in many rows.
-      const escaped = key.replace(/[%_]/g, (m) => `\\${m}`);
-      const { data, error } = await supabase
-        .from('states')
-        .select('id,name')
-        .ilike('name', `%${escaped}%`)
-        .order('name', { ascending: true })
-        .limit(1);
-      if (error) return '';
-      const first = Array.isArray(data) ? data[0] : null;
-      const id = first?.id != null ? String(first.id) : '';
-      if (id) stateNameToIdRef.current.set(key, id);
-      return id;
-    } catch {
-      return '';
-    }
-  }, []);
-
-  // Recompute state-name -> state_id mapping whenever profile state changes.
-  useEffect(() => {
-    let cancelled = false;
-    const userProfile = userInfoRef.current;
-    const stateName = normalizeForCompare(String(userProfile?.state ?? ''));
-    (async () => {
-      const id = stateName ? await getUserStateId(stateName) : '';
-      if (cancelled) return;
-      setNormalizedUserStateId(id);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [userInfo?.state, getUserStateId]);
-
-  // Profile loading guard: block fetch until name + state exist.
-  useEffect(() => {
-    const nameOk = String(userInfo?.name ?? '').trim().length > 0;
-    const stateOk = String(userInfo?.state ?? '').trim().length > 0;
-    const loadingNow = !(nameOk && stateOk);
-    setIsProfileLoading(loadingNow);
-    if (!loadingNow) setProfileFetchTimedOut(false);
-  }, [userInfo?.name, userInfo?.state]);
-
-  // Profile fetch timeout (10s): unblock so global graphics can still show.
-  useEffect(() => {
-    if (!authReady) return;
-    if (!isProfileLoading) return;
-    if (profileFetchTimedOut) return;
-    const t = setTimeout(() => {
-      console.error('[gfx] Profile Fetch Timeout: profile not ready after 10s');
-      setProfileFetchTimedOut(true);
-      setIsProfileLoading(false);
-    }, 10_000);
-    return () => clearTimeout(t);
-  }, [authReady, isProfileLoading, profileFetchTimedOut]);
+  // Core rule: never render content until profile is fetched from server.
 
   // Persistence logs (requested): whenever sync inputs change.
   useEffect(() => {
-    console.log(
-      '[gfx] Sync Check - ProfileReady:',
-      !isProfileLoading,
-      'StateID:',
-      normalizedUserStateId,
-      'GroupTags:',
-      (userInfo as any)?.group_tags
-    );
-  }, [isProfileLoading, normalizedUserStateId, (userInfo as any)?.group_tags]);
+    console.log('[gfx] Sync Check - ProfileReady:', profileLoaded);
+  }, [profileLoaded]);
 
   // Full worker context (requested)
   useEffect(() => {
@@ -245,11 +180,11 @@ export default function DashboardScreen() {
       name: (userInfo as any)?.name ?? '',
       state: (userInfo as any)?.state ?? '',
       loading: isProfileLoading,
-      timedOut: profileFetchTimedOut,
+      profileLoaded,
     };
     // Single-line output for logcat readability
     console.log('[gfx] Current Profile State:', JSON.stringify(payload));
-  }, [isProfileLoading, profileFetchTimedOut, userInfo?.name, userInfo?.state]);
+  }, [isProfileLoading, profileLoaded, userInfo?.name, userInfo?.state]);
 
   const clearDashboardExpandParams = React.useCallback(() => {
     // `setParams` has differed across Expo Router versions / navigators.
@@ -279,13 +214,13 @@ export default function DashboardScreen() {
     [dailyLocalByUrl]
   );
 
-  /** Fetch user numeric IDs from profiles table. Runs only after auth is ready. */
+  /** Fetch authenticated user profile from profiles table. */
   const fetchUserProfile = React.useCallback(async () => {
     try {
       await supabase.auth.refreshSession();
       const { data: sessionData } = await supabase.auth.getSession();
       const userId = sessionData?.session?.user?.id ?? null;
-      if (!userId) return { state: '', party: '' };
+      if (!userId) throw new Error('Auth session missing');
 
       const { data: profile } = await supabase
         .from('profiles')
@@ -355,15 +290,75 @@ export default function DashboardScreen() {
           instagram: String((profile as { instagram?: string }).instagram ?? prev.instagram ?? ''),
           twitter: String((profile as { twitter?: string }).twitter ?? prev.twitter ?? ''),
         }));
+        setProfileLoaded(true);
         return { state: '', party };
       }
     } catch (e) {
       console.error('[gfx] Profile Fetch Error: ', e);
+      setProfileLoaded(false);
     }
     return { state: '', party: '' };
-  }, [setUserInfo]);
+  }, [setUserInfo, setProfileLoaded]);
 
-  const fetchPosts = React.useCallback(async (userState: string, userParty: string, silent = false) => {
+  function normalizeStrictId(v: unknown): number | null {
+    if (v == null) return null;
+    const n = typeof v === 'number' ? v : Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function canUserSeeContent(user: any, content: any): boolean {
+    // Default deny
+    if (!profileLoaded) return false;
+    const uParty = normalizeStrictId(user?.party_id);
+    const uState = normalizeStrictId(user?.state_id);
+    const uLok = normalizeStrictId(user?.loksabha_id);
+    const uAsm = normalizeStrictId(user?.assembly_id);
+    const uGroup = normalizeStrictId(user?.group_id);
+    const uProfileId = String(user?.profile_id ?? '').trim();
+
+    if (!uProfileId) return false;
+    if (uParty == null || uState == null || uLok == null || uAsm == null) return false;
+
+    const partyIds = toNumArr(content?.party_id);
+    const stateIds = toNumArr(content?.state_id);
+    const lokIds = toNumArr(content?.loksabha_id);
+    const asmIds = toNumArr(content?.assembly_id);
+    const groupIds = toNumArr(content?.group_id);
+    const profileIds = toStrArr(content?.profile_ids).map((x) => String(x).trim()).filter(Boolean);
+
+    // Any invalid targeting value => deny (strict)
+    if (content?.party_id != null && partyIds.length === 0) return false;
+    if (content?.state_id != null && stateIds.length === 0) return false;
+    if (content?.loksabha_id != null && lokIds.length === 0) return false;
+    if (content?.assembly_id != null && asmIds.length === 0) return false;
+    if (content?.group_id != null && groupIds.length === 0) return false;
+    if (content?.profile_ids != null && profileIds.length === 0) return false;
+
+    // Global only when all arrays empty
+    const isGlobal =
+      partyIds.length === 0 &&
+      stateIds.length === 0 &&
+      lokIds.length === 0 &&
+      asmIds.length === 0 &&
+      groupIds.length === 0 &&
+      profileIds.length === 0;
+    if (isGlobal) return true;
+
+    // Strict matching: any non-empty targeting array must include user's id
+    if (partyIds.length > 0 && !partyIds.includes(uParty)) return false;
+    if (stateIds.length > 0 && !stateIds.includes(uState)) return false;
+    if (lokIds.length > 0 && !lokIds.includes(uLok)) return false;
+    if (asmIds.length > 0 && !asmIds.includes(uAsm)) return false;
+    if (groupIds.length > 0) {
+      if (uGroup == null) return false;
+      if (!groupIds.includes(uGroup)) return false;
+    }
+    if (profileIds.length > 0 && !profileIds.includes(uProfileId)) return false;
+
+    return true;
+  }
+
+  const fetchPosts = React.useCallback(async (_userState: string, _userParty: string, silent = false) => {
     const reqId = ++fetchPostsReqIdRef.current;
     try {
       if (!silent) {
@@ -392,7 +387,7 @@ export default function DashboardScreen() {
       // Graphics only: not a reel (`is_video` true). Uses false OR NULL so legacy image rows (unset flag) still show.
       // NOTE: We intentionally avoid DB-side `contains(state/party, ...)` here because NULL/empty targeting
       // should be treated as "global" on the client. DB-side filters can accidentally exclude global rows.
-      // Strict numeric-ID mode: prefer numeric columns; fallback to legacy columns if DB isn't migrated yet.
+      // Strict numeric-ID mode: no legacy fallback (default deny if schema isn't migrated).
       const runNumeric = async () =>
         await supabase
           .from('posts')
@@ -402,27 +397,13 @@ export default function DashboardScreen() {
           .or('is_video.eq.false,is_video.is.null')
           .order('created_at', { ascending: false })
           .limit(300);
-      const runLegacy = async () =>
-        await supabase
-          .from('posts')
-          .select('id,title,image_url,category,event_date,created_at,captions,state,loksabha,assembly,party')
-          .or('is_video.eq.false,is_video.is.null')
-          .order('created_at', { ascending: false })
-          .limit(300);
 
       let data: any[] | null = null;
       let error: any = null;
       {
         const r = await runNumeric();
-        if (r?.error && String(r.error.message ?? '').includes('does not exist')) {
-          console.error('[gfx] posts numeric columns missing, using legacy columns:', r.error.message);
-          const legacy = await runLegacy();
-          data = (legacy as any)?.data ?? null;
-          error = (legacy as any)?.error ?? null;
-        } else {
-          data = (r as any)?.data ?? null;
-          error = (r as any)?.error ?? null;
-        }
+        data = (r as any)?.data ?? null;
+        error = (r as any)?.error ?? null;
       }
 
       gfxLogCapped('userGeo', {
@@ -451,28 +432,7 @@ export default function DashboardScreen() {
       }
       const raw = (data || []) as PostRow[];
       const filtered = raw.filter((p) => {
-        // Prefer numeric arrays; fallback to legacy arrays (typically numeric IDs stored as strings).
-        const postStateIds = toNumArr((p as any).state_id ?? toStrArr((p as any).state));
-        const postLoksabhaIds = toNumArr((p as any).loksabha_id ?? toStrArr((p as any).loksabha));
-        const postAssemblyIds = toNumArr((p as any).assembly_id ?? toStrArr((p as any).assembly));
-        const postPartyIds = toNumArr((p as any).party_id ?? toStrArr((p as any).party));
-        const postGroupIds = toNumArr((p as any).group_id); // legacy has no numeric group targeting
-        const postProfileIds = toStrArr((p as any).profile_ids).map((x) => String(x).trim()).filter(Boolean);
-
-        const isStateMatch = postStateIds.length === 0 || (workerStateId != null && postStateIds.includes(Number(workerStateId)));
-        const isLoksabhaMatch =
-          postLoksabhaIds.length === 0 || (workerLoksabhaId != null && postLoksabhaIds.includes(Number(workerLoksabhaId)));
-        const isAssemblyMatch =
-          postAssemblyIds.length === 0 || (workerAssemblyId != null && postAssemblyIds.includes(Number(workerAssemblyId)));
-        const isPartyMatch =
-          postPartyIds.length === 0
-            ? true
-            : workerPartyId != null && postPartyIds.includes(Number(workerPartyId));
-        const isGroupMatch = postGroupIds.length === 0 || (workerGroupId != null && postGroupIds.includes(Number(workerGroupId)));
-        const isProfileMatch = postProfileIds.length === 0 || (workerProfileId && postProfileIds.includes(workerProfileId));
-
-        // Global content only when all arrays empty => these checks naturally return true.
-        return isStateMatch && isLoksabhaMatch && isAssemblyMatch && isPartyMatch && isGroupMatch && isProfileMatch;
+        return canUserSeeContent(userInfoRef.current, p);
       });
       gfxLogCapped('filterCounts', { raw: raw.length, kept: filtered.length });
       setPosts(filtered);
@@ -503,26 +463,13 @@ export default function DashboardScreen() {
           .select('name,end,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids')
           .order('end', { ascending: true })
           .limit(500);
-      const runLegacy = async () =>
-        await supabase
-          .from('events')
-          .select('name,end,state,loksabha,assembly,party')
-          .order('end', { ascending: true })
-          .limit(500);
 
       let data: any[] | null = null;
       let error: any = null;
       {
         const r = await runNumeric();
-        if (r?.error && String(r.error.message ?? '').includes('does not exist')) {
-          console.error('[gfx] events numeric columns missing, using legacy columns:', r.error.message);
-          const legacy = await runLegacy();
-          data = (legacy as any)?.data ?? null;
-          error = (legacy as any)?.error ?? null;
-        } else {
-          data = (r as any)?.data ?? null;
-          error = (r as any)?.error ?? null;
-        }
+        data = (r as any)?.data ?? null;
+        error = (r as any)?.error ?? null;
       }
       if (error) {
         setFetchError((prev) => prev ?? error.message);
@@ -534,26 +481,7 @@ export default function DashboardScreen() {
       today.setUTCHours(0, 0, 0, 0);
       const filteredEvents = raw
         .filter((ev) => {
-          const evStateIds = toNumArr(ev?.state_id ?? toStrArr(ev?.state));
-          const evLoksabhaIds = toNumArr(ev?.loksabha_id ?? toStrArr(ev?.loksabha));
-          const evAssemblyIds = toNumArr(ev?.assembly_id ?? toStrArr(ev?.assembly));
-          const evPartyIds = toNumArr(ev?.party_id ?? toStrArr(ev?.party));
-          const evGroupIds = toNumArr(ev?.group_id);
-          const evProfileIds = toStrArr(ev?.profile_ids).map((x) => String(x).trim()).filter(Boolean);
-
-          const isStateMatch = evStateIds.length === 0 || (workerStateId != null && evStateIds.includes(Number(workerStateId)));
-          const isLoksabhaMatch =
-            evLoksabhaIds.length === 0 || (workerLoksabhaId != null && evLoksabhaIds.includes(Number(workerLoksabhaId)));
-          const isAssemblyMatch =
-            evAssemblyIds.length === 0 || (workerAssemblyId != null && evAssemblyIds.includes(Number(workerAssemblyId)));
-          const isPartyMatch =
-            evPartyIds.length === 0
-              ? true
-              : workerPartyId != null && evPartyIds.includes(Number(workerPartyId));
-          const isGroupMatch = evGroupIds.length === 0 || (workerGroupId != null && evGroupIds.includes(Number(workerGroupId)));
-          const isProfileMatch = evProfileIds.length === 0 || (workerProfileId && evProfileIds.includes(workerProfileId));
-
-          return isStateMatch && isLoksabhaMatch && isAssemblyMatch && isPartyMatch && isGroupMatch && isProfileMatch;
+          return canUserSeeContent(userInfoRef.current, ev);
         })
         .filter((ev) => {
         const evEndDate = new Date(ev.end);
@@ -586,6 +514,8 @@ export default function DashboardScreen() {
     (async () => {
       if (refreshKey === 0 && !hasFetchedProfileRef.current) {
         hasFetchedProfileRef.current = true;
+        setProfileLoaded(false);
+        setIsProfileLoading(true);
         await fetchUserProfile();
         if (cancelled) return;
       } else {
@@ -593,12 +523,11 @@ export default function DashboardScreen() {
         void fetchUserProfile();
       }
 
-      // If profile still loading and not timed out, don't fetch targeted/geo posts yet.
-      if (isProfileLoading && !profileFetchTimedOut) return;
+      // Hard gate: do not fetch feed until profile is loaded from server.
+      if (!profileLoaded) return;
 
-      const state = (userInfoRef.current?.state ?? '').trim();
-      const party = (userInfoRef.current?.partyName ?? '').trim();
-      await fetchPosts(state, party);
+      // Profile is loaded; fetch posts now.
+      await fetchPosts('', '');
       if (!cancelled) setDashboardProfileLoaded(true);
     })();
     return () => {
@@ -607,12 +536,7 @@ export default function DashboardScreen() {
   }, [
     authReady,
     refreshKey,
-    isProfileLoading,
-    profileFetchTimedOut,
-    normalizedUserStateId,
-    (userInfo as any)?.group_tags,
-    userInfo?.state,
-    userInfo?.partyName,
+    profileLoaded,
     fetchUserProfile,
     fetchPosts,
   ]);
@@ -651,7 +575,7 @@ export default function DashboardScreen() {
 
   useEffect(() => {
     if (!authReady) return;
-    if (isProfileLoading && !profileFetchTimedOut) return;
+    if (!profileLoaded) return;
     fetchEvents();
     try {
       // IMPORTANT: Do not reuse a fixed channel name here.
@@ -688,7 +612,7 @@ export default function DashboardScreen() {
         }
       }
     };
-  }, [authReady, isProfileLoading, fetchEvents]);
+  }, [authReady, profileLoaded, fetchEvents]);
 
   const safePosts = Array.isArray(posts) ? posts : [];
   const safeEvents = Array.isArray(events) ? events : [];
@@ -1064,7 +988,7 @@ export default function DashboardScreen() {
                   if (retrying) return;
                   setRetrying(true);
                   try {
-                    await fetchPosts((userInfo?.state ?? '').trim(), (userInfo?.partyName ?? '').trim());
+                    await fetchPosts('', '');
                   } finally {
                     setRetrying(false);
                   }

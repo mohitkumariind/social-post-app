@@ -69,6 +69,9 @@ interface UserContextType {
   setUserInfo: React.Dispatch<React.SetStateAction<UserInfo>>;
   isLoggedIn: boolean;
   setIsLoggedIn: React.Dispatch<React.SetStateAction<boolean>>;
+  /** True only after we fetched the authenticated user's profile from Supabase. */
+  profileLoaded: boolean;
+  setProfileLoaded: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
@@ -76,9 +79,10 @@ const UserContext = createContext<UserContextType | undefined>(undefined);
 export const UserProvider = ({ children }: { children: ReactNode }) => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userInfo, setUserInfo] = useState<UserInfo>({ ...EMPTY_USER_INFO });
+  const [profileLoaded, setProfileLoaded] = useState(false);
 
   return (
-    <UserContext.Provider value={{ userInfo, setUserInfo, isLoggedIn, setIsLoggedIn }}>
+    <UserContext.Provider value={{ userInfo, setUserInfo, isLoggedIn, setIsLoggedIn, profileLoaded, setProfileLoaded }}>
       {children}
     </UserContext.Provider>
   );
