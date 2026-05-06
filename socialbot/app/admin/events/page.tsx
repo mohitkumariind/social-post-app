@@ -77,6 +77,12 @@ function toNumArrFromStrIds(v: string[]): number[] {
   return (v ?? []).map((x) => Number(x)).filter((n) => Number.isFinite(n));
 }
 
+// Simple Number Conversion Helper (strict numeric arrays)
+const toNumArr = (val: any) =>
+  !val || val === 'ALL' || (Array.isArray(val) && val.includes('ALL'))
+    ? [0]
+    : (Array.isArray(val) ? val : [val]).map((id) => Number(id));
+
 /** Multi-select dropdown with checkboxes, ALL option, and tag display */
 function MultiSelectDropdown<T extends { id: string | number }>({
   label,
@@ -653,32 +659,25 @@ export default function App() {
         category: selectedEvent.name,
         /** Must match app/dashboard graphics filter (`is_video` false or null); DB default true would hide posts + break caption sync filters. */
         is_video: false,
+        language: selectedEvent.language || 'hindi',
+        captions: batchCaptions,
+        // Only numeric columns
+        party_id: toNumArr(selectedEvent.party),
+        state_id: toNumArr(selectedEvent.state),
+        loksabha_id: toNumArr(selectedEvent.loksabha),
+        assembly_id: toNumArr(selectedEvent.assembly),
       };
-      if (selectedEvent.language) postPayload.language = selectedEvent.language;
       const targetGroupsArr = toStrArr(selectedEvent.target_groups);
-      const partyArr = toStrArr(selectedEvent.party);
-      const stateArr = toStrArr(selectedEvent.state);
-      const loksabhaArr = toStrArr(selectedEvent.loksabha);
-      const assemblyArr = toStrArr(selectedEvent.assembly);
-      const partyIdArr = toNumArrFromStrIds(partyArr);
-      const stateIdArr = toNumArrFromStrIds(stateArr);
-      const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
-      const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
       postPayload.target_groups = targetGroupsArr;
       // Priority rule: if target_groups is set, ignore geo filters on the post row.
       if (targetGroupsArr.length > 0) {
-        // Don't set party/state/loksabha/assembly.
+        postPayload.party_id = [];
+        postPayload.state_id = [];
+        postPayload.loksabha_id = [];
+        postPayload.assembly_id = [];
       } else {
-        if (partyArr.length > 0) postPayload.party = partyArr;
-        if (stateArr.length > 0) postPayload.state = stateArr;
-        if (loksabhaArr.length > 0) postPayload.loksabha = loksabhaArr;
-        if (assemblyArr.length > 0) postPayload.assembly = assemblyArr;
-        if (partyIdArr.length > 0) postPayload.party_id = partyIdArr;
-        if (stateIdArr.length > 0) postPayload.state_id = stateIdArr;
-        if (loksabhaIdArr.length > 0) postPayload.loksabha_id = loksabhaIdArr;
-        if (assemblyIdArr.length > 0) postPayload.assembly_id = assemblyIdArr;
+        // Keep numeric arrays as-is.
       }
-      postPayload.captions = batchCaptions;
       let { data: insertData, error: insertErr } = await supabase.from('posts').insert(postPayload).select('id').single();
 
       if (insertErr && batchCaptions.length > 0) {
