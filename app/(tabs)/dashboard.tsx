@@ -361,15 +361,38 @@ export default function DashboardScreen() {
       // Graphics only: not a reel (`is_video` true). Uses false OR NULL so legacy image rows (unset flag) still show.
       // NOTE: We intentionally avoid DB-side `contains(state/party, ...)` here because NULL/empty targeting
       // should be treated as "global" on the client. DB-side filters can accidentally exclude global rows.
-      // Strict numeric-ID mode: fetch recent posts and filter client-side.
-      const { data, error } = await supabase
-        .from('posts')
-        .select(
-          'id,title,image_url,category,event_date,created_at,captions,state_id,loksabha_id,assembly_id,group_id,profile_ids'
-        )
-        .or('is_video.eq.false,is_video.is.null')
-        .order('created_at', { ascending: false })
-        .limit(300);
+      // Strict numeric-ID mode: prefer numeric columns; fallback to legacy columns if DB isn't migrated yet.
+      const runNumeric = async () =>
+        await supabase
+          .from('posts')
+          .select(
+            'id,title,image_url,category,event_date,created_at,captions,state_id,loksabha_id,assembly_id,group_id,profile_ids'
+          )
+          .or('is_video.eq.false,is_video.is.null')
+          .order('created_at', { ascending: false })
+          .limit(300);
+      const runLegacy = async () =>
+        await supabase
+          .from('posts')
+          .select('id,title,image_url,category,event_date,created_at,captions,state,loksabha,assembly')
+          .or('is_video.eq.false,is_video.is.null')
+          .order('created_at', { ascending: false })
+          .limit(300);
+
+      let data: any[] | null = null;
+      let error: any = null;
+      {
+        const r = await runNumeric();
+        if (r?.error && String(r.error.message ?? '').includes('does not exist')) {
+          console.error('[gfx] posts numeric columns missing, using legacy columns:', r.error.message);
+          const legacy = await runLegacy();
+          data = (legacy as any)?.data ?? null;
+          error = (legacy as any)?.error ?? null;
+        } else {
+          data = (r as any)?.data ?? null;
+          error = (r as any)?.error ?? null;
+        }
+      }
 
       gfxLogCapped('userGeo', {
         state_id: workerStateId,
@@ -396,10 +419,11 @@ export default function DashboardScreen() {
       }
       const raw = (data || []) as PostRow[];
       const filtered = raw.filter((p) => {
-        const postStateIds = toNumArr((p as any).state_id);
-        const postLoksabhaIds = toNumArr((p as any).loksabha_id);
-        const postAssemblyIds = toNumArr((p as any).assembly_id);
-        const postGroupIds = toNumArr((p as any).group_id);
+        // Prefer numeric arrays; fallback to legacy arrays (typically numeric IDs stored as strings).
+        const postStateIds = toNumArr((p as any).state_id ?? toStrArr((p as any).state));
+        const postLoksabhaIds = toNumArr((p as any).loksabha_id ?? toStrArr((p as any).loksabha));
+        const postAssemblyIds = toNumArr((p as any).assembly_id ?? toStrArr((p as any).assembly));
+        const postGroupIds = toNumArr((p as any).group_id); // legacy has no numeric group targeting
         const postProfileIds = toStrArr((p as any).profile_ids).map((x) => String(x).trim()).filter(Boolean);
 
         const isStateMatch = postStateIds.length === 0 || (workerStateId != null && postStateIds.includes(Number(workerStateId)));
@@ -435,11 +459,33 @@ export default function DashboardScreen() {
       const workerGroupId = userProfile?.group_id ?? null;
       const workerProfileId = String(userProfile?.profile_id ?? '').trim();
 
-      const { data, error } = await supabase
-        .from('events')
-        .select('name,end,state_id,loksabha_id,assembly_id,group_id,profile_ids')
-        .order('end', { ascending: true })
-        .limit(500);
+      const runNumeric = async () =>
+        await supabase
+          .from('events')
+          .select('name,end,state_id,loksabha_id,assembly_id,group_id,profile_ids')
+          .order('end', { ascending: true })
+          .limit(500);
+      const runLegacy = async () =>
+        await supabase
+          .from('events')
+          .select('name,end,state,loksabha,assembly')
+          .order('end', { ascending: true })
+          .limit(500);
+
+      let data: any[] | null = null;
+      let error: any = null;
+      {
+        const r = await runNumeric();
+        if (r?.error && String(r.error.message ?? '').includes('does not exist')) {
+          console.error('[gfx] events numeric columns missing, using legacy columns:', r.error.message);
+          const legacy = await runLegacy();
+          data = (legacy as any)?.data ?? null;
+          error = (legacy as any)?.error ?? null;
+        } else {
+          data = (r as any)?.data ?? null;
+          error = (r as any)?.error ?? null;
+        }
+      }
       if (error) {
         setFetchError((prev) => prev ?? error.message);
         setEvents([]);
@@ -450,9 +496,9 @@ export default function DashboardScreen() {
       today.setUTCHours(0, 0, 0, 0);
       const filteredEvents = raw
         .filter((ev) => {
-          const evStateIds = toNumArr(ev?.state_id);
-          const evLoksabhaIds = toNumArr(ev?.loksabha_id);
-          const evAssemblyIds = toNumArr(ev?.assembly_id);
+          const evStateIds = toNumArr(ev?.state_id ?? toStrArr(ev?.state));
+          const evLoksabhaIds = toNumArr(ev?.loksabha_id ?? toStrArr(ev?.loksabha));
+          const evAssemblyIds = toNumArr(ev?.assembly_id ?? toStrArr(ev?.assembly));
           const evGroupIds = toNumArr(ev?.group_id);
           const evProfileIds = toStrArr(ev?.profile_ids).map((x) => String(x).trim()).filter(Boolean);
 
