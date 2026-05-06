@@ -347,13 +347,13 @@ export default function DashboardScreen() {
     if (isGlobal) return true;
 
     // Strict matching: any non-empty targeting array must include user's id
-    if (partyIds.length > 0 && !partyIds.includes(uParty)) return false;
-    if (stateIds.length > 0 && !stateIds.includes(uState)) return false;
-    if (lokIds.length > 0 && !lokIds.includes(uLok)) return false;
-    if (asmIds.length > 0 && !asmIds.includes(uAsm)) return false;
+    if (partyIds.length > 0 && !partyIds.includes(0) && !partyIds.includes(uParty)) return false;
+    if (stateIds.length > 0 && !stateIds.includes(0) && !stateIds.includes(uState)) return false;
+    if (lokIds.length > 0 && !lokIds.includes(0) && !lokIds.includes(uLok)) return false;
+    if (asmIds.length > 0 && !asmIds.includes(0) && !asmIds.includes(uAsm)) return false;
     if (groupIds.length > 0) {
       if (uGroup == null) return false;
-      if (!groupIds.includes(uGroup)) return false;
+      if (!groupIds.includes(0) && !groupIds.includes(uGroup)) return false;
     }
     if (profileIds.length > 0 && !profileIds.includes(uProfileId)) return false;
 

@@ -72,6 +72,8 @@ function toStrArr(v: string | string[] | null | undefined): string[] {
 }
 
 function toNumArrFromStrIds(v: string[]): number[] {
+  // Special case: "ALL" should be stored as numeric wildcard [0]
+  if ((v ?? []).some((x) => String(x).trim().toUpperCase() === 'ALL')) return [0];
   return (v ?? []).map((x) => Number(x)).filter((n) => Number.isFinite(n));
 }
 
@@ -492,10 +494,10 @@ export default function App() {
     const endVal = `${endDate}T23:59:59`;
     const payload: Record<string, unknown> = { name: newName, start: startVal, end: endVal, captions: [] };
     if (newLanguage) payload.language = newLanguage;
-    const partyArr = newParty.includes('ALL') ? PARTIES_DATA.map((p) => p.id) : newParty.filter(Boolean);
-    const stateArr = newState.includes('ALL') ? availableStates.map((s) => s.id) : newState.filter(Boolean);
-    const loksabhaArr = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => l.id) : newLoksabha.filter(Boolean);
-    const assemblyArr = newAssembly.includes('ALL') ? availableAssemblies.map((a) => a.id) : newAssembly.filter(Boolean);
+    const partyArr = newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
+    const stateArr = newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
+    const loksabhaArr = newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
+    const assemblyArr = newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
     const targetGroupsArr = newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
 
     const partyIdArr = toNumArrFromStrIds(partyArr);
@@ -871,10 +873,10 @@ export default function App() {
       captions: editingEvent.captions,
     };
     if (newLanguage) updatePayload.language = newLanguage;
-    const partyArr = newParty.includes('ALL') ? PARTIES_DATA.map((p) => p.id) : newParty.filter(Boolean);
-    const stateArr = newState.includes('ALL') ? availableStates.map((s) => s.id) : newState.filter(Boolean);
-    const loksabhaArr = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => l.id) : newLoksabha.filter(Boolean);
-    const assemblyArr = newAssembly.includes('ALL') ? availableAssemblies.map((a) => a.id) : newAssembly.filter(Boolean);
+    const partyArr = newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
+    const stateArr = newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
+    const loksabhaArr = newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
+    const assemblyArr = newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
     const targetGroupsArr = newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
     const partyIdArr = toNumArrFromStrIds(partyArr);
     const stateIdArr = toNumArrFromStrIds(stateArr);
