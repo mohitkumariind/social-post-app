@@ -292,12 +292,14 @@ export default function DashboardScreen() {
           instagram: String((profile as { instagram?: string }).instagram ?? prev.instagram ?? ''),
           twitter: String((profile as { twitter?: string }).twitter ?? prev.twitter ?? ''),
         }));
+        setIsProfileLoading(false);
         setProfileLoaded(true);
         return { state: '', party };
       }
     } catch (e) {
       console.error('[gfx] Profile Fetch Error: ', e);
       setProfileLoaded(false);
+      setIsProfileLoading(false);
     }
     return { state: '', party: '' };
   }, [setUserInfo, setProfileLoaded]);
@@ -467,8 +469,27 @@ export default function DashboardScreen() {
         return;
       }
       const raw = (data || []) as PostRow[];
+      let rejectedLogged = false;
       const filtered = raw.filter((p) => {
-        return canUserSeeContent(userInfoRef.current, p);
+        const ok = canUserSeeContent(userInfoRef.current, p);
+        if (!ok && !rejectedLogged) {
+          rejectedLogged = true;
+          gfxLogCapped('rejectSample', {
+            postId: (p as any)?.id ?? null,
+            party_id: (p as any)?.party_id ?? null,
+            state_id: (p as any)?.state_id ?? null,
+            loksabha_id: (p as any)?.loksabha_id ?? null,
+            assembly_id: (p as any)?.assembly_id ?? null,
+            user: {
+              state_id: (userInfoRef.current as any)?.state_id ?? null,
+              party_id: (userInfoRef.current as any)?.party_id ?? null,
+              loksabha_id: (userInfoRef.current as any)?.loksabha_id ?? null,
+              assembly_id: (userInfoRef.current as any)?.assembly_id ?? null,
+              profile_id: (userInfoRef.current as any)?.profile_id ?? '',
+            },
+          });
+        }
+        return ok;
       });
       gfxLogCapped('filterCounts', { raw: raw.length, kept: filtered.length });
       setPosts(filtered);
