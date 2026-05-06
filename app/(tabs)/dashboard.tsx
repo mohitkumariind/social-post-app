@@ -127,6 +127,7 @@ export default function DashboardScreen() {
   const stateNameToIdRef = useRef<Map<string, string>>(new Map());
   const [normalizedUserStateId, setNormalizedUserStateId] = useState<string>('');
   const [isProfileLoading, setIsProfileLoading] = useState(true);
+  const [profileFetchTimedOut, setProfileFetchTimedOut] = useState(false);
 
   const getUserStateId = React.useCallback(async (normalizedStateName: string): Promise<string> => {
     const key = String(normalizedStateName ?? '').trim().toLowerCase();
@@ -165,8 +166,23 @@ export default function DashboardScreen() {
   useEffect(() => {
     const nameOk = String(userInfo?.name ?? '').trim().length > 0;
     const stateOk = String(userInfo?.state ?? '').trim().length > 0;
-    setIsProfileLoading(!(nameOk && stateOk));
+    const loadingNow = !(nameOk && stateOk);
+    setIsProfileLoading(loadingNow);
+    if (!loadingNow) setProfileFetchTimedOut(false);
   }, [userInfo?.name, userInfo?.state]);
+
+  // Profile fetch timeout (10s): unblock so global graphics can still show.
+  useEffect(() => {
+    if (!authReady) return;
+    if (!isProfileLoading) return;
+    if (profileFetchTimedOut) return;
+    const t = setTimeout(() => {
+      console.error('[gfx] Profile Fetch Timeout: profile not ready after 10s');
+      setProfileFetchTimedOut(true);
+      setIsProfileLoading(false);
+    }, 10_000);
+    return () => clearTimeout(t);
+  }, [authReady, isProfileLoading, profileFetchTimedOut]);
 
   // Persistence logs (requested): whenever sync inputs change.
   useEffect(() => {
@@ -179,6 +195,16 @@ export default function DashboardScreen() {
       (userInfo as any)?.group_tags
     );
   }, [isProfileLoading, normalizedUserStateId, (userInfo as any)?.group_tags]);
+
+  // Debug logs for stuck state (requested)
+  useEffect(() => {
+    console.log('[gfx] Current Profile State:', {
+      name: (userInfo as any)?.name,
+      state: (userInfo as any)?.state,
+      loading: isProfileLoading,
+      timedOut: profileFetchTimedOut,
+    });
+  }, [isProfileLoading, profileFetchTimedOut, userInfo?.name, userInfo?.state]);
 
   const clearDashboardExpandParams = React.useCallback(() => {
     // `setParams` has differed across Expo Router versions / navigators.
@@ -260,7 +286,7 @@ export default function DashboardScreen() {
         return { state: stateStr, party };
       }
     } catch (e) {
-      if (__DEV__) console.error('fetchUserProfile failed');
+      console.error('[gfx] Profile Fetch Error: ', e);
     }
     return { state: '', party: '' };
   }, [setUserInfo]);
@@ -591,19 +617,21 @@ export default function DashboardScreen() {
     if (!authReady) return;
     let cancelled = false;
     (async () => {
-      // Loading guard: don't fetch posts until profile is ready.
-      if (isProfileLoading) return;
-
       if (refreshKey === 0 && !hasFetchedProfileRef.current) {
         hasFetchedProfileRef.current = true;
-        const { state, party } = (await fetchUserProfile()) as { state: string; party: string };
+        await fetchUserProfile();
         if (cancelled) return;
-        await fetchPosts(state, party);
       } else {
-        const state = (userInfo?.state ?? '').trim();
-        const party = (userInfo?.partyName ?? '').trim();
-        await fetchPosts(state, party);
+        // keep latest profile in sync (best-effort) but don't block UI
+        void fetchUserProfile();
       }
+
+      // If profile still loading and not timed out, don't fetch targeted/geo posts yet.
+      if (isProfileLoading && !profileFetchTimedOut) return;
+
+      const state = (userInfoRef.current?.state ?? '').trim();
+      const party = (userInfoRef.current?.partyName ?? '').trim();
+      await fetchPosts(state, party);
       if (!cancelled) setDashboardProfileLoaded(true);
     })();
     return () => {
@@ -613,6 +641,7 @@ export default function DashboardScreen() {
     authReady,
     refreshKey,
     isProfileLoading,
+    profileFetchTimedOut,
     normalizedUserStateId,
     (userInfo as any)?.group_tags,
     userInfo?.state,
@@ -654,7 +683,8 @@ export default function DashboardScreen() {
   }, [fetchUserProfile]);
 
   useEffect(() => {
-    if (!authReady || isProfileLoading) return;
+    if (!authReady) return;
+    if (isProfileLoading && !profileFetchTimedOut) return;
     fetchEvents();
     try {
       // IMPORTANT: Do not reuse a fixed channel name here.
