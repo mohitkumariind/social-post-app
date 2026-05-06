@@ -94,6 +94,19 @@ async function fetchMembersForGroupId(admin: SupabaseClient, groupId: number) {
   return out;
 }
 
+async function allocateNextGroupId(admin: SupabaseClient): Promise<number> {
+  const { data, error } = await admin
+    .from('profiles')
+    .select('group_id')
+    .not('group_id', 'is', null)
+    .order('group_id', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const maxId = toNum((data as any)?.group_id) ?? 0;
+  return maxId + 1;
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
@@ -179,11 +192,14 @@ export async function POST(request: NextRequest) {
   }
 
   const tag = String(body.tag ?? '').trim();
-  const groupId = tag ? Number(tag) : NaN;
+  const parsed = tag ? Number(tag) : NaN;
   const userIds = Array.isArray(body.userIds) ? body.userIds.map((x) => String(x).trim()).filter(Boolean) : [];
 
-  if (!tag || !Number.isFinite(groupId)) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
+  if (!tag) return NextResponse.json({ error: 'Missing group name/id' }, { status: 400 });
   if (userIds.length === 0) return NextResponse.json({ error: 'Select at least one user' }, { status: 400 });
+
+  // Allow "group name" input in UI. If it's not numeric, allocate next numeric group_id.
+  const groupId = Number.isFinite(parsed) ? parsed : await allocateNextGroupId(admin);
 
   const { error: upErr } = await admin.from('profiles').update({ group_id: groupId }).in('id', userIds);
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });

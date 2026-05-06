@@ -471,9 +471,14 @@ export default function GroupManagementPage() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ tag, userIds }),
                       });
-                      const json = (await res.json().catch(() => ({}))) as { error?: string; updated?: number };
+                      const json = (await res.json().catch(() => ({}))) as {
+                        error?: string;
+                        updated?: number;
+                        group_id?: number;
+                      };
                       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-                      setToast(`Created “${tag}” (${json.updated ?? 0} users)`);
+                      const gid = typeof json.group_id === 'number' ? json.group_id : tag;
+                      setToast(`Created “${tag}” → Group ID ${gid} (${json.updated ?? 0} users)`);
                       setCreateOpen(false);
                       await loadGroups();
                     } catch (e2) {
