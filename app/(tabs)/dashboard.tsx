@@ -2,6 +2,7 @@ import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as Updates from 'expo-updates';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { downloadMediaToCache } from '../../lib/mediaCache';
 import {
@@ -70,6 +71,19 @@ function toStrArr(v: unknown): string[] {
   if (Array.isArray(v)) return v.map((x) => String(x)).filter(Boolean);
   const s = String(v).trim();
   return s ? [s] : [];
+}
+
+function gfxLogCapped(key: string, payload: unknown, cap = 8) {
+  const g: any = globalThis as any;
+  const k = `__gfx_${key}`;
+  g[k] = typeof g[k] === 'number' ? g[k] : 0;
+  if (g[k] >= cap) return;
+  try {
+    console.log(`[gfx] ${key}`, JSON.stringify(payload));
+  } catch {
+    console.log(`[gfx] ${key}`, String(payload));
+  }
+  g[k] += 1;
 }
 
 /** Align with edit-profile mandatory fields + party selection */
@@ -240,6 +254,17 @@ export default function DashboardScreen() {
         setFetchError(null);
         setLoading(true);
       }
+      gfxLogCapped(
+        'updates',
+        {
+          runtimeVersion: (Updates as any).runtimeVersion ?? null,
+          channel: (Updates as any).channel ?? 'unknown',
+          updateId: Updates.updateId ?? null,
+          isEmbeddedLaunch: Updates.isEmbeddedLaunch,
+          isEmergencyLaunch: Updates.isEmergencyLaunch,
+        },
+        3
+      );
       const normalizedUserState = normalizeForCompare(userState || '');
       const normalizedUserParty = normalizeForCompare(normalizePartyId(userParty || '') || userParty || '');
       // Prefer the mapped state_id computed from the current profile (updated on profile change).
@@ -304,7 +329,19 @@ export default function DashboardScreen() {
       let error: any = null;
       {
         const [rTargeted, rGeo, rGlobal] = await Promise.all([runTargetedQuery(), runGeoQuery(), runGlobalQuery()]);
-        // debug logs removed
+        gfxLogCapped('fetchCounts', {
+          targeted: (rTargeted as any)?.data?.length ?? 0,
+          geo: (rGeo as any)?.data?.length ?? 0,
+          global: (rGlobal as any)?.data?.length ?? 0,
+        });
+        gfxLogCapped('userGeo', {
+          normalizedUserState,
+          normalizedUserStateId,
+          normalizedUserParty,
+          userLoksabhaId,
+          userAssemblyId,
+          userGroupTagsCount: userGroupTags.length,
+        });
         const errs = [rTargeted?.error, rGeo?.error, rGlobal?.error].filter(Boolean);
         error = errs[0] ?? null;
         const merged = [...(rTargeted?.data ?? []), ...(rGeo?.data ?? []), ...(rGlobal?.data ?? [])] as any[];
@@ -402,6 +439,7 @@ export default function DashboardScreen() {
 
         return true;
       });
+      gfxLogCapped('filterCounts', { raw: raw.length, kept: filtered.length });
       setPosts(filtered);
     } catch (err) {
       if (reqId !== fetchPostsReqIdRef.current) return;
