@@ -154,6 +154,7 @@ export default function LoginScreen() {
         setUserInfo((prev) => ({
           ...prev,
           ...baseUser,
+          profile_id: sbUser.id,
           language: langRaw,
           partyName: partyCanon,
           name: String(row.name ?? '').trim() || baseUser.name,
@@ -165,6 +166,12 @@ export default function LoginScreen() {
               : row.state_id != null
                 ? Number(row.state_id)
                 : prev.state_id,
+          group_id:
+            typeof row.group_id === 'number'
+              ? row.group_id
+              : row.group_id != null
+                ? Number(row.group_id)
+                : prev.group_id,
           loksabha_id:
             typeof row.loksabha_id === 'number'
               ? row.loksabha_id

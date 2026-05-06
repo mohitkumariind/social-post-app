@@ -45,11 +45,18 @@ type PostRow = {
   image_url: string;
   category: string;
   event_date?: string;
+  // Legacy targeting (string arrays)
   party?: string[] | string;
   state?: string[] | string;
   loksabha?: string[] | string;
   assembly?: string[] | string;
   target_groups?: string[] | string;
+  // Numeric targeting arrays (new)
+  state_id?: number[] | number | null;
+  loksabha_id?: number[] | number | null;
+  assembly_id?: number[] | number | null;
+  group_id?: number[] | number | null;
+  profile_ids?: string[] | string | null;
   captions?: string | string[];
 };
 
@@ -71,6 +78,13 @@ function toStrArr(v: unknown): string[] {
   if (Array.isArray(v)) return v.map((x) => String(x)).filter(Boolean);
   const s = String(v).trim();
   return s ? [s] : [];
+}
+
+function toNumArr(v: unknown): number[] {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+  const n = Number(v);
+  return Number.isFinite(n) ? [n] : [];
 }
 
 function gfxLogCapped(key: string, payload: unknown, cap = 8) {
@@ -242,7 +256,7 @@ export default function DashboardScreen() {
     [dailyLocalByUrl]
   );
 
-  /** Fetch user state & party from profiles table. Runs only after auth is ready. */
+  /** Fetch user numeric IDs from profiles table. Runs only after auth is ready. */
   const fetchUserProfile = React.useCallback(async () => {
     try {
       await supabase.auth.refreshSession();
@@ -253,40 +267,53 @@ export default function DashboardScreen() {
       const { data: profile } = await supabase
         .from('profiles')
         .select(
-          'state, state_id, language, group_tags, loksabha_id, loksabha, assembly_id, assembly, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
+          'id, state_id, loksabha_id, assembly_id, group_id, language, party, name, phone, avatar_url, designation1, designation2, designation3, designation4, whatsapp, facebook, instagram, twitter'
         )
         .eq('id', userId)
         .single();
 
       if (profile) {
         const langRaw = String((profile as { language?: string }).language ?? '').trim();
-        const groupTags = Array.isArray((profile as any).group_tags)
-          ? ((profile as any).group_tags as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean)
-          : [];
         const rawParty = String(profile.party ?? '').trim();
         const party = normalizePartyId(rawParty) || rawParty;
-        const stateStr = String(profile.state ?? '').trim();
         const stateIdFromDb =
           typeof (profile as any).state_id === 'number'
             ? (profile as any).state_id
             : (profile as any).state_id != null
               ? Number((profile as any).state_id)
               : null;
+        const lokIdFromDb =
+          typeof (profile as any).loksabha_id === 'number'
+            ? (profile as any).loksabha_id
+            : (profile as any).loksabha_id != null
+              ? Number((profile as any).loksabha_id)
+              : null;
+        const asmIdFromDb =
+          typeof (profile as any).assembly_id === 'number'
+            ? (profile as any).assembly_id
+            : (profile as any).assembly_id != null
+              ? Number((profile as any).assembly_id)
+              : null;
+        const groupIdFromDb =
+          typeof (profile as any).group_id === 'number'
+            ? (profile as any).group_id
+            : (profile as any).group_id != null
+              ? Number((profile as any).group_id)
+              : null;
         const nameFromDb = String(profile.name ?? '').trim();
         const phoneFromDb = String(profile.phone ?? '').trim();
         const avatarUrl = String((profile as { avatar_url?: string }).avatar_url ?? '').trim();
         setUserInfo((prev) => ({
           ...prev,
+          profile_id: String((profile as any).id ?? userId),
           language: langRaw || prev.language,
-          group_tags: groupTags,
           name: nameFromDb,
           phone: phoneFromDb,
-          state: stateStr || prev.state,
+          state: prev.state, // unused in strict numeric-id mode
           state_id: Number.isNaN(stateIdFromDb as number) ? prev.state_id : stateIdFromDb,
-          loksabha_id: profile.loksabha_id ?? prev.loksabha_id,
-          loksabha: String((profile as { loksabha?: string }).loksabha ?? prev.loksabha ?? ''),
-          assembly_id: profile.assembly_id ?? prev.assembly_id,
-          assembly: String((profile as { assembly?: string }).assembly ?? prev.assembly ?? ''),
+          loksabha_id: Number.isNaN(lokIdFromDb as number) ? prev.loksabha_id : lokIdFromDb,
+          assembly_id: Number.isNaN(asmIdFromDb as number) ? prev.assembly_id : asmIdFromDb,
+          group_id: Number.isNaN(groupIdFromDb as number) ? (prev as any).group_id : groupIdFromDb,
           partyName: party || prev.partyName,
           avatar_url: avatarUrl,
           designation1: String((profile as { designation1?: string }).designation1 ?? prev.designation1 ?? ''),
@@ -298,17 +325,7 @@ export default function DashboardScreen() {
           instagram: String((profile as { instagram?: string }).instagram ?? prev.instagram ?? ''),
           twitter: String((profile as { twitter?: string }).twitter ?? prev.twitter ?? ''),
         }));
-
-        // Initial sync (requested): if state name exists but state_id is null, resolve it and update local userInfo.
-        if (stateStr && (stateIdFromDb == null || Number.isNaN(stateIdFromDb as number))) {
-          const resolved = await getUserStateId(normalizeForCompare(stateStr));
-          const resolvedNum = resolved ? Number(resolved) : NaN;
-          if (!Number.isNaN(resolvedNum)) {
-            setUserInfo((prev) => ({ ...prev, state_id: resolvedNum }));
-            setNormalizedUserStateId(String(resolvedNum));
-          }
-        }
-        return { state: stateStr, party };
+        return { state: '', party };
       }
     } catch (e) {
       console.error('[gfx] Profile Fetch Error: ', e);
@@ -334,90 +351,33 @@ export default function DashboardScreen() {
         },
         3
       );
-      const normalizedUserState = normalizeForCompare(userState || '');
-      const normalizedUserParty = normalizeForCompare(normalizePartyId(userParty || '') || userParty || '');
-      // Use mapped state_id computed from `userProfile.state`.
-      const resolvedUserStateId = normalizedUserStateId;
-      const userLoksabhaId = userInfoRef.current?.loksabha_id;
-      const userAssemblyId = userInfoRef.current?.assembly_id;
-      const userGroupTags = Array.isArray(userInfoRef.current?.group_tags)
-        ? userInfoRef.current.group_tags.map((x) => String(x).trim()).filter(Boolean)
-        : [];
+      const userProfile = userInfoRef.current as any;
+      const workerStateId = userProfile?.state_id ?? null;
+      const workerLoksabhaId = userProfile?.loksabha_id ?? null;
+      const workerAssemblyId = userProfile?.assembly_id ?? null;
+      const workerGroupId = userProfile?.group_id ?? null;
+      const workerProfileId = String(userProfile?.profile_id ?? '').trim();
 
       // Graphics only: not a reel (`is_video` true). Uses false OR NULL so legacy image rows (unset flag) still show.
       // NOTE: We intentionally avoid DB-side `contains(state/party, ...)` here because NULL/empty targeting
       // should be treated as "global" on the client. DB-side filters can accidentally exclude global rows.
-      const runGeoQuery = async () => {
-        let q = supabase
-          .from('posts')
-          .select('id,title,image_url,category,event_date,party,state,loksabha,assembly,target_groups,created_at,captions')
-          .or('is_video.eq.false,is_video.is.null')
-          .order('created_at', { ascending: false });
+      // Strict numeric-ID mode: fetch recent posts and filter client-side.
+      const { data, error } = await supabase
+        .from('posts')
+        .select(
+          'id,title,image_url,category,event_date,created_at,captions,state_id,loksabha_id,assembly_id,group_id,profile_ids'
+        )
+        .or('is_video.eq.false,is_video.is.null')
+        .order('created_at', { ascending: false })
+        .limit(300);
 
-        // Only non-tag-targeted content in geo query (direct mapping handled separately).
-        q = q.or('target_groups.is.null,target_groups.eq.{}');
-        return await q;
-      };
-
-      const runTargetedQuery = async () => {
-        if (userGroupTags.length === 0) return { data: [], error: null } as any;
-        const q = supabase
-          .from('posts')
-          .select('id,title,image_url,category,event_date,party,state,loksabha,assembly,target_groups,created_at,captions')
-          .or('is_video.eq.false,is_video.is.null')
-          .overlaps('target_groups', userGroupTags)
-          .order('created_at', { ascending: false });
-        return await q;
-      };
-
-      const runGlobalQuery = async () => {
-        // "Global" means all targeting arrays are empty (show to all).
-        const q = supabase
-          .from('posts')
-          .select('id,title,image_url,category,event_date,party,state,loksabha,assembly,target_groups,created_at,captions')
-          .or('is_video.eq.false,is_video.is.null')
-          .eq('state', '{}')
-          .eq('party', '{}')
-          .eq('loksabha', '{}')
-          .eq('assembly', '{}')
-          .eq('target_groups', '{}')
-          .order('created_at', { ascending: false });
-        return await q;
-      };
-
-      // Multi-query strategy:
-      // - Direct mapping content (target_groups overlap) should be visible regardless of geo/party.
-      // - Geo content is fetched via contains(state/party) and requires target_groups empty.
-      // - Global content (all targeting arrays empty) is fetched explicitly.
-      let data: any[] | null = null;
-      let error: any = null;
-      {
-        const [rTargeted, rGeo, rGlobal] = await Promise.all([runTargetedQuery(), runGeoQuery(), runGlobalQuery()]);
-        gfxLogCapped('fetchCounts', {
-          targeted: (rTargeted as any)?.data?.length ?? 0,
-          geo: (rGeo as any)?.data?.length ?? 0,
-          global: (rGlobal as any)?.data?.length ?? 0,
-        });
-        gfxLogCapped('userGeo', {
-          normalizedUserState,
-          normalizedUserStateId: resolvedUserStateId,
-          normalizedUserParty,
-          userLoksabhaId,
-          userAssemblyId,
-          userGroupTagsCount: userGroupTags.length,
-        });
-        const errs = [rTargeted?.error, rGeo?.error, rGlobal?.error].filter(Boolean);
-        error = errs[0] ?? null;
-        const merged = [...(rTargeted?.data ?? []), ...(rGeo?.data ?? []), ...(rGlobal?.data ?? [])] as any[];
-        // Deduplicate by id
-        const byId = new Map<string, any>();
-        for (const row of merged) {
-          const id = String(row?.id ?? '').trim();
-          if (!id) continue;
-          if (!byId.has(id)) byId.set(id, row);
-        }
-        data = Array.from(byId.values());
-      }
+      gfxLogCapped('userGeo', {
+        state_id: workerStateId,
+        loksabha_id: workerLoksabhaId,
+        assembly_id: workerAssemblyId,
+        group_id: workerGroupId,
+        profile_id: workerProfileId,
+      });
 
       if (reqId !== fetchPostsReqIdRef.current) return;
       if (error) {
@@ -436,80 +396,22 @@ export default function DashboardScreen() {
       }
       const raw = (data || []) as PostRow[];
       const filtered = raw.filter((p) => {
-        // Always treat NULL/undefined targeting columns as empty arrays.
-        const postStates = toStrArr((p as any).state ?? []).map((s) => normalizeForCompare(s));
-        const postParties = toStrArr((p as any).party ?? []).map((pa) => normalizeForCompare(normalizePartyId(pa) || pa));
-        const postLoksabhas = toStrArr((p as any).loksabha ?? []).map((x) => String(x).trim()).filter(Boolean);
-        const postAssemblies = toStrArr((p as any).assembly ?? []).map((x) => String(x).trim()).filter(Boolean);
-        const postTargetGroups = toStrArr((p as any).target_groups ?? []).map((x) => String(x).trim()).filter(Boolean);
+        const postStateIds = toNumArr((p as any).state_id);
+        const postLoksabhaIds = toNumArr((p as any).loksabha_id);
+        const postAssemblyIds = toNumArr((p as any).assembly_id);
+        const postGroupIds = toNumArr((p as any).group_id);
+        const postProfileIds = toStrArr((p as any).profile_ids).map((x) => String(x).trim()).filter(Boolean);
 
-        /**
-         * Priority rule (must match admin behavior):
-         * - If `post.target_groups` is set (non-empty), it OVERRIDES geo targeting.
-         *   Only show to users whose `profiles.group_tags` intersects the post target groups.
-         * - Otherwise, apply geo targeting (state/party/loksabha/assembly) with "empty means global".
-         */
-        // Force match (requested)
-        const isTargetedMatch =
-          ((p as any).target_groups?.length > 0 && userInfoRef.current?.group_tags?.length > 0)
-            ? ((p as any).target_groups as unknown[]).some((tg) =>
-                (userInfoRef.current!.group_tags as string[]).includes(String(tg))
-              )
-            : false;
+        const isStateMatch = postStateIds.length === 0 || (workerStateId != null && postStateIds.includes(Number(workerStateId)));
+        const isLoksabhaMatch =
+          postLoksabhaIds.length === 0 || (workerLoksabhaId != null && postLoksabhaIds.includes(Number(workerLoksabhaId)));
+        const isAssemblyMatch =
+          postAssemblyIds.length === 0 || (workerAssemblyId != null && postAssemblyIds.includes(Number(workerAssemblyId)));
+        const isGroupMatch = postGroupIds.length === 0 || (workerGroupId != null && postGroupIds.includes(Number(workerGroupId)));
+        const isProfileMatch = postProfileIds.length === 0 || (workerProfileId && postProfileIds.includes(workerProfileId));
 
-        if (postTargetGroups.length > 0) {
-          const userProfile = userInfoRef.current ?? ({} as any);
-          const userTags = Array.isArray((userProfile as any).group_tags)
-            ? ((userProfile as any).group_tags as unknown[]).map((x) => String(x).trim()).filter(Boolean)
-            : [];
-
-          if (userTags.length === 0) return false;
-          const userSet = new Set(userTags.map((x) => x.toLowerCase()));
-          return isTargetedMatch || postTargetGroups.some((tg) => userSet.has(String(tg).toLowerCase()));
-        }
-
-        // B) Geography/Party fallback (when target_groups empty)
-        // If all targeting arrays are empty, treat as global (show to all)
-        const isFullyGlobal =
-          postTargetGroups.length === 0 &&
-          postStates.length === 0 &&
-          postParties.length === 0 &&
-          postLoksabhas.length === 0 &&
-          postAssemblies.length === 0;
-        if (isFullyGlobal) return true;
-
-        // State targeting:
-        // - If post state list is empty => global.
-        // - If post states look like numeric IDs, compare against user's mapped state_id.
-        // - Otherwise compare against normalized state name.
-        const postStatesAreIds = postStates.length > 0 && postStates.every((s) => /^[0-9]+$/.test(String(s)));
-        const isStateMatch =
-          postStates.length === 0 ||
-          // If post uses numeric IDs but we couldn't resolve user's state_id, don't block everything.
-          (postStatesAreIds && !resolvedUserStateId) ||
-          postStates.some((s) => String(s) === String(resolvedUserStateId)) ||
-          (!resolvedUserStateId && (!normalizedUserState || postStates.includes(normalizedUserState)));
-        if (!isStateMatch) return false;
-
-        // Party: if post.party is empty => all parties. Otherwise must include user's party.
-        // Same rule for party: if user party missing, don't block.
-        const partyMatch = postParties.length === 0 || !normalizedUserParty || postParties.includes(normalizedUserParty);
-        if (!partyMatch) return false;
-
-        // Lok Sabha targeting: if post is targeted but user has no loksabha_id, don't block.
-        // (User profile may be incomplete; they should still see state/party matched content.)
-        if (postLoksabhas.length > 0) {
-          const userLokId = userLoksabhaId == null ? '' : String(userLoksabhaId).trim();
-          if (userLokId && !postLoksabhas.includes(userLokId)) return false;
-        }
-
-        // Assembly targeting: same rule as Lok Sabha.
-        if (postAssemblies.length > 0) {
-          const userAsmId = userAssemblyId == null ? '' : String(userAssemblyId).trim();
-          if (userAsmId && !postAssemblies.includes(userAsmId)) return false;
-        }
-
-        return true;
+        // Global content only when all arrays empty => these checks naturally return true.
+        return isStateMatch && isLoksabhaMatch && isAssemblyMatch && isGroupMatch && isProfileMatch;
       });
       gfxLogCapped('filterCounts', { raw: raw.length, kept: filtered.length });
       setPosts(filtered);
@@ -526,94 +428,43 @@ export default function DashboardScreen() {
 
   const fetchEvents = async () => {
     try {
-      const normalizedUserState = normalizeForCompare((userInfo?.state ?? '').trim());
-      const normalizedUserParty = normalizeForCompare(
-        normalizePartyId((userInfo?.partyName ?? '').trim()) || (userInfo?.partyName ?? '').trim()
-      );
-      const userGroupTags = Array.isArray(userInfo?.group_tags)
-        ? userInfo.group_tags.map((x) => String(x).trim()).filter(Boolean)
-        : [];
+      const userProfile = userInfoRef.current as any;
+      const workerStateId = userProfile?.state_id ?? null;
+      const workerLoksabhaId = userProfile?.loksabha_id ?? null;
+      const workerAssemblyId = userProfile?.assembly_id ?? null;
+      const workerGroupId = userProfile?.group_id ?? null;
+      const workerProfileId = String(userProfile?.profile_id ?? '').trim();
 
-      const runTargeted = async () => {
-        if (userGroupTags.length === 0) return { data: [], error: null } as any;
-        return await supabase
-          .from('events')
-          .select('name, end, party, state, loksabha, assembly, target_groups')
-          .overlaps('target_groups', userGroupTags);
-      };
-      const runGeo = async () => {
-        let q = supabase
-          .from('events')
-          .select('name, end, party, state, loksabha, assembly, target_groups')
-          .or('target_groups.is.null,target_groups.eq.{}');
-        // NOTE: Avoid DB-side geo filters here; NULL/empty targeting must remain eligible (treated as global on client).
-        return await q;
-      };
-      const runGlobal = async () => {
-        return await supabase
-          .from('events')
-          .select('name, end, party, state, loksabha, assembly, target_groups')
-          .eq('state', '{}')
-          .eq('party', '{}')
-          .eq('loksabha', '{}')
-          .eq('assembly', '{}')
-          .eq('target_groups', '{}');
-      };
-
-      const [rT, rG, rAll] = await Promise.all([runTargeted(), runGeo(), runGlobal()]);
-      const error = (rT as any).error ?? (rG as any).error ?? (rAll as any).error ?? null;
+      const { data, error } = await supabase
+        .from('events')
+        .select('name,end,state_id,loksabha_id,assembly_id,group_id,profile_ids')
+        .order('end', { ascending: true })
+        .limit(500);
       if (error) {
         setFetchError((prev) => prev ?? error.message);
         setEvents([]);
         return;
       }
-      const merged = [...(((rT as any).data ?? []) as any[]), ...(((rG as any).data ?? []) as any[]), ...(((rAll as any).data ?? []) as any[])]
-        .filter(Boolean);
-      const byName = new Map<string, any>();
-      for (const row of merged) {
-        const name = String(row?.name ?? '').trim();
-        if (!name) continue;
-        if (!byName.has(name)) byName.set(name, row);
-      }
-      const raw = Array.from(byName.values()) as any[];
+      const raw = ((data ?? []) as any[]).filter(Boolean);
       const today = new Date();
       today.setUTCHours(0, 0, 0, 0);
       const filteredEvents = raw
         .filter((ev) => {
-          // targeting filter (same priority rules as posts)
-          const evTargetGroups = toStrArr(ev?.target_groups);
-          const evStates = toStrArr(ev?.state).map((s) => normalizeForCompare(s));
-          const evParties = toStrArr(ev?.party).map((p) => normalizeForCompare(normalizePartyId(p) || p));
-          const evLoksabha = toStrArr(ev?.loksabha).map((x) => String(x).trim()).filter(Boolean);
-          const evAssembly = toStrArr(ev?.assembly).map((x) => String(x).trim()).filter(Boolean);
+          const evStateIds = toNumArr(ev?.state_id);
+          const evLoksabhaIds = toNumArr(ev?.loksabha_id);
+          const evAssemblyIds = toNumArr(ev?.assembly_id);
+          const evGroupIds = toNumArr(ev?.group_id);
+          const evProfileIds = toStrArr(ev?.profile_ids).map((x) => String(x).trim()).filter(Boolean);
 
-          if (evTargetGroups.length > 0) {
-            if (userGroupTags.length === 0) return false;
-            const userSet = new Set(userGroupTags.map((x) => x.toLowerCase()));
-            if (!evTargetGroups.some((tg) => userSet.has(String(tg).toLowerCase()))) return false;
-          } else {
-            const isFullyGlobal =
-              evTargetGroups.length === 0 &&
-              evStates.length === 0 &&
-              evParties.length === 0 &&
-              evLoksabha.length === 0 &&
-              evAssembly.length === 0;
-            if (!isFullyGlobal) {
-              const stateOk = evStates.length === 0 || (!!normalizedUserState && evStates.includes(normalizedUserState));
-              if (!stateOk) return false;
-              const partyOk = evParties.length === 0 || (!!normalizedUserParty && evParties.includes(normalizedUserParty));
-              if (!partyOk) return false;
-              if (evLoksabha.length > 0) {
-                const userLokId = userInfo?.loksabha_id == null ? '' : String(userInfo.loksabha_id).trim();
-                if (!userLokId || !evLoksabha.includes(userLokId)) return false;
-              }
-              if (evAssembly.length > 0) {
-                const userAsmId = userInfo?.assembly_id == null ? '' : String(userInfo.assembly_id).trim();
-                if (!userAsmId || !evAssembly.includes(userAsmId)) return false;
-              }
-            }
-          }
-          return true;
+          const isStateMatch = evStateIds.length === 0 || (workerStateId != null && evStateIds.includes(Number(workerStateId)));
+          const isLoksabhaMatch =
+            evLoksabhaIds.length === 0 || (workerLoksabhaId != null && evLoksabhaIds.includes(Number(workerLoksabhaId)));
+          const isAssemblyMatch =
+            evAssemblyIds.length === 0 || (workerAssemblyId != null && evAssemblyIds.includes(Number(workerAssemblyId)));
+          const isGroupMatch = evGroupIds.length === 0 || (workerGroupId != null && evGroupIds.includes(Number(workerGroupId)));
+          const isProfileMatch = evProfileIds.length === 0 || (workerProfileId && evProfileIds.includes(workerProfileId));
+
+          return isStateMatch && isLoksabhaMatch && isAssemblyMatch && isGroupMatch && isProfileMatch;
         })
         .filter((ev) => {
         const evEndDate = new Date(ev.end);

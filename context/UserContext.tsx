@@ -1,6 +1,8 @@
 import React, { createContext, ReactNode, useContext, useState } from 'react';
 
 export interface UserInfo {
+  /** Supabase auth user id (`profiles.id`) */
+  profile_id: string;
   /** Selected app language (mirrors `profiles.language`, and LanguageContext). */
   language: string;
   name: string;
@@ -29,9 +31,12 @@ export interface UserInfo {
   instagram: string;
   /** Direct mapping tags: `profiles.group_tags` */
   group_tags: string[];
+  /** Maps to `profiles.group_id` (numeric id) */
+  group_id: number | null;
 }
 
 export const EMPTY_USER_INFO: UserInfo = {
+  profile_id: '',
   language: '',
   name: '',
   phone: '',
@@ -53,6 +58,7 @@ export const EMPTY_USER_INFO: UserInfo = {
   twitter: '',
   instagram: '',
   group_tags: [],
+  group_id: null,
 };
 
 interface UserContextType {
