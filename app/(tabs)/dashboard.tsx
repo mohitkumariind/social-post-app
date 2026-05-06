@@ -125,7 +125,8 @@ export default function DashboardScreen() {
   const safeUserInfo = userInfo ?? { name: '', phone: '', state: '', partyName: '' };
   const realtimeChannelRef = useRef<any>(null);
   const stateNameToIdRef = useRef<Map<string, string>>(new Map());
-  const normalizedUserStateIdRef = useRef<string>('');
+  const [normalizedUserStateId, setNormalizedUserStateId] = useState<string>('');
+  const [isProfileLoading, setIsProfileLoading] = useState(true);
 
   const getUserStateId = React.useCallback(async (normalizedStateName: string): Promise<string> => {
     const key = String(normalizedStateName ?? '').trim().toLowerCase();
@@ -153,14 +154,31 @@ export default function DashboardScreen() {
     (async () => {
       const id = stateName ? await getUserStateId(stateName) : '';
       if (cancelled) return;
-      normalizedUserStateIdRef.current = id;
-      // Ensure graphics refetch after remap (state name -> id).
-      setRefreshKey((p) => p + 1);
+      setNormalizedUserStateId(id);
     })();
     return () => {
       cancelled = true;
     };
   }, [userInfo?.state, getUserStateId]);
+
+  // Profile loading guard: block fetch until name + state exist.
+  useEffect(() => {
+    const nameOk = String(userInfo?.name ?? '').trim().length > 0;
+    const stateOk = String(userInfo?.state ?? '').trim().length > 0;
+    setIsProfileLoading(!(nameOk && stateOk));
+  }, [userInfo?.name, userInfo?.state]);
+
+  // Persistence logs (requested): whenever sync inputs change.
+  useEffect(() => {
+    console.log(
+      '[gfx] Sync Check - ProfileReady:',
+      !isProfileLoading,
+      'StateID:',
+      normalizedUserStateId,
+      'GroupTags:',
+      (userInfo as any)?.group_tags
+    );
+  }, [isProfileLoading, normalizedUserStateId, (userInfo as any)?.group_tags]);
 
   const clearDashboardExpandParams = React.useCallback(() => {
     // `setParams` has differed across Expo Router versions / navigators.
@@ -267,13 +285,8 @@ export default function DashboardScreen() {
       );
       const normalizedUserState = normalizeForCompare(userState || '');
       const normalizedUserParty = normalizeForCompare(normalizePartyId(userParty || '') || userParty || '');
-      // Prefer the mapped state_id computed from the current profile (updated on profile change).
-      const normalizedUserStateId =
-        normalizedUserState && normalizeForCompare(String(userInfoRef.current?.state ?? '')) === normalizedUserState
-          ? normalizedUserStateIdRef.current
-          : normalizedUserState
-            ? await getUserStateId(normalizedUserState)
-            : '';
+      // Use mapped state_id computed from `userProfile.state`.
+      const resolvedUserStateId = normalizedUserStateId;
       const userLoksabhaId = userInfoRef.current?.loksabha_id;
       const userAssemblyId = userInfoRef.current?.assembly_id;
       const userGroupTags = Array.isArray(userInfoRef.current?.group_tags)
@@ -336,7 +349,7 @@ export default function DashboardScreen() {
         });
         gfxLogCapped('userGeo', {
           normalizedUserState,
-          normalizedUserStateId,
+          normalizedUserStateId: resolvedUserStateId,
           normalizedUserParty,
           userLoksabhaId,
           userAssemblyId,
@@ -385,6 +398,14 @@ export default function DashboardScreen() {
          *   Only show to users whose `profiles.group_tags` intersects the post target groups.
          * - Otherwise, apply geo targeting (state/party/loksabha/assembly) with "empty means global".
          */
+        // Force match (requested)
+        const isTargetedMatch =
+          ((p as any).target_groups?.length > 0 && userInfoRef.current?.group_tags?.length > 0)
+            ? ((p as any).target_groups as unknown[]).some((tg) =>
+                (userInfoRef.current!.group_tags as string[]).includes(String(tg))
+              )
+            : false;
+
         if (postTargetGroups.length > 0) {
           const userProfile = userInfoRef.current ?? ({} as any);
           const userTags = Array.isArray((userProfile as any).group_tags)
@@ -393,7 +414,7 @@ export default function DashboardScreen() {
 
           if (userTags.length === 0) return false;
           const userSet = new Set(userTags.map((x) => x.toLowerCase()));
-          return postTargetGroups.some((tg) => userSet.has(String(tg).toLowerCase()));
+          return isTargetedMatch || postTargetGroups.some((tg) => userSet.has(String(tg).toLowerCase()));
         }
 
         // B) Geography/Party fallback (when target_groups empty)
@@ -411,13 +432,11 @@ export default function DashboardScreen() {
         // - If post states look like numeric IDs, compare against user's mapped state_id.
         // - Otherwise compare against normalized state name.
         const postStatesAreIds = postStates.length > 0 && postStates.every((s) => /^[0-9]+$/.test(String(s)));
-        const stateMatch =
+        const isStateMatch =
           postStates.length === 0 ||
-          (!normalizedUserState && !normalizedUserStateId) ||
-          (postStatesAreIds
-            ? !!normalizedUserStateId && postStates.includes(normalizedUserStateId)
-            : !!normalizedUserState && postStates.includes(normalizedUserState));
-        if (!stateMatch) return false;
+          postStates.some((s) => String(s) === String(resolvedUserStateId)) ||
+          (!resolvedUserStateId && (!normalizedUserState || postStates.includes(normalizedUserState)));
+        if (!isStateMatch) return false;
 
         // Party: if post.party is empty => all parties. Otherwise must include user's party.
         // Same rule for party: if user party missing, don't block.
@@ -572,6 +591,9 @@ export default function DashboardScreen() {
     if (!authReady) return;
     let cancelled = false;
     (async () => {
+      // Loading guard: don't fetch posts until profile is ready.
+      if (isProfileLoading) return;
+
       if (refreshKey === 0 && !hasFetchedProfileRef.current) {
         hasFetchedProfileRef.current = true;
         const { state, party } = (await fetchUserProfile()) as { state: string; party: string };
@@ -587,7 +609,17 @@ export default function DashboardScreen() {
     return () => {
       cancelled = true;
     };
-  }, [authReady, refreshKey, userInfo?.state, userInfo?.partyName, fetchUserProfile, fetchPosts]);
+  }, [
+    authReady,
+    refreshKey,
+    isProfileLoading,
+    normalizedUserStateId,
+    (userInfo as any)?.group_tags,
+    userInfo?.state,
+    userInfo?.partyName,
+    fetchUserProfile,
+    fetchPosts,
+  ]);
 
   useEffect(() => {
     if (!authReady || !dashboardProfileLoaded) {
@@ -622,6 +654,7 @@ export default function DashboardScreen() {
   }, [fetchUserProfile]);
 
   useEffect(() => {
+    if (!authReady || isProfileLoading) return;
     fetchEvents();
     try {
       // IMPORTANT: Do not reuse a fixed channel name here.
@@ -658,7 +691,7 @@ export default function DashboardScreen() {
         }
       }
     };
-  }, []);
+  }, [authReady, isProfileLoading, fetchEvents]);
 
   const safePosts = Array.isArray(posts) ? posts : [];
   const safeEvents = Array.isArray(events) ? events : [];
