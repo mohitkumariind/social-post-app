@@ -662,9 +662,16 @@ export default function DashboardScreen() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      await supabase.auth.getSession();
-      if (cancelled) return;
-      setAuthReady(true);
+      try {
+        await supabase.auth.getSession();
+      } catch (e) {
+        // If session hydration throws on cold start, we must still resolve authReady
+        // so the dashboard pipeline can progress and clear the loading UI.
+        console.warn('[gfx] auth.getSession failed during bootstrap:', e);
+      } finally {
+        if (cancelled) return;
+        setAuthReady(true);
+      }
     })();
     return () => {
       cancelled = true;
