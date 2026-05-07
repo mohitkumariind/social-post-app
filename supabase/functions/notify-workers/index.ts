@@ -3,6 +3,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 const EXPO_PUSH_SEND_URL = 'https://exp.host/--/api/v2/push/send';
 const EXPO_PUSH_CHUNK_SIZE = 100;
 const HISTORY_INSERT_CHUNK = 500;
+const EXPO_SAME_PROJECT_ERR_RE = /All messages must be for the same project/i;
 
 /** Must match `ANDROID_NOTIFICATION_CHANNEL_ID` in repo `lib/pushChannel.ts`. */
 const ANDROID_NOTIFICATION_CHANNEL_ID = 'default';
@@ -80,19 +81,27 @@ async function fetchFilteredProfileIds(
 async function fetchTokensForUsers(
   admin: SupabaseClient,
   userIds: string[]
-): Promise<{ user_id: string; token: string }[]> {
+): Promise<{ user_id: string; token: string; project_id: string | null; platform: string | null }[]> {
   if (userIds.length === 0) return [];
-  const out: { user_id: string; token: string }[] = [];
+  const out: { user_id: string; token: string; project_id: string | null; platform: string | null }[] = [];
   const batch = 200;
   for (let i = 0; i < userIds.length; i += batch) {
     const slice = userIds.slice(i, i + batch);
-    const { data, error } = await admin.from('push_tokens').select('user_id, token').in('user_id', slice);
+    const { data, error } = await admin
+      .from('push_tokens')
+      .select('user_id, token, project_id, platform')
+      .in('user_id', slice);
     if (error) throw new Error(error.message);
     for (const r of data ?? []) {
-      const row = r as { user_id: string | null; token: string | null };
+      const row = r as {
+        user_id: string | null;
+        token: string | null;
+        project_id?: string | null;
+        platform?: string | null;
+      };
       const uid = row.user_id != null ? String(row.user_id) : '';
       const tok = typeof row.token === 'string' ? row.token : '';
-      if (uid && tok) out.push({ user_id: uid, token: tok });
+      if (uid && tok) out.push({ user_id: uid, token: tok, project_id: row.project_id ?? null, platform: row.platform ?? null });
     }
   }
   return out;
@@ -114,6 +123,25 @@ function parseExpoTicketCounts(rawText: string): { ok: number; err: number } {
     /* ignore */
   }
   return { ok, err };
+}
+
+function parseExpoTicketErrors(rawText: string): { idx: number; error: string; message: string }[] {
+  try {
+    const parsed = JSON.parse(rawText) as { data?: any[] };
+    const tickets = parsed?.data;
+    if (!Array.isArray(tickets)) return [];
+    const out: { idx: number; error: string; message: string }[] = [];
+    for (let i = 0; i < tickets.length; i++) {
+      const t = tickets[i];
+      if (!t || String(t.status ?? '').toLowerCase() !== 'error') continue;
+      const detailsErr = String(t?.details?.error ?? '');
+      const msg = String(t?.message ?? '');
+      out.push({ idx: i, error: detailsErr, message: msg });
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 Deno.serve(async (req) => {
@@ -152,8 +180,12 @@ Deno.serve(async (req) => {
     const profileIds = await fetchFilteredProfileIds(admin, allWorkers, filters);
     const tokenRows = await fetchTokensForUsers(admin, profileIds);
     const tokenToUser = new Map<string, string>();
+    const tokenToProject = new Map<string, string | null>();
     for (const row of tokenRows) {
-      if (!tokenToUser.has(row.token)) tokenToUser.set(row.token, row.user_id);
+      if (!tokenToUser.has(row.token)) {
+        tokenToUser.set(row.token, row.user_id);
+        tokenToProject.set(row.token, row.project_id ?? null);
+      }
     }
     const uniqueTokens = [...tokenToUser.keys()];
 
@@ -259,11 +291,40 @@ Deno.serve(async (req) => {
       messageBase.image = imageUrl;
     }
 
-    const messages = uniqueTokens.map((to) => ({ ...messageBase, to }));
+    const tokensByProject = new Map<string, string[]>();
+    for (const tok of uniqueTokens) {
+      const pid = tokenToProject.get(tok) ?? null;
+      const key = pid && pid.trim().length > 0 ? pid.trim() : '__unknown__';
+      const arr = tokensByProject.get(key) ?? [];
+      arr.push(tok);
+      tokensByProject.set(key, arr);
+    }
 
-    if (messages.length > 0) {
-      for (let i = 0; i < messages.length; i += EXPO_PUSH_CHUNK_SIZE) {
-        const chunk = messages.slice(i, i + EXPO_PUSH_CHUNK_SIZE);
+    const messagesByProject = new Map<string, any[]>();
+    for (const [pid, toks] of tokensByProject.entries()) {
+      const msgs = toks.map((to) => ({ ...messageBase, to }));
+      messagesByProject.set(pid, msgs);
+    }
+
+    function shouldDeleteTokenFromResponse(text: string): boolean {
+      if (/DeviceNotRegistered/i.test(text)) return true;
+      if (EXPO_SAME_PROJECT_ERR_RE.test(text)) return true;
+      if (/project/i.test(text) && /mismatch|different|same request|same project/i.test(text)) return true;
+      return false;
+    }
+
+    for (const [projectKey, messages] of messagesByProject.entries()) {
+      const groupLabel = projectKey === '__unknown__' ? 'unknown' : projectKey.slice(0, 8) + '…';
+      console.log('[push] projectGroup', { project: groupLabel, tokens: messages.length });
+
+      if (messages.length === 0) continue;
+
+      // Unknown project tokens are sent individually to avoid poisoning.
+      const forceIsolated = projectKey === '__unknown__';
+      const step = forceIsolated ? 1 : EXPO_PUSH_CHUNK_SIZE;
+
+      for (let i = 0; i < messages.length; i += step) {
+        const chunk = messages.slice(i, i + step);
         const res = await fetch(EXPO_PUSH_SEND_URL, {
           method: 'POST',
           headers: {
@@ -275,6 +336,50 @@ Deno.serve(async (req) => {
         });
         const rawText = await res.text();
         if (!res.ok) {
+          // Mixed-project tokens can cause a full-request failure. Retry individually so we can
+          // remove bad tokens without failing the whole broadcast.
+          if (EXPO_SAME_PROJECT_ERR_RE.test(rawText)) {
+            console.warn('[expo] Mixed-project tokens detected; retrying chunk with isolation');
+            for (const msg of chunk) {
+              const singleRes = await fetch(EXPO_PUSH_SEND_URL, {
+                method: 'POST',
+                headers: {
+                  Accept: 'application/json',
+                  'Accept-Encoding': 'gzip, deflate',
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify([msg]),
+              });
+              const singleText = await singleRes.text();
+              if (!singleRes.ok) {
+                if (shouldDeleteTokenFromResponse(singleText)) {
+                  try {
+                    console.log('[push] invalidToken', { token: String((msg as any).to ?? '').slice(0, 12) + '…' });
+                    await admin.from('push_tokens').delete().eq('token', String((msg as any).to ?? ''));
+                  } catch {
+                    // ignore
+                  }
+                }
+                failedTotal += 1;
+                continue;
+              }
+              const { ok, err } = parseExpoTicketCounts(singleText);
+              deliveredTotal += ok;
+              failedTotal += err;
+              const errs = parseExpoTicketErrors(singleText);
+              for (const e of errs) {
+                if (e.error === 'DeviceNotRegistered' || /DeviceNotRegistered/i.test(e.message)) {
+                  try {
+                    console.log('[push] invalidToken', { token: String((msg as any).to ?? '').slice(0, 12) + '…' });
+                    await admin.from('push_tokens').delete().eq('token', String((msg as any).to ?? ''));
+                  } catch {
+                    // ignore
+                  }
+                }
+              }
+            }
+            continue;
+          }
           await admin
             .from('notification_broadcasts')
             .update({ sent_count: messages.length, failed_count: failedTotal + chunk.length })
@@ -287,6 +392,20 @@ Deno.serve(async (req) => {
         const { ok, err } = parseExpoTicketCounts(rawText);
         deliveredTotal += ok;
         failedTotal += err;
+
+        // Remove DeviceNotRegistered tokens (prevents repeated failures).
+        const errs = parseExpoTicketErrors(rawText);
+        for (const e of errs) {
+          if (e.error !== 'DeviceNotRegistered' && !/DeviceNotRegistered/i.test(e.message)) continue;
+          const tok = String((chunk[e.idx] as any)?.to ?? '');
+          if (!tok) continue;
+          try {
+            console.log('[push] invalidToken', { token: tok.slice(0, 12) + '…' });
+            await admin.from('push_tokens').delete().eq('token', tok);
+          } catch {
+            // ignore
+          }
+        }
       }
     }
 

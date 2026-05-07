@@ -128,6 +128,8 @@ export async function saveTokenToSupabase(token: string): Promise<boolean> {
     (x): x is string => typeof x === 'string' && x.length > 0
   );
   const deviceName = parts.length > 0 ? parts.join(' · ') : null;
+  const projectId = getExpoProjectId();
+  const platform = Platform.OS;
 
   for (let i = 0; i < delaysMs.length; i++) {
     if (delaysMs[i] > 0) {
@@ -146,6 +148,8 @@ export async function saveTokenToSupabase(token: string): Promise<boolean> {
         user_id: user.id,
         token,
         device_name: deviceName,
+        project_id: projectId || null,
+        platform,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'user_id' }
@@ -165,6 +169,8 @@ export async function saveTokenToSupabase(token: string): Promise<boolean> {
           user_id: user.id,
           token,
           device_name: deviceName,
+          project_id: projectId || null,
+          platform,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'user_id,token' }

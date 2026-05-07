@@ -3,6 +3,7 @@ import Expo, { type ExpoPushMessage } from 'expo-server-sdk';
 import { ANDROID_NOTIFICATION_CHANNEL_ID } from '../../lib/pushChannel';
 
 const HISTORY_INSERT_CHUNK = 500;
+const EXPO_SAME_PROJECT_ERR_RE = /All messages must be for the same project/i;
 
 export type BroadcastFilters = {
   party?: string | null;
@@ -64,19 +65,27 @@ export async function fetchFilteredProfileIds(
 export async function fetchTokensForUsers(
   admin: SupabaseClient,
   userIds: string[]
-): Promise<{ user_id: string; token: string }[]> {
+): Promise<{ user_id: string; token: string; project_id: string | null; platform: string | null }[]> {
   if (userIds.length === 0) return [];
-  const out: { user_id: string; token: string }[] = [];
+  const out: { user_id: string; token: string; project_id: string | null; platform: string | null }[] = [];
   const batch = 200;
   for (let i = 0; i < userIds.length; i += batch) {
     const slice = userIds.slice(i, i + batch);
-    const { data, error } = await admin.from('push_tokens').select('user_id, token').in('user_id', slice);
+    const { data, error } = await admin
+      .from('push_tokens')
+      .select('user_id, token, project_id, platform')
+      .in('user_id', slice);
     if (error) throw new Error(error.message);
     for (const r of data ?? []) {
-      const row = r as { user_id: string | null; token: string | null };
+      const row = r as {
+        user_id: string | null;
+        token: string | null;
+        project_id?: string | null;
+        platform?: string | null;
+      };
       const uid = row.user_id != null ? String(row.user_id) : '';
       const tok = typeof row.token === 'string' ? row.token : '';
-      if (uid && tok) out.push({ user_id: uid, token: tok });
+      if (uid && tok) out.push({ user_id: uid, token: tok, project_id: row.project_id ?? null, platform: row.platform ?? null });
     }
   }
   return out;
@@ -119,10 +128,23 @@ export async function runBroadcast(
   const profileIds = await fetchFilteredProfileIds(admin, allWorkers, filters);
   const tokenRows = await fetchTokensForUsers(admin, profileIds);
   const tokenToUser = new Map<string, string>();
+  const tokenToProject = new Map<string, string | null>();
   for (const row of tokenRows) {
-    if (!tokenToUser.has(row.token)) tokenToUser.set(row.token, row.user_id);
+    if (!tokenToUser.has(row.token)) {
+      tokenToUser.set(row.token, row.user_id);
+      tokenToProject.set(row.token, row.project_id ?? null);
+    }
   }
   const uniqueTokens = [...tokenToUser.keys()].filter((t) => Expo.isExpoPushToken(t));
+
+  const tokensByProject = new Map<string, string[]>();
+  for (const tok of uniqueTokens) {
+    const pid = tokenToProject.get(tok) ?? null;
+    const key = pid && pid.trim().length > 0 ? pid.trim() : '__unknown__';
+    const arr = tokensByProject.get(key) ?? [];
+    arr.push(tok);
+    tokensByProject.set(key, arr);
+  }
 
   if (payload.preview_only === true) {
     return {
@@ -234,22 +256,91 @@ export async function runBroadcast(
   let deliveredTotal = 0;
   let failedTotal = 0;
 
-  if (messages.length > 0) {
-    const chunks = expo.chunkPushNotifications(messages);
-    let chunkIdx = 0;
-    for (const chunk of chunks) {
-      chunkIdx += 1;
+  async function removeBadToken(token: string) {
+    const t = String(token ?? '').trim();
+    if (!t) return;
+    try {
+      const { error } = await admin.from('push_tokens').delete().eq('token', t);
+      if (error) console.warn('[push] deletedToken failed:', error.message);
+      else console.log('[push] deletedToken', { token: t.slice(0, 12) + '…' });
+    } catch (e) {
+      console.warn('[push] deletedToken exception:', e);
+    }
+  }
+
+  function shouldDeleteToken(detailsError: string, message: string): boolean {
+    const e = String(detailsError ?? '');
+    const m = String(message ?? '');
+    if (e === 'DeviceNotRegistered' || /DeviceNotRegistered/i.test(m)) return true;
+    // Only delete for explicit project ownership mismatch; never for network/5xx/timeouts.
+    if (EXPO_SAME_PROJECT_ERR_RE.test(m)) return true;
+    if (/project/i.test(m) && /mismatch|different|same request|same project/i.test(m)) return true;
+    return false;
+  }
+
+  async function sendChunkWithIsolation(chunk: ExpoPushMessage[]) {
+    // Sends individually so mixed-project tokens cannot poison the whole batch.
+    for (const msg of chunk) {
       try {
-        // Avoid logging every token; log a representative message payload for debugging.
-        if (chunk[0]) {
-          console.log('[DEBUG IMAGE PAYLOAD]:', JSON.stringify(chunk[0]));
+        const tickets = await expo.sendPushNotificationsAsync([msg]);
+        const t = tickets?.[0];
+        if (!t) continue;
+        if (t.status === 'ok') {
+          deliveredTotal += 1;
+          continue;
         }
+        failedTotal += 1;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const details = (t as any)?.details as { error?: string } | undefined;
+        const err = String(details?.error ?? '');
+        const message = String((t as any)?.message ?? '');
+        console.error(`[push] invalidToken (isolated): ${message}${err ? ` (${err})` : ''}`);
+        if (shouldDeleteToken(err, message)) {
+          await removeBadToken(String(msg.to ?? ''));
+        }
+      } catch (e) {
+        failedTotal += 1;
+        const em = e instanceof Error ? e.message : String(e);
+        console.error('[push] send threw (isolated):', em);
+        if (shouldDeleteToken('', em)) {
+          await removeBadToken(String(msg.to ?? ''));
+        }
+      }
+    }
+  }
+
+  // Prevent mixed-project requests: group by stored Expo project id.
+  for (const [projectKey, toks] of tokensByProject.entries()) {
+    const groupLabel = projectKey === '__unknown__' ? 'unknown' : projectKey.slice(0, 8) + '…';
+    console.log('[push] projectGroup', { project: groupLabel, tokens: toks.length });
+
+    const groupMessages: ExpoPushMessage[] = toks.map((to) => {
+      const msg: ExpoPushMessage = {
+        to,
+        title,
+        body,
+        sound: 'default',
+        priority: 'high',
+        channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
+        mutableContent: true,
+        data: dataPayload,
+      };
+      if (imageUrl) msg.richContent = { image: imageUrl };
+      return msg;
+    });
+
+    // Tokens without project_id are from older installs: send isolated to avoid poisoning.
+    if (projectKey === '__unknown__') {
+      await sendChunkWithIsolation(groupMessages);
+      continue;
+    }
+
+    const chunks = expo.chunkPushNotifications(groupMessages);
+    for (const chunk of chunks) {
+      try {
         const tickets = await expo.sendPushNotificationsAsync(chunk);
-        console.log(
-          `[expo] Tickets response (chunk ${chunkIdx}/${chunks.length}, ${chunk.length} msgs):`,
-          JSON.stringify(tickets)
-        );
-        for (const t of tickets) {
+        for (let i = 0; i < tickets.length; i++) {
+          const t = tickets[i];
           if (t.status === 'ok') {
             deliveredTotal += 1;
             continue;
@@ -257,13 +348,21 @@ export async function runBroadcast(
           failedTotal += 1;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const details = (t as any)?.details as { error?: string } | undefined;
-          console.error(
-            `[expo] Ticket error: ${t.message ?? 'unknown'}${details?.error ? ` (${details.error})` : ''}`
-          );
+          const err = String(details?.error ?? '');
+          const message = String((t as any)?.message ?? '');
+          console.error(`[push] invalidToken: ${message}${err ? ` (${err})` : ''}`);
+          const tok = String(chunk[i]?.to ?? '');
+          if (shouldDeleteToken(err, message)) await removeBadToken(tok);
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error('[expo] sendPushNotificationsAsync threw:', msg);
+        console.error('[push] send threw:', msg);
+        // Belt-and-suspenders: isolate only on explicit same-project error.
+        if (EXPO_SAME_PROJECT_ERR_RE.test(msg)) {
+          console.warn('[push] same-project error after grouping; isolating chunk');
+          await sendChunkWithIsolation(chunk);
+          continue;
+        }
         await admin
           .from('notification_broadcasts')
           .update({
