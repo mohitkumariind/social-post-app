@@ -91,6 +91,15 @@ function toNumArr(v: unknown): number[] {
   return Number.isFinite(n) ? [n] : [];
 }
 
+function hasUsableProfileForVisibility(u: any): boolean {
+  // If we already have a hydrated profile in memory, keep it valid during background refreshes.
+  // Cold boot remains default-deny because these fields will be missing/empty.
+  const profileId = String(u?.profile_id ?? '').trim();
+  const partyId = typeof u?.party_id === 'number' ? u.party_id : u?.party_id != null ? Number(u.party_id) : null;
+  const stateId = typeof u?.state_id === 'number' ? u.state_id : u?.state_id != null ? Number(u.state_id) : null;
+  return !!profileId && Number.isFinite(partyId as number) && Number.isFinite(stateId as number);
+}
+
 function gfxLogCapped(key: string, payload: unknown, cap = 8) {
   const g: any = globalThis as any;
   const k = `__gfx_${key}`;
@@ -134,8 +143,10 @@ export default function DashboardScreen() {
   const [dashboardProfileLoaded, setDashboardProfileLoaded] = useState(false);
   const [editProfileDelayedVisible, setEditProfileDelayedVisible] = useState(false);
   const userInfoRef = useRef(userInfo);
+  const postsRef = useRef<PostRow[]>(posts);
   const consumedExpandKeyRef = useRef<string>('');
   userInfoRef.current = userInfo;
+  postsRef.current = posts;
 
   const [dailyLocalByUrl, setDailyLocalByUrl] = useState<Record<string, string>>({});
   const dailyInFlightRef = useRef<Set<string>>(new Set());
@@ -241,8 +252,10 @@ export default function DashboardScreen() {
       if (error) {
         // Explicit error path: resolve "not loaded" state and unblock UI.
         console.error('[gfx] Profile Fetch Error (supabase):', error.message);
-        setProfileLoaded(false);
-        profileLoadedRef.current = false;
+        if (!hasUsableProfileForVisibility(userInfoRef.current)) {
+          setProfileLoaded(false);
+          profileLoadedRef.current = false;
+        }
         resolved = true;
         return { state: '', party: '' };
       }
@@ -317,20 +330,26 @@ export default function DashboardScreen() {
 
       // Success response but no profile row returned (null). Resolve as "failed" to prevent deadlock.
       setUserInfo((prev) => ({ ...prev, profile_id: String(userId) }));
-      setProfileLoaded(false);
-      profileLoadedRef.current = false;
+      if (!hasUsableProfileForVisibility(userInfoRef.current)) {
+        setProfileLoaded(false);
+        profileLoadedRef.current = false;
+      }
       resolved = true;
       return { state: '', party: '' };
     } catch (e) {
       console.error('[gfx] Profile Fetch Error: ', e);
-      setProfileLoaded(false);
-      profileLoadedRef.current = false;
+      if (!hasUsableProfileForVisibility(userInfoRef.current)) {
+        setProfileLoaded(false);
+        profileLoadedRef.current = false;
+      }
       resolved = true;
     }
     // Always unblock the dashboard even if profile fetch failed.
     if (!resolved) {
-      setProfileLoaded(false);
-      profileLoadedRef.current = false;
+      if (!hasUsableProfileForVisibility(userInfoRef.current)) {
+        setProfileLoaded(false);
+        profileLoadedRef.current = false;
+      }
     }
     setIsProfileLoading(false);
     return { state: '', party: '' };
@@ -347,7 +366,7 @@ export default function DashboardScreen() {
       ok: false,
       reason: 'unknown',
     };
-    if (!profileLoadedRef.current) {
+    if (!profileLoadedRef.current && !hasUsableProfileForVisibility(user)) {
       result.reason = 'profile_not_loaded';
       return result;
     }
@@ -686,7 +705,6 @@ export default function DashboardScreen() {
     (async () => {
       if (refreshKey === 0 && !hasFetchedProfileRef.current) {
         hasFetchedProfileRef.current = true;
-        setProfileLoaded(false);
         setIsProfileLoading(true);
         await fetchUserProfile();
         if (cancelled) return;
@@ -696,16 +714,19 @@ export default function DashboardScreen() {
       }
 
       // Hard gate: do not fetch feed until profile is loaded from server.
-      if (!profileLoaded) {
-        // Prevent permanent spinner when profile row is missing / fetch failed.
-        setPosts([]);
-        setEvents([]);
-        setLoading(false);
+      // IMPORTANT: do NOT use `profileLoaded` from this effect's render snapshot.
+      // `fetchUserProfile()` may have just updated it; rely on the ref which is updated via effect.
+      const readyNow = !!profileLoadedRef.current || hasUsableProfileForVisibility(userInfoRef.current);
+      if (!readyNow) {
+        // Security: deny fetching any new posts/events until profile is truly available.
+        // UX: do NOT wipe already-visible feed during bootstrap/remount; keep it on screen.
+        if (postsRef.current.length === 0) setLoading(false);
         return;
       }
 
       // Profile is loaded; fetch posts now.
-      await fetchPosts('', '');
+      // If we already have a feed, refetch silently to avoid flicker.
+      await fetchPosts('', '', postsRef.current.length > 0);
       if (!cancelled) setDashboardProfileLoaded(true);
     })();
     return () => {
