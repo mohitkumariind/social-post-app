@@ -44,9 +44,18 @@ export default function Sidebar() {
   }, []);
 
   const visibleNavItems = useMemo(() => {
-    if (role?.toLowerCase() !== 'moderator') return navItems;
-    // Moderator: Dashboard, Users, Events, Notifications, Groups
-    return navItems.filter((i) => i.href !== '/admin/parties');
+    const r = role?.toLowerCase() ?? '';
+    if (r === 'moderator') {
+      // Moderator: Dashboard, Users, Events, Notifications, Groups
+      return navItems.filter((i) => i.href !== '/admin/parties');
+    }
+    if (r === 'campaign_manager') {
+      // Campaign Manager: Dashboard, Events, Notifications, Groups
+      return navItems.filter(
+        (i) => i.href === '/admin' || i.href === '/admin/events' || i.href === '/admin/groups' || i.href === '/admin/notifications'
+      );
+    }
+    return navItems;
   }, [role]);
 
   return (

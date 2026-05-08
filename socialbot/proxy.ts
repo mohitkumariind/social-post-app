@@ -4,6 +4,7 @@ import {
   createSupabaseProxyClient,
   fetchProfileAccessForMiddleware,
   isAdminRole,
+  isCampaignManagerRole,
   isModeratorRole,
   redirectPreservingAuthCookies,
 } from '@/lib/supabase/session-helpers';
@@ -78,7 +79,7 @@ export async function proxy(request: NextRequest) {
         errorMessage,
         isAdmin: isAdminRole(role),
       });
-      if (isAdminRole(role) || isModeratorRole(role)) {
+      if (isAdminRole(role) || isModeratorRole(role) || isCampaignManagerRole(role)) {
         return redirectPreservingAuthCookies(request, sessionResponse, '/admin');
       }
     }
@@ -107,8 +108,9 @@ export async function proxy(request: NextRequest) {
 
     const isAdmin = isAdminRole(role);
     const isModerator = isModeratorRole(role);
+    const isCampaignManager = isCampaignManagerRole(role);
 
-    if (!isAdmin && !isModerator) {
+    if (!isAdmin && !isModerator && !isCampaignManager) {
       proxyLog('[proxy] Step 4: FORBIDDEN → /admin/login?error=forbidden');
       return redirectPreservingAuthCookies(request, sessionResponse, '/admin/login?error=forbidden');
     }
@@ -122,6 +124,18 @@ export async function proxy(request: NextRequest) {
         pathname.startsWith('/admin/groups');
       if (!allowed) {
         proxyLog('[proxy] Step 4: moderator blocked route', { pathname });
+        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/login?error=forbidden');
+      }
+    }
+
+    if (isCampaignManager) {
+      const allowed =
+        pathname === '/admin' ||
+        pathname.startsWith('/admin/events') ||
+        pathname.startsWith('/admin/notifications') ||
+        pathname.startsWith('/admin/groups');
+      if (!allowed) {
+        proxyLog('[proxy] Step 4: campaign_manager blocked route', { pathname });
         return redirectPreservingAuthCookies(request, sessionResponse, '/admin/login?error=forbidden');
       }
     }

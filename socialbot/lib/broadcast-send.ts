@@ -11,6 +11,7 @@ export type BroadcastFilters = {
   loksabha_id?: number | null;
   assembly_id?: number | null;
   assigned_state_ids?: number[] | null;
+  group_ids?: number[] | null;
 };
 
 export type BroadcastFilterLabels = {
@@ -51,6 +52,9 @@ export async function fetchFilteredProfileIds(
   if (state) q = q.eq('state', state);
   if (Array.isArray(f.assigned_state_ids) && f.assigned_state_ids.length > 0) {
     q = q.overlaps('assigned_state_ids', f.assigned_state_ids);
+  }
+  if (Array.isArray(f.group_ids) && f.group_ids.length > 0) {
+    q = q.in('group_id', f.group_ids.map((x) => Number(x)).filter((n) => Number.isFinite(n)));
   }
   if (f.loksabha_id != null && !Number.isNaN(Number(f.loksabha_id))) {
     q = q.eq('loksabha_id', Number(f.loksabha_id));
@@ -131,6 +135,10 @@ export async function runBroadcast(
       Array.isArray((payload.filters as any)?.assigned_state_ids)
         ? (payload.filters as any).assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
         : null,
+    group_ids:
+      Array.isArray((payload.filters as any)?.group_ids)
+        ? (payload.filters as any).group_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
+        : null,
   };
 
   const profileIds = await fetchFilteredProfileIds(admin, allWorkers, filters);
@@ -182,6 +190,7 @@ export async function runBroadcast(
     loksabha_id: filters.loksabha_id,
     assembly_id: filters.assembly_id,
     assigned_state_ids: filters.assigned_state_ids,
+    group_ids: filters.group_ids,
     labels: payload.filter_labels ?? {},
   };
 

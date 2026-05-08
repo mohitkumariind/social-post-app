@@ -258,7 +258,7 @@ export default function App() {
   const [workerNotifyToast, setWorkerNotifyToast] = useState(false);
   const skipLoksabhaResetCountRef = useRef(0);
 
-  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_ids: number[] } | null>(null);
+  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[] } | null>(null);
   const [viewerLoading, setViewerLoading] = useState(true);
 
   useEffect(() => {
@@ -269,7 +269,14 @@ export default function App() {
         if (!res.ok) return;
         const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_ids?: unknown };
         if (cancelled) return;
-        const role = d.role === 'moderator' ? 'moderator' : d.role === 'admin' ? 'admin' : null;
+        const role =
+          d.role === 'moderator'
+            ? 'moderator'
+            : d.role === 'campaign_manager'
+              ? 'campaign_manager'
+              : d.role === 'admin'
+                ? 'admin'
+                : null;
         const ids = Array.isArray(d.assigned_state_ids)
           ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
           : [];
@@ -294,6 +301,8 @@ export default function App() {
       }),
     [viewer, viewerLoading, availableStates]
   );
+
+  const isCampaignManager = viewer?.role === 'campaign_manager';
 
   useEffect(() => {
     let cancelled = false;
@@ -609,13 +618,27 @@ export default function App() {
     const loksabhaArr = newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
     const assemblyArr = newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
     const targetGroupsArr = newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
+    if (isCampaignManager && targetGroupsArr.length === 0) {
+      alert('Please select at least one Target Group.');
+      return;
+    }
 
     const partyIdArr = toNumArrFromStrIds(partyArr);
     const stateIdArr = toNumArrFromStrIds(stateArr);
     const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
     const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
-    // Priority rule: if target_groups is set, it overrides geo filters (store geo arrays empty).
-    if (targetGroupsArr.length > 0) {
+    // Campaign Manager: groups-only targeting (always ignore geo/party arrays).
+    if (isCampaignManager) {
+      payload.party = [];
+      payload.state = [];
+      payload.loksabha = [];
+      payload.assembly = [];
+      payload.party_id = [];
+      payload.state_id = [];
+      payload.loksabha_id = [];
+      payload.assembly_id = [];
+    } else if (targetGroupsArr.length > 0) {
+      // Priority rule: if target_groups is set, it overrides geo filters (store geo arrays empty).
       payload.party = [];
       payload.state = [];
       payload.loksabha = [];
@@ -744,7 +767,8 @@ export default function App() {
         : file.name.toLowerCase().endsWith('.png')
           ? '.png'
           : '.jpg';
-      const storagePath = `public/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+      const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const storagePath = `public/events/${String(selectedEvent.id)}/${Date.now()}-${safeName}`;
 
       let imageUrl: string;
       try {
@@ -975,13 +999,27 @@ export default function App() {
     const loksabhaArr = newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
     const assemblyArr = newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
     const targetGroupsArr = newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
+    if (isCampaignManager && targetGroupsArr.length === 0) {
+      alert('Please select at least one Target Group.');
+      return;
+    }
     const partyIdArr = toNumArrFromStrIds(partyArr);
     const stateIdArr = toNumArrFromStrIds(stateArr);
     const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
     const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
     updatePayload.target_groups = targetGroupsArr;
-    // Priority rule: if target_groups is set, it overrides geo filters (clear geo arrays).
-    if (targetGroupsArr.length > 0) {
+    // Campaign Manager: groups-only targeting (always ignore geo/party arrays).
+    if (isCampaignManager) {
+      updatePayload.party = [];
+      updatePayload.state = [];
+      updatePayload.loksabha = [];
+      updatePayload.assembly = [];
+      updatePayload.party_id = [];
+      updatePayload.state_id = [];
+      updatePayload.loksabha_id = [];
+      updatePayload.assembly_id = [];
+    } else if (targetGroupsArr.length > 0) {
+      // Priority rule: if target_groups is set, it overrides geo filters (clear geo arrays).
       updatePayload.party = [];
       updatePayload.state = [];
       updatePayload.loksabha = [];
@@ -1149,72 +1187,76 @@ export default function App() {
                     <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30" />
                   </div>
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-1">
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                      {hasSingleAssignedState && singleAssignedStateId ? (
-                        <div>
-                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">State</span>
-                          <div className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
-                            {visibleStates[0]?.name ?? '—'}
-                          </div>
+                    {!isCampaignManager ? (
+                      <>
+                        <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                          {hasSingleAssignedState && singleAssignedStateId ? (
+                            <div>
+                              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">State</span>
+                              <div className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
+                                {visibleStates[0]?.name ?? '—'}
+                              </div>
+                            </div>
+                          ) : (
+                            <MultiSelectDropdown
+                              label="State"
+                              options={viewerReady ? visibleStates : []}
+                              selected={newState}
+                              onSelect={setNewState}
+                              getValue={(s) => String(s.id)}
+                              getLabel={(s) => s.name}
+                              allLabel="All States"
+                              loading={statesLoading || !viewerReady}
+                              searchable
+                            />
+                          )}
                         </div>
-                      ) : (
-                        <MultiSelectDropdown
-                          label="State"
-                          options={viewerReady ? visibleStates : []}
-                          selected={newState}
-                          onSelect={setNewState}
-                          getValue={(s) => String(s.id)}
-                          getLabel={(s) => s.name}
-                          allLabel="All States"
-                          loading={statesLoading || !viewerReady}
-                          searchable
-                        />
-                      )}
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                      <MultiSelectDropdown
-                        label="Party"
-                        options={PARTIES_DATA}
-                        selected={newParty}
-                        onSelect={setNewParty}
-                        getValue={(p) => p.id}
-                        getLabel={(p) => p.shortName}
-                        allLabel="All Parties"
-                        searchable
-                        optionLeading={(p) =>
-                          isPartyOtherId(String(p.id)) ? (
-                            <Users size={16} className="text-slate-500 shrink-0" aria-hidden />
-                          ) : null
-                        }
-                      />
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                      <MultiSelectDropdown
-                        label="Lok Sabha"
-                        options={availableLoksabhas}
-                        selected={newLoksabha}
-                        onSelect={setNewLoksabha}
-                        getValue={(l) => l.id}
-                        getLabel={(l) => l.name}
-                        allLabel="All LS Seats"
-                        loading={loksabhasLoading}
-                        searchable
-                      />
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                      <MultiSelectDropdown
-                        label="Assembly"
-                        options={availableAssemblies}
-                        selected={newAssembly}
-                        onSelect={setNewAssembly}
-                        getValue={(a) => a.id}
-                        getLabel={(a) => a.name}
-                        allLabel="All Assembly Seats"
-                        loading={assembliesLoading}
-                        searchable
-                      />
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-2">
+                        <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                          <MultiSelectDropdown
+                            label="Party"
+                            options={PARTIES_DATA}
+                            selected={newParty}
+                            onSelect={setNewParty}
+                            getValue={(p) => p.id}
+                            getLabel={(p) => p.shortName}
+                            allLabel="All Parties"
+                            searchable
+                            optionLeading={(p) =>
+                              isPartyOtherId(String(p.id)) ? (
+                                <Users size={16} className="text-slate-500 shrink-0" aria-hidden />
+                              ) : null
+                            }
+                          />
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                          <MultiSelectDropdown
+                            label="Lok Sabha"
+                            options={availableLoksabhas}
+                            selected={newLoksabha}
+                            onSelect={setNewLoksabha}
+                            getValue={(l) => l.id}
+                            getLabel={(l) => l.name}
+                            allLabel="All LS Seats"
+                            loading={loksabhasLoading}
+                            searchable
+                          />
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                          <MultiSelectDropdown
+                            label="Assembly"
+                            options={availableAssemblies}
+                            selected={newAssembly}
+                            onSelect={setNewAssembly}
+                            getValue={(a) => a.id}
+                            getLabel={(a) => a.name}
+                            allLabel="All Assembly Seats"
+                            loading={assembliesLoading}
+                            searchable
+                          />
+                        </div>
+                      </>
+                    ) : null}
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
                       <MultiSelectDropdown
                         label="Target Groups"
                         options={groupOptions.map((g) => ({ id: g.tag, tag: g.tag, name: g.name || g.tag, count: g.count }))}
@@ -1276,26 +1318,28 @@ export default function App() {
         </div>
 
         {/* Global Filter */}
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 text-slate-600">
-            <Filter size={18} className="text-slate-400" />
-            <span className="text-xs font-bold uppercase tracking-widest">Global Filter</span>
-          </div>
-          <select value={filterParty} onChange={e => setFilterParty(e.target.value)} className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
-            <option value="ALL">All Parties</option>
-            {PARTIES_DATA.map(p => <option key={p.id} value={p.id}>{p.shortName}</option>)}
-          </select>
-          {hasSingleAssignedState && singleAssignedStateId ? (
-            <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
-              {visibleStates[0]?.name ?? '—'}
+        {!isCampaignManager ? (
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 text-slate-600">
+              <Filter size={18} className="text-slate-400" />
+              <span className="text-xs font-bold uppercase tracking-widest">Global Filter</span>
             </div>
-          ) : (
-            <select value={filterState} onChange={e => setFilterState(e.target.value)} className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
-              <option value="ALL">All States</option>
-              {(viewerReady ? visibleStates : []).map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+            <select value={filterParty} onChange={e => setFilterParty(e.target.value)} className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
+              <option value="ALL">All Parties</option>
+              {PARTIES_DATA.map(p => <option key={p.id} value={p.id}>{p.shortName}</option>)}
             </select>
-          )}
-        </div>
+            {hasSingleAssignedState && singleAssignedStateId ? (
+              <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
+                {visibleStates[0]?.name ?? '—'}
+              </div>
+            ) : (
+              <select value={filterState} onChange={e => setFilterState(e.target.value)} className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
+                <option value="ALL">All States</option>
+                {(viewerReady ? visibleStates : []).map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+              </select>
+            )}
+          </div>
+        ) : null}
 
         {/* Create Event Strip */}
         <div className="bg-white p-4 rounded-[35px] border border-slate-200 shadow-lg">
@@ -1304,71 +1348,75 @@ export default function App() {
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</span>
               <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm" />
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              {hasSingleAssignedState && singleAssignedStateId ? (
-                <div>
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">State</span>
-                  <div className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
-                    {visibleStates[0]?.name ?? '—'}
-                  </div>
+            {!isCampaignManager ? (
+              <>
+                <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                  {hasSingleAssignedState && singleAssignedStateId ? (
+                    <div>
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">State</span>
+                      <div className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
+                        {visibleStates[0]?.name ?? '—'}
+                      </div>
+                    </div>
+                  ) : (
+                    <MultiSelectDropdown
+                      label="State"
+                      options={viewerReady ? visibleStates : []}
+                      selected={newState}
+                      onSelect={setNewState}
+                      getValue={(s) => String(s.id)}
+                      getLabel={(s) => s.name}
+                      allLabel="All States"
+                      loading={statesLoading || !viewerReady}
+                      searchable
+                    />
+                  )}
                 </div>
-              ) : (
-                <MultiSelectDropdown
-                  label="State"
-                  options={viewerReady ? visibleStates : []}
-                  selected={newState}
-                  onSelect={setNewState}
-                  getValue={(s) => String(s.id)}
-                  getLabel={(s) => s.name}
-                  allLabel="All States"
-                  loading={statesLoading || !viewerReady}
-                  searchable
-                />
-              )}
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <MultiSelectDropdown
-                label="Party"
-                options={PARTIES_DATA}
-                selected={newParty}
-                onSelect={setNewParty}
-                getValue={(p) => p.id}
-                getLabel={(p) => p.shortName}
-                allLabel="All Parties"
-                searchable
-                optionLeading={(p) =>
-                  isPartyOtherId(String(p.id)) ? (
-                    <Users size={16} className="text-slate-500 shrink-0" aria-hidden />
-                  ) : null
-                }
-              />
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <MultiSelectDropdown
-                label="Lok Sabha"
-                options={availableLoksabhas}
-                selected={newLoksabha}
-                onSelect={setNewLoksabha}
-                getValue={(l) => l.id}
-                getLabel={(l) => l.name}
-                allLabel="All LS Seats"
-                loading={loksabhasLoading}
-                searchable
-              />
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <MultiSelectDropdown
-                label="Assembly"
-                options={availableAssemblies}
-                selected={newAssembly}
-                onSelect={setNewAssembly}
-                getValue={(a) => a.id}
-                getLabel={(a) => a.name}
-                allLabel="All Assembly Seats"
-                loading={assembliesLoading}
-                searchable
-              />
-            </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                  <MultiSelectDropdown
+                    label="Party"
+                    options={PARTIES_DATA}
+                    selected={newParty}
+                    onSelect={setNewParty}
+                    getValue={(p) => p.id}
+                    getLabel={(p) => p.shortName}
+                    allLabel="All Parties"
+                    searchable
+                    optionLeading={(p) =>
+                      isPartyOtherId(String(p.id)) ? (
+                        <Users size={16} className="text-slate-500 shrink-0" aria-hidden />
+                      ) : null
+                    }
+                  />
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                  <MultiSelectDropdown
+                    label="Lok Sabha"
+                    options={availableLoksabhas}
+                    selected={newLoksabha}
+                    onSelect={setNewLoksabha}
+                    getValue={(l) => l.id}
+                    getLabel={(l) => l.name}
+                    allLabel="All LS Seats"
+                    loading={loksabhasLoading}
+                    searchable
+                  />
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                  <MultiSelectDropdown
+                    label="Assembly"
+                    options={availableAssemblies}
+                    selected={newAssembly}
+                    onSelect={setNewAssembly}
+                    getValue={(a) => a.id}
+                    getLabel={(a) => a.name}
+                    allLabel="All Assembly Seats"
+                    loading={assembliesLoading}
+                    searchable
+                  />
+                </div>
+              </>
+            ) : null}
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Activation</span>
               <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />

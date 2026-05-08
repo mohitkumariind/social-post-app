@@ -42,6 +42,9 @@ function formatSentTo(filters: unknown): string {
   if (f.all_workers === true) return 'All workers';
   const labels = (f.labels ?? {}) as Record<string, string>;
   const parts: string[] = [];
+  if (Array.isArray(f.group_ids) && f.group_ids.length > 0) {
+    parts.push(`Groups: ${(f.group_ids as any[]).length}`);
+  }
   if (labels.party) parts.push(`Party: ${labels.party}`);
   else if (f.party) parts.push(`Party: ${String(f.party)}`);
   if (labels.state) parts.push(`State: ${labels.state}`);
@@ -61,9 +64,11 @@ export default function NotificationBroadcastCenterPage() {
   const [stateId, setStateId] = useState('');
   const [loksabhaId, setLoksabhaId] = useState('');
   const [assemblyId, setAssemblyId] = useState('');
+  const [groupIds, setGroupIds] = useState<string[]>([]);
 
-  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_ids: number[] } | null>(null);
+  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[] } | null>(null);
   const isModerator = viewer?.role === 'moderator';
+  const isCampaignManager = viewer?.role === 'campaign_manager';
   const [viewerLoading, setViewerLoading] = useState(true);
 
   useEffect(() => {
@@ -74,7 +79,14 @@ export default function NotificationBroadcastCenterPage() {
         if (!res.ok) return;
         const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_ids?: unknown };
         if (cancelled) return;
-        const role = d.role === 'moderator' ? 'moderator' : d.role === 'admin' ? 'admin' : null;
+        const role =
+          d.role === 'moderator'
+            ? 'moderator'
+            : d.role === 'campaign_manager'
+              ? 'campaign_manager'
+              : d.role === 'admin'
+                ? 'admin'
+                : null;
         const ids = Array.isArray(d.assigned_state_ids)
           ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
           : [];
@@ -93,6 +105,7 @@ export default function NotificationBroadcastCenterPage() {
   const [states, setStates] = useState<GeoRow[]>([]);
   const [loksabhas, setLoksabhas] = useState<GeoRow[]>([]);
   const [assemblies, setAssemblies] = useState<GeoRow[]>([]);
+  const [groups, setGroups] = useState<{ tag: string; name?: string; count: number }[]>([]);
   const [geoLoading, setGeoLoading] = useState(true);
   const [lokLoading, setLokLoading] = useState(false);
   const [asmLoading, setAsmLoading] = useState(false);
@@ -152,6 +165,28 @@ export default function NotificationBroadcastCenterPage() {
     if (stateId !== next) setStateId(next);
     if (allWorkers) setAllWorkers(false);
   }, [isModerator, viewer?.assigned_state_ids, stateId, allWorkers]);
+
+  useEffect(() => {
+    if (!isCampaignManager) return;
+    if (allWorkers) setAllWorkers(false);
+  }, [isCampaignManager, allWorkers]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/groups', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const json = (await res.json()) as { groups?: { tag: string; name?: string; count: number }[] };
+        if (!cancelled) setGroups(json.groups ?? []);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Safe-by-default: until viewer is resolved, don't show "all states" list.
   useEffect(() => {
@@ -310,12 +345,16 @@ export default function NotificationBroadcastCenterPage() {
     setPreviewCount(null);
     setPreviewTokens(null);
     const stateName = selectedState?.name?.trim() || '';
-    const filters = {
-      party: partyId ? normalizePartyId(partyId) : null,
-      state: stateName || null,
-      loksabha_id: loksabhaId ? Number(loksabhaId) : null,
-      assembly_id: assemblyId ? Number(assemblyId) : null,
-    };
+    const filters = isCampaignManager
+      ? {
+          group_ids: groupIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)),
+        }
+      : {
+          party: partyId ? normalizePartyId(partyId) : null,
+          state: stateName || null,
+          loksabha_id: loksabhaId ? Number(loksabhaId) : null,
+          assembly_id: assemblyId ? Number(assemblyId) : null,
+        };
     try {
       const res = await fetch('/api/notifications/send', {
         method: 'POST',
@@ -323,7 +362,7 @@ export default function NotificationBroadcastCenterPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           preview_only: true,
-          all_workers: allWorkers,
+          all_workers: isCampaignManager ? false : allWorkers,
           filters,
         }),
       });
@@ -348,7 +387,7 @@ export default function NotificationBroadcastCenterPage() {
     } finally {
       setPreviewLoading(false);
     }
-  }, [allWorkers, partyId, selectedState?.name, loksabhaId, assemblyId]);
+  }, [isCampaignManager, allWorkers, partyId, selectedState?.name, loksabhaId, assemblyId, groupIds]);
 
   useEffect(() => {
     if (!confirmOpen) return;
@@ -372,18 +411,24 @@ export default function NotificationBroadcastCenterPage() {
   const confirmSend = async () => {
     setSendLoading(true);
     const stateName = selectedState?.name?.trim() || '';
-    const filters = {
-      party: partyId ? normalizePartyId(partyId) : null,
-      state: stateName || null,
-      loksabha_id: loksabhaId ? Number(loksabhaId) : null,
-      assembly_id: assemblyId ? Number(assemblyId) : null,
-    };
-    const filter_labels = {
-      party: partyId ? getPartyLabel(partyId) : null,
-      state: stateName || null,
-      loksabha: selectedLoksabha?.name ?? null,
-      assembly: selectedAssembly?.name ?? null,
-    };
+    const filters = isCampaignManager
+      ? {
+          group_ids: groupIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)),
+        }
+      : {
+          party: partyId ? normalizePartyId(partyId) : null,
+          state: stateName || null,
+          loksabha_id: loksabhaId ? Number(loksabhaId) : null,
+          assembly_id: assemblyId ? Number(assemblyId) : null,
+        };
+    const filter_labels = isCampaignManager
+      ? { party: null, state: null, loksabha: null, assembly: null }
+      : {
+          party: partyId ? getPartyLabel(partyId) : null,
+          state: stateName || null,
+          loksabha: selectedLoksabha?.name ?? null,
+          assembly: selectedAssembly?.name ?? null,
+        };
     let sendOk = false;
     try {
       const res = await fetch('/api/notifications/send', {
@@ -394,7 +439,7 @@ export default function NotificationBroadcastCenterPage() {
           title: title.trim(),
           body: body.trim(),
           image_url: imageUrl.trim() || null,
-          all_workers: allWorkers,
+          all_workers: isCampaignManager ? false : allWorkers,
           filters,
           filter_labels,
           data: { type: 'broadcast' },
@@ -459,90 +504,124 @@ export default function NotificationBroadcastCenterPage() {
         <h2 className="mb-1 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Section 1 · Targeting</h2>
         <p className="mb-6 text-sm font-semibold text-slate-600">To</p>
 
-        <label className="mb-6 flex cursor-pointer items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
-          <input
-            type="checkbox"
-            checked={allWorkers}
-            onChange={(e) => setAllWorkers(e.target.checked)}
-            className="h-4 w-4 rounded border-slate-300"
-            style={{ accentColor: ACCENT }}
-            disabled={isModerator}
-          />
-          <span className="text-sm font-bold text-slate-800">All workers (bypass filters)</span>
-        </label>
+        {isCampaignManager ? (
+          <div>
+            <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Target groups (owned)</span>
+            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+              {groups.length === 0 ? (
+                <p className="text-sm font-bold text-slate-500">No groups available.</p>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {groups.map((g) => {
+                    const id = String(g.tag);
+                    const checked = groupIds.includes(id);
+                    return (
+                      <label key={id} className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setGroupIds((prev) => (checked ? prev.filter((x) => x !== id) : [...prev, id]))}
+                          className="h-4 w-4 rounded border-slate-300"
+                          style={{ accentColor: ACCENT }}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm font-bold text-slate-800">
+                          {g.name || g.tag} ({g.count})
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <label className="mb-6 flex cursor-pointer items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+              <input
+                type="checkbox"
+                checked={allWorkers}
+                onChange={(e) => setAllWorkers(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300"
+                style={{ accentColor: ACCENT }}
+                disabled={isModerator}
+              />
+              <span className="text-sm font-bold text-slate-800">All workers (bypass filters)</span>
+            </label>
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Party</span>
-            <select
-              className={selectClass}
-              value={partyId}
-              onChange={(e) => setPartyId(e.target.value)}
-              disabled={allWorkers || geoLoading}
-            >
-              <option value="">Any party</option>
-              {PARTIES_DATA.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.shortName} — {p.fullName}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">State</span>
-            {moderatorHasSingleState && singleAssignedStateId ? (
-              <div className={`${selectClass} flex items-center`}>
-                {selectedState?.name ?? '—'}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Party</span>
+                <select
+                  className={selectClass}
+                  value={partyId}
+                  onChange={(e) => setPartyId(e.target.value)}
+                  disabled={allWorkers || geoLoading}
+                >
+                  <option value="">Any party</option>
+                  {PARTIES_DATA.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.shortName} — {p.fullName}
+                    </option>
+                  ))}
+                </select>
               </div>
-            ) : (
-              <select
-                className={selectClass}
-                value={stateId}
-                onChange={(e) => setStateId(e.target.value)}
-                disabled={allWorkers || geoLoading || !viewerReady}
-              >
-                <option value="">Any state</option>
-                {visibleStates.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-          <div>
-            <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Loksabha</span>
-            <select
-              className={selectClass}
-              value={loksabhaId}
-              onChange={(e) => setLoksabhaId(e.target.value)}
-              disabled={allWorkers || !stateId || lokLoading}
-            >
-              <option value="">Any loksabha</option>
-              {loksabhas.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Assembly</span>
-            <select
-              className={selectClass}
-              value={assemblyId}
-              onChange={(e) => setAssemblyId(e.target.value)}
-              disabled={allWorkers || !loksabhaId || asmLoading}
-            >
-              <option value="">Any assembly</option>
-              {assemblies.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
+              <div>
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">State</span>
+                {moderatorHasSingleState && singleAssignedStateId ? (
+                  <div className={`${selectClass} flex items-center`}>
+                    {selectedState?.name ?? '—'}
+                  </div>
+                ) : (
+                  <select
+                    className={selectClass}
+                    value={stateId}
+                    onChange={(e) => setStateId(e.target.value)}
+                    disabled={allWorkers || geoLoading || !viewerReady}
+                  >
+                    <option value="">Any state</option>
+                    {visibleStates.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <div>
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Loksabha</span>
+                <select
+                  className={selectClass}
+                  value={loksabhaId}
+                  onChange={(e) => setLoksabhaId(e.target.value)}
+                  disabled={allWorkers || !stateId || lokLoading}
+                >
+                  <option value="">Any loksabha</option>
+                  {loksabhas.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Assembly</span>
+                <select
+                  className={selectClass}
+                  value={assemblyId}
+                  onChange={(e) => setAssemblyId(e.target.value)}
+                  disabled={allWorkers || !loksabhaId || asmLoading}
+                >
+                  <option value="">Any assembly</option>
+                  {assemblies.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </>
+        )}
       </section>
 
       {/* Section 2 — Composer */}

@@ -52,6 +52,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Moderators can only remove user frames' }, { status: 403 });
     }
   }
+  if (auth.role === 'campaign_manager') {
+    if (bucket !== 'post-images') {
+      return NextResponse.json({ error: 'campaign_manager can only remove post images' }, { status: 403 });
+    }
+  }
 
   const paths: string[] = [];
   for (const raw of pathsRaw) {
@@ -90,6 +95,30 @@ export async function POST(request: NextRequest) {
       const viewerStates = auth.assigned_state_ids.map(Number);
       const ok = idsArr.some((x: any) => viewerStates.includes(Number(x)));
       if (!ok) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+    }
+  }
+
+  if (auth.role === 'campaign_manager') {
+    // All paths must be under public/events/<eventId>/ and event must be owned by campaign_manager.
+    const eventIds = new Set<string>();
+    for (const p of paths) {
+      const parts = p.split('/').filter(Boolean);
+      const eid = parts.length >= 3 && parts[0] === 'public' && parts[1] === 'events' ? parts[2] : '';
+      if (!eid) return NextResponse.json({ error: 'Invalid path for campaign_manager remove' }, { status: 400 });
+      eventIds.add(eid);
+      if (eventIds.size > 20) return NextResponse.json({ error: 'Too many event paths' }, { status: 400 });
+    }
+    for (const eid of eventIds) {
+      const { data: ev, error: evErr } = await admin
+        .from('events')
+        .select('id, created_by')
+        .eq('id', eid)
+        .maybeSingle();
+      if (evErr) return NextResponse.json({ error: evErr.message }, { status: 500 });
+      const owner = String((ev as any)?.created_by ?? '').trim();
+      if (!owner || owner !== auth.user.id) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     }

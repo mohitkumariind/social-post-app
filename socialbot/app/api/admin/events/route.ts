@@ -50,6 +50,11 @@ export async function GET(request: NextRequest) {
       if (stateIds.length === 0 || !isSubset(stateIds, auth.assigned_state_ids)) return json({ error: 'Forbidden' }, 403);
     }
 
+    if (auth.role === 'campaign_manager') {
+      const owner = String((data as any).created_by ?? '').trim();
+      if (!owner || owner !== auth.user.id) return json({ error: 'Forbidden' }, 403);
+    }
+
     return json({ event: data, usedServiceRole: !!admin });
   }
 
@@ -58,6 +63,10 @@ export async function GET(request: NextRequest) {
   if (auth.role === 'moderator') {
     // Must satisfy BOTH: ownership and assigned states.
     q = q.eq('created_by', auth.user.id).overlaps('state_id', auth.assigned_state_ids);
+  }
+  if (auth.role === 'campaign_manager') {
+    // Campaign managers only see their own events.
+    q = q.eq('created_by', auth.user.id);
   }
   const { data, error } = await q;
   if (error) return json({ error: error.message }, 500);
@@ -90,6 +99,18 @@ export async function POST(request: NextRequest) {
     const tg = Array.isArray(payload.target_groups) ? payload.target_groups : [];
     if (tg.length > 0) {
       return json({ error: 'Forbidden: moderators cannot create target_groups events' }, 403);
+    }
+  }
+
+  if (auth.role === 'campaign_manager') {
+    const tg = Array.isArray(payload.target_groups) ? payload.target_groups : [];
+    if (tg.length === 0) return json({ error: 'Forbidden: campaign_manager must target_groups' }, 403);
+    // No global/state-wide targeting for campaign_manager.
+    const forbiddenKeys = ['party', 'state', 'loksabha', 'assembly', 'party_id', 'state_id', 'loksabha_id', 'assembly_id', 'profile_ids', 'group_id'];
+    for (const k of forbiddenKeys) {
+      if (payload[k] != null && Array.isArray(payload[k]) ? (payload[k] as any[]).length > 0 : !!payload[k]) {
+        return json({ error: `Forbidden: campaign_manager cannot target ${k}` }, 403);
+      }
     }
   }
 
@@ -145,6 +166,28 @@ export async function PATCH(request: NextRequest) {
     if (patch.created_by != null) return json({ error: 'Forbidden' }, 403);
   }
 
+  if (auth.role === 'campaign_manager') {
+    const { data: ev, error: evErr } = await admin.from('events').select('id,created_by').eq('id', id).maybeSingle();
+    if (evErr) return json({ error: evErr.message }, 500);
+    const owner = String((ev as any)?.created_by ?? '').trim();
+    if (!owner || owner !== auth.user.id) return json({ error: 'Forbidden' }, 403);
+
+    // Must remain groups-only targeting.
+    if (patch.target_groups != null) {
+      const tg = Array.isArray(patch.target_groups) ? patch.target_groups : [];
+      if (tg.length === 0) return json({ error: 'Forbidden: campaign_manager must target_groups' }, 403);
+    }
+
+    const forbiddenKeys = ['party', 'state', 'loksabha', 'assembly', 'party_id', 'state_id', 'loksabha_id', 'assembly_id', 'profile_ids', 'group_id'];
+    for (const k of forbiddenKeys) {
+      if (patch[k] != null && Array.isArray(patch[k]) ? (patch[k] as any[]).length > 0 : !!patch[k]) {
+        return json({ error: `Forbidden: campaign_manager cannot target ${k}` }, 403);
+      }
+    }
+
+    if (patch.created_by != null) return json({ error: 'Forbidden' }, 403);
+  }
+
   const { data, error } = await admin.from('events').update(patch).eq('id', id).select().single();
   if (error) return json({ error: error.message }, 500);
   return json({ event: data });
@@ -171,6 +214,13 @@ export async function DELETE(request: NextRequest) {
     if (!owner || owner !== auth.user.id) return json({ error: 'Forbidden' }, 403);
     const stateIds = toNumArray((ev as any)?.state_id);
     if (stateIds.length === 0 || !isSubset(stateIds, auth.assigned_state_ids)) return json({ error: 'Forbidden' }, 403);
+  }
+
+  if (auth.role === 'campaign_manager') {
+    const { data: ev, error: evErr } = await admin.from('events').select('id,created_by').eq('id', id).maybeSingle();
+    if (evErr) return json({ error: evErr.message }, 500);
+    const owner = String((ev as any)?.created_by ?? '').trim();
+    if (!owner || owner !== auth.user.id) return json({ error: 'Forbidden' }, 403);
   }
 
   const { error } = await admin.from('events').delete().eq('id', id);

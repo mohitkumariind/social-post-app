@@ -1,4 +1,4 @@
-export type AdminRole = 'admin' | 'moderator';
+export type AdminRole = 'admin' | 'moderator' | 'campaign_manager';
 
 export type ViewerAccess = {
   role: AdminRole | null;
@@ -11,6 +11,10 @@ export function isAdmin(role: string | null | undefined): boolean {
 
 export function isModerator(role: string | null | undefined): boolean {
   return typeof role === 'string' && role.trim().toLowerCase() === 'moderator';
+}
+
+export function isCampaignManager(role: string | null | undefined): boolean {
+  return typeof role === 'string' && role.trim().toLowerCase() === 'campaign_manager';
 }
 
 /**

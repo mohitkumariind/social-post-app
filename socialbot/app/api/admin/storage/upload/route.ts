@@ -52,6 +52,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Moderators can only upload user frames' }, { status: 403 });
     }
   }
+  if (auth.role === 'campaign_manager') {
+    if (bucket !== 'post-images') {
+      return NextResponse.json({ error: 'campaign_manager can only upload post images' }, { status: 403 });
+    }
+  }
 
   let path: string;
   try {
@@ -84,6 +89,25 @@ export async function POST(request: NextRequest) {
     const viewerStates = auth.assigned_state_ids.map(Number);
     const ok = idsArr.some((x: any) => viewerStates.includes(Number(x)));
     if (!ok) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  }
+
+  if (auth.role === 'campaign_manager') {
+    // Enforce: public/events/<eventId>/... and event must belong to campaign_manager.
+    const parts = path.split('/').filter(Boolean); // e.g. ["public","events","<eventId>",...]
+    const eventId = parts.length >= 3 && parts[0] === 'public' && parts[1] === 'events' ? parts[2] : '';
+    if (!eventId) {
+      return NextResponse.json({ error: 'Invalid path for campaign_manager uploads' }, { status: 400 });
+    }
+    const { data: ev, error: evErr } = await admin
+      .from('events')
+      .select('id, created_by')
+      .eq('id', eventId)
+      .maybeSingle();
+    if (evErr) return NextResponse.json({ error: evErr.message }, { status: 500 });
+    const owner = String((ev as any)?.created_by ?? '').trim();
+    if (!owner || owner !== auth.user.id) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
   }

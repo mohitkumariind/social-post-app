@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
-import { fetchProfileAccessForMiddleware, isAdminRole, isModeratorRole } from '@/lib/supabase/session-helpers';
+import { fetchProfileAccessForMiddleware, isAdminRole, isCampaignManagerRole, isModeratorRole } from '@/lib/supabase/session-helpers';
 import type { AdminRole } from '@/lib/permissions';
 
 /** Same allowlist as middleware — must stay in sync for API routes. */
@@ -28,6 +28,7 @@ export async function validateAdminSession(
   const { role, assigned_state_ids } = await fetchProfileAccessForMiddleware(user.id, supabase);
   if (isAdminRole(role)) return { ok: true, user, role: 'admin', assigned_state_ids };
   if (isModeratorRole(role)) return { ok: true, user, role: 'moderator', assigned_state_ids };
+  if (isCampaignManagerRole(role)) return { ok: true, user, role: 'campaign_manager', assigned_state_ids };
   return { ok: false, status: 403 };
 }
 

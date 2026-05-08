@@ -57,6 +57,24 @@ export async function POST(request: Request) {
       };
     }
 
+    if (auth.role === 'campaign_manager') {
+      // Campaign manager: groups-only targeting (owned groups).
+      payload = {
+        ...payload,
+        all_workers: false,
+        filters: {
+          group_ids: [],
+        } as any,
+      };
+
+      const { data: groups, error: gErr } = await admin.from('groups').select('id').eq('created_by', auth.user.id);
+      if (gErr) return json({ error: gErr.message }, 500);
+      const groupIds = (groups ?? []).map((g: any) => Number(g.id)).filter((n) => Number.isFinite(n));
+      if (groupIds.length === 0) return json({ error: 'Forbidden: no owned groups to target' }, 403);
+
+      (payload.filters as any).group_ids = groupIds;
+    }
+
     const result = await runBroadcast(admin, expo, payload);
     if (!result.ok) {
       const status = result.error.includes('required') ? 400 : 500;

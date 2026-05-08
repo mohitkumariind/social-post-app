@@ -205,7 +205,7 @@ export async function GET(request: NextRequest) {
     if (tag) {
       const grp = await resolveGroup(admin, tag);
       if (!grp) return NextResponse.json({ error: 'Invalid group id/name' }, { status: 400 });
-      if (auth.role === 'moderator') {
+      if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
         if (String(grp.created_by ?? '').trim() !== auth.user.id) {
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
@@ -249,13 +249,21 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ tag: String(grp.id), name: grp.name, members: [] }, { headers: { 'Cache-Control': 'no-store' } });
       }
 
+      if (auth.role === 'campaign_manager') {
+        // Limited visibility, similar to moderators.
+        const filtered = membersAll.map((m) => ({ ...m, phone: '' }));
+        return NextResponse.json({ tag: String(grp.id), name: grp.name, members: filtered }, { headers: { 'Cache-Control': 'no-store' } });
+      }
+
       return NextResponse.json({ tag: String(grp.id), name: grp.name, members }, { headers: { 'Cache-Control': 'no-store' } });
     }
 
     // Prefer authoritative group list from `groups` table; join with counts from profiles.
     const groupQuery = admin.from('groups').select('id, name, created_by').order('id', { ascending: true });
     const { data: groupRows, error: gErr } =
-      auth.role === 'moderator' ? await groupQuery.eq('created_by', auth.user.id) : await groupQuery;
+      auth.role === 'moderator' || auth.role === 'campaign_manager'
+        ? await groupQuery.eq('created_by', auth.user.id)
+        : await groupQuery;
     if (gErr) throw new Error(gErr.message);
 
     const countsRowsAll = await fetchAllProfileIdAndGroupId(admin);
@@ -314,7 +322,7 @@ export async function DELETE(request: NextRequest) {
   if (!tag) return NextResponse.json({ error: 'Missing group id/name' }, { status: 400 });
   const grp = await resolveGroup(admin, tag);
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
-  if (auth.role === 'moderator') {
+  if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
     if (String(grp.created_by ?? '').trim() !== auth.user.id) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
@@ -383,7 +391,7 @@ export async function POST(request: NextRequest) {
   const grp = await resolveGroup(admin, tag, { createIfMissing: true, createdBy: auth.user.id });
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
 
-  if (auth.role === 'moderator') {
+  if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
     // Ownership-based access control: moderators can only use groups created by themselves.
     if (String(grp.created_by ?? '').trim() !== auth.user.id) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -464,22 +472,26 @@ export async function PATCH(request: NextRequest) {
     if (!Number.isFinite(gid)) return NextResponse.json({ error: 'Invalid group id in add[]' }, { status: 400 });
     const grp = await getGroupById(admin, gid);
     if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
-    if (auth.role === 'moderator') {
+    if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
       if (String(grp.created_by ?? '').trim() !== auth.user.id) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
+    }
+    if (auth.role === 'moderator') {
       if (!overlapsAssignedStates((row as any).assigned_state_ids, auth.assigned_state_ids)) {
         return NextResponse.json({ error: 'Forbidden: user outside assigned_state_ids' }, { status: 403 });
       }
     }
     next = gid;
   } else if (remove.length > 0 && current != null) {
-    if (auth.role === 'moderator') {
+    if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
       const grp = await getGroupById(admin, current);
       if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
       if (String(grp.created_by ?? '').trim() !== auth.user.id) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
+    }
+    if (auth.role === 'moderator') {
       if (!overlapsAssignedStates((row as any).assigned_state_ids, auth.assigned_state_ids)) {
         return NextResponse.json({ error: 'Forbidden: user outside assigned_state_ids' }, { status: 403 });
       }
