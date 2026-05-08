@@ -542,13 +542,15 @@ export default function App() {
     return { id: 'done', label: 'Expired', color: 'bg-slate-100 text-slate-400' };
   };
 
-  const fetchEventByIdOrName = async (ev: Pick<CampaignEvent, 'id' | 'name'>, select: string) => {
+  const fetchEventByIdOrName = async (ev: Pick<CampaignEvent, 'id' | 'name'>) => {
     const idStr = String(ev.id ?? '').trim();
-    if (isLikelyEventUuid(idStr)) {
-      const r = await supabase.from('events').select(select).eq('id', idStr).maybeSingle();
-      if (!r.error && r.data) return r;
-    }
-    return supabase.from('events').select(select).eq('name', ev.name).limit(1).maybeSingle();
+    const usp = new URLSearchParams();
+    if (isLikelyEventUuid(idStr)) usp.set('id', idStr);
+    else usp.set('name', String(ev.name ?? '').trim());
+    const res = await fetch(`/api/admin/events?${usp.toString()}`, { credentials: 'same-origin' });
+    const d = (await res.json().catch(() => ({}))) as { event?: any; error?: string };
+    if (!res.ok) return { data: null, error: { message: d.error || `HTTP ${res.status}` } } as any;
+    return { data: d.event ?? null, error: null } as any;
   };
 
   const updateEventByIdOrName = async (ev: Pick<CampaignEvent, 'id' | 'name'>, patch: Record<string, unknown>) => {
@@ -678,7 +680,7 @@ export default function App() {
   const openEvent = async (ev: CampaignEvent) => {
     let postsQuery = supabase.from('posts').select('id, image_url, title').eq('category', ev.name);
     const [eventsRes, postsRes] = await Promise.all([
-      fetchEventByIdOrName(ev, 'captions, party, state, loksabha, assembly'),
+      fetchEventByIdOrName(ev),
       postsQuery.order('created_at', { ascending: false }),
     ]);
     if (eventsRes.error) devConsole.error('openEvent events fetch:', eventsRes.error);
@@ -723,7 +725,7 @@ export default function App() {
     if (imageFiles.length === 0) return;
 
     /** Always pull latest captions from `events` so new rows match DB (not stale React state). */
-    const evCaptionsRes = await fetchEventByIdOrName(selectedEvent, 'captions');
+    const evCaptionsRes = await fetchEventByIdOrName(selectedEvent);
     if (evCaptionsRes.error) {
       devConsole.error('[handleUpload] Failed to read events.captions:', evCaptionsRes.error.message, evCaptionsRes.error);
     }
@@ -806,7 +808,7 @@ export default function App() {
       setSelectedEvent({ ...selectedEvent, posts: [...newPosts, ...selectedEvent.posts], assetsCount: (selectedEvent.assetsCount ?? selectedEvent.posts.length) + newPosts.length });
 
       /** Re-read `events.captions` and push to every graphics post (same merge as inserts). */
-      const evSnapRes = await fetchEventByIdOrName(selectedEvent, 'captions');
+      const evSnapRes = await fetchEventByIdOrName(selectedEvent);
       if (evSnapRes.error) devConsole.error('[handleUpload] post-upload events read:', evSnapRes.error.message);
       const snapRow =
         !evSnapRes.error && evSnapRes.data != null

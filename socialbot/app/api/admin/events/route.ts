@@ -21,7 +21,7 @@ function isSubset(sub: number[], sup: number[]): boolean {
   return sub.every((n) => set.has(Number(n)));
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
@@ -32,10 +32,32 @@ export async function GET() {
   const admin = createServiceRoleClient();
   const db = admin ?? supabase;
 
+  const id = (request.nextUrl.searchParams.get('id') ?? '').trim();
+  const name = (request.nextUrl.searchParams.get('name') ?? '').trim();
+
+  // Detail fetch (used by admin UI for secure reads).
+  if (id || name) {
+    let q = db.from('events').select('*').limit(1) as any;
+    q = id ? q.eq('id', id) : q.eq('name', name);
+    const { data, error } = await q.maybeSingle();
+    if (error) return json({ error: error.message }, 500);
+    if (!data) return json({ error: 'Not found' }, 404);
+
+    if (auth.role === 'moderator') {
+      const owner = String((data as any).created_by ?? '').trim();
+      if (!owner || owner !== auth.user.id) return json({ error: 'Forbidden' }, 403);
+      const stateIds = toNumArray((data as any).state_id);
+      if (stateIds.length === 0 || !isSubset(stateIds, auth.assigned_state_ids)) return json({ error: 'Forbidden' }, 403);
+    }
+
+    return json({ event: data, usedServiceRole: !!admin });
+  }
+
+  // Listing
   let q = db.from('events').select('*').order('created_at', { ascending: false }) as any;
   if (auth.role === 'moderator') {
-    // Only events targeting ANY of the moderator's states (overlap on state_id int[]).
-    q = q.overlaps('state_id', auth.assigned_state_ids);
+    // Must satisfy BOTH: ownership and assigned states.
+    q = q.eq('created_by', auth.user.id).overlaps('state_id', auth.assigned_state_ids);
   }
   const { data, error } = await q;
   if (error) return json({ error: error.message }, 500);
@@ -71,6 +93,9 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Always set owner on creation (admin + moderator).
+  payload.created_by = auth.user.id;
+
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
@@ -101,14 +126,23 @@ export async function PATCH(request: NextRequest) {
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
   if (auth.role === 'moderator') {
-    const { data: ev, error: evErr } = await admin.from('events').select('id,state_id,target_groups').eq('id', id).maybeSingle();
+    const { data: ev, error: evErr } = await admin
+      .from('events')
+      .select('id,state_id,target_groups,created_by')
+      .eq('id', id)
+      .maybeSingle();
     if (evErr) return json({ error: evErr.message }, 500);
+    const owner = String((ev as any)?.created_by ?? '').trim();
+    if (!owner || owner !== auth.user.id) return json({ error: 'Forbidden' }, 403);
     const existingStateIds = toNumArray((ev as any)?.state_id);
     if (existingStateIds.length === 0 || !isSubset(existingStateIds, auth.assigned_state_ids)) return json({ error: 'Forbidden' }, 403);
     const nextStateIds = patch.state_id != null ? toNumArray(patch.state_id) : existingStateIds;
     if (nextStateIds.length === 0 || !isSubset(nextStateIds, auth.assigned_state_ids)) return json({ error: 'Forbidden: cannot set states outside assignment' }, 403);
     const nextTargetGroups = patch.target_groups != null ? (Array.isArray(patch.target_groups) ? patch.target_groups : []) : ((ev as any)?.target_groups ?? []);
     if (Array.isArray(nextTargetGroups) && nextTargetGroups.length > 0) return json({ error: 'Forbidden: moderators cannot use target_groups events' }, 403);
+
+    // Never allow moderators to change ownership.
+    if (patch.created_by != null) return json({ error: 'Forbidden' }, 403);
   }
 
   const { data, error } = await admin.from('events').update(patch).eq('id', id).select().single();
@@ -131,8 +165,10 @@ export async function DELETE(request: NextRequest) {
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
   if (auth.role === 'moderator') {
-    const { data: ev, error: evErr } = await admin.from('events').select('id,state_id').eq('id', id).maybeSingle();
+    const { data: ev, error: evErr } = await admin.from('events').select('id,state_id,created_by').eq('id', id).maybeSingle();
     if (evErr) return json({ error: evErr.message }, 500);
+    const owner = String((ev as any)?.created_by ?? '').trim();
+    if (!owner || owner !== auth.user.id) return json({ error: 'Forbidden' }, 403);
     const stateIds = toNumArray((ev as any)?.state_id);
     if (stateIds.length === 0 || !isSubset(stateIds, auth.assigned_state_ids)) return json({ error: 'Forbidden' }, 403);
   }
