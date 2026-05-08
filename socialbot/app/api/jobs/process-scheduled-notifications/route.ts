@@ -2,6 +2,7 @@ import Expo from 'expo-server-sdk';
 import { createServiceRoleClient } from '@/lib/admin-gate';
 import { runBroadcast, type BroadcastPayload } from '@/lib/broadcast-send';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 
 export const runtime = 'nodejs';
 
@@ -89,6 +90,55 @@ export async function POST(request: Request) {
     }
 
     try {
+      // RBAC re-validation (never bypass): confirm creator role/scope can target this payload.
+      const createdBy = String((claimed as any).created_by ?? '').trim();
+      const createdRole = String((claimed as any).created_role ?? '').trim().toLowerCase();
+      if (createdRole === 'moderator' || createdRole === 'campaign_manager') {
+        // Fetch creator profile scope (service-role) so tampered payloads cannot bypass.
+        const { data: prof, error: pErr } = await admin
+          .from('profiles')
+          .select('id, role, assigned_state_ids, assigned_group_ids')
+          .eq('id', createdBy)
+          .maybeSingle();
+        if (pErr) throw new Error(pErr.message);
+        const role = String((prof as any)?.role ?? createdRole).trim().toLowerCase();
+        const user = {
+          id: createdBy,
+          role: role === 'moderator' ? ('moderator' as const) : ('campaign_manager' as const),
+          assigned_state_ids: Array.isArray((prof as any)?.assigned_state_ids) ? (prof as any).assigned_state_ids : [],
+          assigned_group_ids: Array.isArray((prof as any)?.assigned_group_ids) ? (prof as any).assigned_group_ids : [],
+        };
+
+        const filters = (payload as any)?.filters ?? {};
+        const resource =
+          user.role === 'moderator'
+            ? { state_ids: (filters as any).assigned_state_ids }
+            : { group_ids: (filters as any).group_ids };
+
+        if (!canAccessResource(user as any, resource as any)) {
+          await admin
+            .from('scheduled_notifications')
+            .update({ status: 'failed', attempt_count: attempt, last_error: 'Forbidden: payload target outside creator scope' })
+            .eq('id', jobId);
+          results.push({ id: jobId, ok: false, error: 'Forbidden: payload target outside creator scope' });
+          void logAdminAction({
+            actor_user_id: createdBy || null,
+            actor_role: createdRole || 'unknown',
+            action_type: 'scheduled_notifications.failed',
+            resource_type: 'scheduled_notifications',
+            resource_id: jobId,
+            resource_name: (payload as any).title ?? null,
+            previous_data: claimed,
+            new_data: { status: 'failed', error: 'Forbidden: payload target outside creator scope' },
+            severity: 'critical',
+            undoable: false,
+            scope_state_ids: user.role === 'moderator' ? user.assigned_state_ids : [],
+            scope_group_ids: user.role === 'campaign_manager' ? user.assigned_group_ids : [],
+          });
+          continue;
+        }
+      }
+
       const payloadToSend = { ...(payload as any), preview: false } as BroadcastPayload;
       const r = await runBroadcast(admin, expo, payloadToSend);
       if (!r.ok) {
@@ -109,6 +159,8 @@ export async function POST(request: Request) {
           new_data: { status: 'failed', error: r.error },
           severity: 'critical',
           undoable: false,
+          scope_state_ids: Array.isArray((payload as any)?.filters?.assigned_state_ids) ? (payload as any).filters.assigned_state_ids : [],
+          scope_group_ids: Array.isArray((payload as any)?.filters?.group_ids) ? (payload as any).filters.group_ids.map((x: any) => String(x)) : [],
         });
         continue;
       }
@@ -137,6 +189,8 @@ export async function POST(request: Request) {
         new_data: sentPatch,
         severity: 'info',
         undoable: false,
+        scope_state_ids: Array.isArray((payload as any)?.filters?.assigned_state_ids) ? (payload as any).filters.assigned_state_ids : [],
+        scope_group_ids: Array.isArray((payload as any)?.filters?.group_ids) ? (payload as any).filters.group_ids.map((x: any) => String(x)) : [],
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

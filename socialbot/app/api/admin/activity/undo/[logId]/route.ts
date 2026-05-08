@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
+import { resolveScope } from '@/lib/rbac/unified-scope-engine';
+import { toNumArray, toStrArray } from '@/lib/rbac/require';
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -22,6 +24,20 @@ function pickPatchFromRow(row: Record<string, unknown>): Record<string, unknown>
   delete patch.created_at;
   delete patch.updated_at;
   return patch;
+}
+
+function intersectsNums(a: unknown, b: number[]): boolean {
+  const aa = toNumArray(a);
+  if (aa.length === 0 || b.length === 0) return false;
+  const set = new Set(b.map(Number));
+  return aa.some((n) => set.has(Number(n)));
+}
+
+function intersectsStr(a: unknown, b: string[]): boolean {
+  const aa = toStrArray(a);
+  if (aa.length === 0 || b.length === 0) return false;
+  const set = new Set(b.map((x) => String(x).trim()).filter(Boolean));
+  return aa.some((s) => set.has(String(s).trim()));
 }
 
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ logId: string }> }) {
@@ -45,16 +61,23 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ logId: st
   if (!(logRow as any).undoable) return json({ error: 'This action is not undoable' }, 400);
   if ((logRow as any).undone_at) return json({ error: 'Already undone' }, 409);
 
-  // RBAC: reuse Activity Center visibility rules to decide if the actor can undo this log.
-  if (auth.role === 'campaign_manager') {
-    if (String((logRow as any).actor_user_id ?? '') !== auth.user.id) return json({ error: 'Forbidden' }, 403);
-  }
-  if (auth.role === 'moderator') {
-    if (auth.assigned_state_ids.length === 0) return json({ error: 'Moderator is missing assigned_state_ids' }, 403);
-    const isOwn = String((logRow as any).actor_user_id ?? '') === auth.user.id;
-    const scopeStateIds = Array.isArray((logRow as any).scope_state_ids) ? (logRow as any).scope_state_ids : [];
-    const overlaps = scopeStateIds.some((x: any) => auth.assigned_state_ids.includes(Number(x)));
-    if (!isOwn && !overlaps) return json({ error: 'Forbidden' }, 403);
+  // RBAC: must be able to *view* the log in Activity Center to undo it.
+  if (auth.role !== 'admin') {
+    const isOwn = String((logRow as any).actor_user_id ?? '').trim() === auth.user.id;
+    if (!isOwn) {
+      const scope = resolveScope({
+        role: auth.role,
+        assigned_state_ids: auth.assigned_state_ids,
+        assigned_group_ids: auth.assigned_group_ids,
+      });
+      if (scope.type === 'STATE') {
+        if (!intersectsNums((logRow as any).scope_state_ids, scope.states)) return json({ error: 'Forbidden' }, 403);
+      } else if (scope.type === 'GROUP') {
+        if (!intersectsStr((logRow as any).scope_group_ids, scope.groups)) return json({ error: 'Forbidden' }, 403);
+      } else {
+        return json({ error: 'Forbidden' }, 403);
+      }
+    }
   }
 
   const resourceType = String((logRow as any).resource_type ?? '').trim();
