@@ -533,14 +533,34 @@ export default function DashboardScreen() {
       // should be treated as "global" on the client. DB-side filters can accidentally exclude global rows.
       // Strict numeric-ID mode: no legacy fallback (default deny if schema isn't migrated).
       const runNumeric = async () =>
-        await supabase
-          .from('posts')
-          .select(
-            'id,title,image_url,category,event_date,created_at,captions,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids'
-          )
-          .or('is_video.eq.false,is_video.is.null')
-          .order('created_at', { ascending: false })
-          .limit(300);
+        await (async () => {
+          const nowIso = new Date().toISOString();
+          const q = supabase
+            .from('posts')
+            .select(
+              'id,title,image_url,category,event_date,created_at,captions,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids,status,deleted_at,scheduled_at'
+            )
+            .or('is_video.eq.false,is_video.is.null')
+            .eq('status', 'published')
+            .is('deleted_at', null)
+            .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`)
+            .order('created_at', { ascending: false })
+            .limit(300) as any;
+
+          const r = await q;
+          if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
+            // Backward-compatible fallback: old schema (no status/deleted_at/scheduled_at)
+            return await supabase
+              .from('posts')
+              .select(
+                'id,title,image_url,category,event_date,created_at,captions,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids'
+              )
+              .or('is_video.eq.false,is_video.is.null')
+              .order('created_at', { ascending: false })
+              .limit(300);
+          }
+          return r;
+        })();
 
       // If we already detected missing columns, skip querying to avoid repeated errors.
       if (postsSchemaOkRef.current === false) {

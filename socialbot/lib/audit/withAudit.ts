@@ -24,6 +24,7 @@ export type WithAuditConfig<TBefore = unknown, TAfter = unknown> = {
     response_json: any | null;
     response_status: number;
   }) => {
+    action_type?: string;
     resource_id?: string | null;
     resource_name?: string | null;
     new_data?: TAfter | unknown;
@@ -97,7 +98,7 @@ export function withAudit<TBefore = unknown, TAfter = unknown>(
         void logAdminAction({
           actor_user_id: auth.user.id,
           actor_role: auth.role,
-          action_type: config.action_type,
+          action_type: built.action_type ?? config.action_type,
           resource_type: config.resource_type,
           resource_id: built.resource_id ?? null,
           resource_name: built.resource_name ?? null,

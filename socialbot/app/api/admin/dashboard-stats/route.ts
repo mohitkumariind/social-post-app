@@ -32,7 +32,20 @@ export async function GET() {
     auth.role === 'moderator'
       ? db.from('profiles').select('id', { count: 'exact', head: true }).overlaps('assigned_state_ids', auth.assigned_state_ids)
       : db.from('profiles').select('id', { count: 'exact', head: true }),
-    db.from('posts').select('id', { count: 'exact', head: true }),
+    // Posts count (best-effort): exclude deleted/scheduled-not-due when columns exist.
+    (async () => {
+      const nowIso = new Date().toISOString();
+      const r = await db
+        .from('posts')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'published')
+        .is('deleted_at', null)
+        .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`);
+      if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
+        return await db.from('posts').select('id', { count: 'exact', head: true });
+      }
+      return r as any;
+    })(),
     db.from('events').select('id', { count: 'exact', head: true }),
     auth.role === 'moderator'
       ? db
@@ -41,7 +54,22 @@ export async function GET() {
           .gte('created_at', startOfTodayIso())
           .overlaps('assigned_state_ids', auth.assigned_state_ids)
       : db.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', startOfTodayIso()),
-    db.from('posts').select('id,title,created_at').order('created_at', { ascending: false }).limit(5),
+    // Recent posts (best-effort filter)
+    (async () => {
+      const nowIso = new Date().toISOString();
+      const r = await db
+        .from('posts')
+        .select('id,title,created_at')
+        .eq('status', 'published')
+        .is('deleted_at', null)
+        .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`)
+        .order('created_at', { ascending: false })
+        .limit(5);
+      if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
+        return await db.from('posts').select('id,title,created_at').order('created_at', { ascending: false }).limit(5);
+      }
+      return r as any;
+    })(),
     db.from('events').select('id,name,end').order('end', { ascending: true }).limit(3),
   ]);
 
