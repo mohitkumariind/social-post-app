@@ -50,30 +50,63 @@ function aggregateGroupIds(rows: { id: string; group_id: unknown }[]): { tag: st
 
 type DbGroupRow = { id: number; name: string };
 
-async function getGroupById(admin: SupabaseClient, id: number): Promise<DbGroupRow | null> {
-  const { data, error } = await admin.from('groups').select('id, name').eq('id', id).maybeSingle();
-  if (error) throw new Error(error.message);
-  if (!data) return null;
-  return { id: Number((data as any).id), name: String((data as any).name ?? '') };
+type DbGroupWithOwnerRow = { id: number; name: string; created_by: string | null };
+
+function overlapsAssignedStates(profileAssigned: unknown, viewerAssigned: number[]): boolean {
+  const idsArr = Array.isArray(profileAssigned) ? profileAssigned : [];
+  const viewer = viewerAssigned.map(Number);
+  return idsArr.some((x: any) => viewer.includes(Number(x)));
 }
 
-async function getGroupByName(admin: SupabaseClient, name: string): Promise<DbGroupRow | null> {
+function requireModeratorOwnership(auth: { role: 'admin' | 'moderator'; user: { id: string } }, grp: DbGroupWithOwnerRow | null) {
+  if (!grp) return;
+  if (auth.role !== 'moderator') return;
+  const owner = String(grp.created_by ?? '').trim();
+  if (!owner || owner !== auth.user.id) {
+    throw new Error('FORBIDDEN_NOT_OWNER');
+  }
+}
+
+async function getGroupById(admin: SupabaseClient, id: number): Promise<DbGroupWithOwnerRow | null> {
+  const { data, error } = await admin.from('groups').select('id, name, created_by').eq('id', id).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return {
+    id: Number((data as any).id),
+    name: String((data as any).name ?? ''),
+    created_by: (data as any).created_by != null ? String((data as any).created_by) : null,
+  };
+}
+
+async function getGroupByName(admin: SupabaseClient, name: string): Promise<DbGroupWithOwnerRow | null> {
   const n = String(name ?? '').trim();
   if (!n) return null;
-  const { data, error } = await admin.from('groups').select('id, name').eq('name', n).maybeSingle();
+  const { data, error } = await admin.from('groups').select('id, name, created_by').eq('name', n).maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) return null;
-  return { id: Number((data as any).id), name: String((data as any).name ?? '') };
+  return {
+    id: Number((data as any).id),
+    name: String((data as any).name ?? ''),
+    created_by: (data as any).created_by != null ? String((data as any).created_by) : null,
+  };
 }
 
-async function createGroup(admin: SupabaseClient, name: string): Promise<DbGroupRow> {
+async function createGroup(admin: SupabaseClient, name: string, createdBy: string): Promise<DbGroupWithOwnerRow> {
   const n = String(name ?? '').trim();
-  const { data, error } = await admin.from('groups').insert({ name: n }).select('id, name').single();
+  const { data, error } = await admin.from('groups').insert({ name: n, created_by: createdBy }).select('id, name, created_by').single();
   if (error) throw new Error(error.message);
-  return { id: Number((data as any).id), name: String((data as any).name ?? '') };
+  return {
+    id: Number((data as any).id),
+    name: String((data as any).name ?? ''),
+    created_by: (data as any).created_by != null ? String((data as any).created_by) : null,
+  };
 }
 
-async function resolveGroup(admin: SupabaseClient, tag: string, opts?: { createIfMissing?: boolean }): Promise<DbGroupRow | null> {
+async function resolveGroup(
+  admin: SupabaseClient,
+  tag: string,
+  opts?: { createIfMissing?: boolean; createdBy?: string }
+): Promise<DbGroupWithOwnerRow | null> {
   const raw = String(tag ?? '').trim();
   if (!raw) return null;
 
@@ -84,7 +117,11 @@ async function resolveGroup(admin: SupabaseClient, tag: string, opts?: { createI
 
   const existing = await getGroupByName(admin, raw);
   if (existing) return existing;
-  if (opts?.createIfMissing) return await createGroup(admin, raw);
+  if (opts?.createIfMissing) {
+    const createdBy = String(opts.createdBy ?? '').trim();
+    if (!createdBy) throw new Error('Missing createdBy for group creation');
+    return await createGroup(admin, raw, createdBy);
+  }
   return null;
 }
 
@@ -168,6 +205,11 @@ export async function GET(request: NextRequest) {
     if (tag) {
       const grp = await resolveGroup(admin, tag);
       if (!grp) return NextResponse.json({ error: 'Invalid group id/name' }, { status: 400 });
+      if (auth.role === 'moderator') {
+        if (String(grp.created_by ?? '').trim() !== auth.user.id) {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+      }
       const rows = await fetchMembersForGroupId(admin, grp.id);
       const membersAll = rows.map((r) => ({
         id: String(r.id ?? ''),
@@ -211,7 +253,9 @@ export async function GET(request: NextRequest) {
     }
 
     // Prefer authoritative group list from `groups` table; join with counts from profiles.
-    const { data: groupRows, error: gErr } = await admin.from('groups').select('id, name').order('id', { ascending: true });
+    const groupQuery = admin.from('groups').select('id, name, created_by').order('id', { ascending: true });
+    const { data: groupRows, error: gErr } =
+      auth.role === 'moderator' ? await groupQuery.eq('created_by', auth.user.id) : await groupQuery;
     if (gErr) throw new Error(gErr.message);
 
     const countsRowsAll = await fetchAllProfileIdAndGroupId(admin);
@@ -257,8 +301,8 @@ export async function DELETE(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator') {
-    return NextResponse.json({ error: 'Moderators cannot delete groups' }, { status: 403 });
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -270,6 +314,25 @@ export async function DELETE(request: NextRequest) {
   if (!tag) return NextResponse.json({ error: 'Missing group id/name' }, { status: 400 });
   const grp = await resolveGroup(admin, tag);
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
+  if (auth.role === 'moderator') {
+    if (String(grp.created_by ?? '').trim() !== auth.user.id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  }
+
+  // For moderators, ensure the group doesn't contain out-of-scope members before deleting the group row.
+  if (auth.role === 'moderator') {
+    const viewerStates = auth.assigned_state_ids.map(Number);
+    const { data: memberRows, error: memErr } = await admin
+      .from('profiles')
+      .select('id, assigned_state_ids')
+      .eq('group_id', grp.id);
+    if (memErr) return NextResponse.json({ error: memErr.message }, { status: 500 });
+    const outOfScope = (memberRows ?? []).some((r: any) => !overlapsAssignedStates(r.assigned_state_ids, viewerStates));
+    if (outOfScope) {
+      return NextResponse.json({ error: 'Forbidden: group contains users outside assigned_state_ids' }, { status: 403 });
+    }
+  }
 
   const { error: upErr } = await admin.from('profiles').update({ group_id: null }).eq('group_id', grp.id);
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
@@ -317,8 +380,15 @@ export async function POST(request: NextRequest) {
 
   // Foreign key constraint requires that `profiles.group_id` exists in `groups` table.
   // If tag is numeric, it must already exist. If tag is a name, create group row if missing.
-  const grp = await resolveGroup(admin, tag, { createIfMissing: true });
+  const grp = await resolveGroup(admin, tag, { createIfMissing: true, createdBy: auth.user.id });
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
+
+  if (auth.role === 'moderator') {
+    // Ownership-based access control: moderators can only use groups created by themselves.
+    if (String(grp.created_by ?? '').trim() !== auth.user.id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  }
 
   if (auth.role === 'moderator') {
     const { data: rows, error: stErr } = await admin
@@ -329,8 +399,7 @@ export async function POST(request: NextRequest) {
     const viewerStates = auth.assigned_state_ids.map(Number);
     const allowed = (rows ?? [])
       .filter((r: any) => {
-        const idsArr = Array.isArray(r.assigned_state_ids) ? r.assigned_state_ids : [];
-        return idsArr.some((x: any) => viewerStates.includes(Number(x)));
+        return overlapsAssignedStates(r.assigned_state_ids, viewerStates);
       })
       .map((r: any) => String(r.id))
       .filter(Boolean);
@@ -354,8 +423,8 @@ export async function PATCH(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator') {
-    return NextResponse.json({ error: 'Moderators cannot modify groups after creation' }, { status: 403 });
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -379,7 +448,11 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'Provide add and/or remove' }, { status: 400 });
   }
 
-  const { data: row, error: readErr } = await admin.from('profiles').select('group_id').eq('id', userId).maybeSingle();
+  const { data: row, error: readErr } = await admin
+    .from('profiles')
+    .select('group_id, assigned_state_ids')
+    .eq('id', userId)
+    .maybeSingle();
   if (readErr) return NextResponse.json({ error: readErr.message }, { status: 500 });
   if (!row) return NextResponse.json({ error: 'User not found' }, { status: 404 });
 
@@ -389,8 +462,28 @@ export async function PATCH(request: NextRequest) {
   if (add.length > 0) {
     const gid = Number(add[0]);
     if (!Number.isFinite(gid)) return NextResponse.json({ error: 'Invalid group id in add[]' }, { status: 400 });
+    const grp = await getGroupById(admin, gid);
+    if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
+    if (auth.role === 'moderator') {
+      if (String(grp.created_by ?? '').trim() !== auth.user.id) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+      if (!overlapsAssignedStates((row as any).assigned_state_ids, auth.assigned_state_ids)) {
+        return NextResponse.json({ error: 'Forbidden: user outside assigned_state_ids' }, { status: 403 });
+      }
+    }
     next = gid;
   } else if (remove.length > 0 && current != null) {
+    if (auth.role === 'moderator') {
+      const grp = await getGroupById(admin, current);
+      if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
+      if (String(grp.created_by ?? '').trim() !== auth.user.id) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+      if (!overlapsAssignedStates((row as any).assigned_state_ids, auth.assigned_state_ids)) {
+        return NextResponse.json({ error: 'Forbidden: user outside assigned_state_ids' }, { status: 403 });
+      }
+    }
     const removeSet = new Set(remove.map((x) => String(Number(x))));
     if (removeSet.has(String(current))) next = null;
   }

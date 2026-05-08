@@ -116,9 +116,17 @@ export default function NotificationBroadcastCenterPage() {
 
   const [toast, setToast] = useState<string | null>(null);
 
+  const visibleStates = useMemo(() => {
+    if (!isModerator) return states;
+    const allowed = new Set((viewer?.assigned_state_ids ?? []).map(String));
+    return states.filter((s) => allowed.has(String(s.id)));
+  }, [isModerator, viewer?.assigned_state_ids, states]);
+
+  const moderatorHasSingleState = isModerator && (viewer?.assigned_state_ids?.length ?? 0) === 1;
+
   const selectedState = useMemo(
-    () => states.find((s) => String(s.id) === String(stateId)),
-    [states, stateId]
+    () => visibleStates.find((s) => String(s.id) === String(stateId)) ?? states.find((s) => String(s.id) === String(stateId)),
+    [visibleStates, states, stateId]
   );
   const selectedLoksabha = useMemo(
     () => loksabhas.find((l) => String(l.id) === String(loksabhaId)),
@@ -135,9 +143,9 @@ export default function NotificationBroadcastCenterPage() {
     if (!isModerator) return;
     const ids = viewer?.assigned_state_ids ?? [];
     if (ids.length === 0) return;
-    // Force moderator to one of their assigned states (keep current if allowed).
+    // Keep current if allowed; otherwise default to first allowed (or set if empty).
     const allowed = ids.map(String);
-    const next = allowed.includes(stateId) ? stateId : allowed[0];
+    const next = stateId && allowed.includes(stateId) ? stateId : allowed[0];
     if (stateId !== next) setStateId(next);
     if (allWorkers) setAllWorkers(false);
   }, [isModerator, viewer?.assigned_state_ids, stateId, allWorkers]);
@@ -473,19 +481,25 @@ export default function NotificationBroadcastCenterPage() {
           </div>
           <div>
             <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">State</span>
-            <select
-              className={selectClass}
-              value={stateId}
-              onChange={(e) => setStateId(e.target.value)}
-              disabled={isModerator || allWorkers || geoLoading}
-            >
-              <option value="">Any state</option>
-              {states.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+            {moderatorHasSingleState ? (
+              <div className={`${selectClass} flex items-center`}>
+                {selectedState?.name ?? '—'}
+              </div>
+            ) : (
+              <select
+                className={selectClass}
+                value={stateId}
+                onChange={(e) => setStateId(e.target.value)}
+              disabled={allWorkers || geoLoading}
+              >
+                <option value="">Any state</option>
+                {visibleStates.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <div>
             <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Loksabha</span>

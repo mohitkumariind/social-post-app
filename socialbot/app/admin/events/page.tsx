@@ -20,7 +20,7 @@ import {
   Video,
   X
 } from 'lucide-react';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { isPartyOtherId, LANGUAGE_OPTIONS, LANGUAGE_TO_STATES, PARTIES_DATA } from '@/lib/constants';
@@ -260,6 +260,39 @@ export default function App() {
   const skipAutoStateRef = useRef(false);
   const skipLoksabhaResetCountRef = useRef(0);
 
+  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_ids: number[] } | null>(null);
+  const isModerator = viewer?.role === 'moderator';
+  const assignedStateIds = (viewer?.assigned_state_ids ?? []).map(String);
+  const moderatorHasSingleState = isModerator && assignedStateIds.length === 1;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_ids?: unknown };
+        if (cancelled) return;
+        const role = d.role === 'moderator' ? 'moderator' : d.role === 'admin' ? 'admin' : null;
+        const ids = Array.isArray(d.assigned_state_ids)
+          ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
+          : [];
+        if (role) setViewer({ role, assigned_state_ids: ids });
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const visibleStates = useMemo(() => {
+    if (!isModerator) return availableStates;
+    const allowed = new Set(assignedStateIds);
+    return availableStates.filter((s) => allowed.has(String(s.id)));
+  }, [isModerator, assignedStateIds, availableStates]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -344,21 +377,21 @@ export default function App() {
     fetchEvents().finally(() => setEventsLoading(false));
   }, []);
 
-  /** Language-to-State auto-select: map LANGUAGE_TO_STATES names to numeric IDs from availableStates */
+  /** Language-to-State auto-select: map LANGUAGE_TO_STATES names to numeric IDs from visibleStates */
   useEffect(() => {
     if (skipAutoStateRef.current) {
       skipAutoStateRef.current = false;
       return;
     }
-    if (newLanguage && availableStates.length > 0) {
-      const matchedIds = availableStates
+    if (newLanguage && visibleStates.length > 0) {
+      const matchedIds = visibleStates
         .filter((s) => LANGUAGE_TO_STATES[newLanguage]?.includes(s.name))
         .map((s) => String(s.id));
       setNewState(matchedIds);
     } else if (!newLanguage) {
       setNewState([]);
     }
-  }, [newLanguage, availableStates]);
+  }, [newLanguage, visibleStates]);
 
   /** When newState changes, reset newLoksabha and newAssembly. Skip when restoring from edit. */
   useEffect(() => {
@@ -378,6 +411,25 @@ export default function App() {
     }
     setNewAssembly([]);
   }, [newLoksabha]);
+
+  // Moderator UX: lock state selection to assigned states.
+  useEffect(() => {
+    if (!isModerator) return;
+    if (assignedStateIds.length === 0) return;
+    if (moderatorHasSingleState) {
+      const only = assignedStateIds[0];
+      if (newState.length !== 1 || newState[0] !== only) {
+        setNewState([only]);
+      }
+      if (filterState !== 'ALL' && filterState !== only) setFilterState(only);
+    } else {
+      // Remove any states not in assigned list (and prevent ALL selection).
+      const allowed = new Set(assignedStateIds);
+      const cleaned = newState.filter((id) => id !== 'ALL' && allowed.has(String(id)));
+      if (cleaned.length !== newState.length) setNewState(cleaned);
+      if (filterState !== 'ALL' && !allowed.has(filterState)) setFilterState('ALL');
+    }
+  }, [isModerator, moderatorHasSingleState, assignedStateIds, newState, filterState]);
 
   /** Fetch Lok Sabha when state selection changes. Uses integer IDs for Supabase query. */
   useEffect(() => {
@@ -1210,10 +1262,16 @@ export default function App() {
             <option value="ALL">All Parties</option>
             {PARTIES_DATA.map(p => <option key={p.id} value={p.id}>{p.shortName}</option>)}
           </select>
-          <select value={filterState} onChange={e => setFilterState(e.target.value)} className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
-            <option value="ALL">All States</option>
-            {availableStates.map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
-          </select>
+          {moderatorHasSingleState ? (
+            <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
+              {visibleStates[0]?.name ?? '—'}
+            </div>
+          ) : (
+            <select value={filterState} onChange={e => setFilterState(e.target.value)} className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
+              <option value="ALL">All States</option>
+              {(isModerator ? visibleStates : availableStates).map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+            </select>
+          )}
         </div>
 
         {/* Create Event Strip - Language-First: Language → State (auto) → Party */}
@@ -1231,17 +1289,26 @@ export default function App() {
               </select>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <MultiSelectDropdown
-                label="State"
-                options={availableStates}
-                selected={newState}
-                onSelect={setNewState}
-                getValue={(s) => s.id}
-                getLabel={(s) => s.name}
-                allLabel="All States"
-                loading={statesLoading}
-                searchable
-              />
+              {moderatorHasSingleState ? (
+                <div>
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">State</span>
+                  <div className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
+                    {visibleStates[0]?.name ?? '—'}
+                  </div>
+                </div>
+              ) : (
+                <MultiSelectDropdown
+                  label="State"
+                  options={isModerator ? visibleStates : availableStates}
+                  selected={newState}
+                  onSelect={setNewState}
+                  getValue={(s) => s.id}
+                  getLabel={(s) => s.name}
+                  allLabel="All States"
+                  loading={statesLoading}
+                  searchable
+                />
+              )}
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <MultiSelectDropdown

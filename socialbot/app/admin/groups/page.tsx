@@ -289,16 +289,14 @@ export default function GroupManagementPage() {
                 >
                   Add
                 </button>
-                {!isModerator ? (
-                  <button
-                    type="button"
-                    onClick={() => setDeleteConfirmTag(g.tag)}
-                    disabled={busyTag === g.tag}
-                    className="inline-flex h-10 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 px-4 text-[10px] font-black uppercase tracking-widest text-rose-700 shadow-sm transition-all hover:bg-rose-100 active:scale-95 disabled:opacity-50"
-                  >
-                    Delete
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmTag(g.tag)}
+                  disabled={busyTag === g.tag}
+                  className="inline-flex h-10 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 px-4 text-[10px] font-black uppercase tracking-widest text-rose-700 shadow-sm transition-all hover:bg-rose-100 active:scale-95 disabled:opacity-50"
+                >
+                  Delete
+                </button>
               </div>
             </div>
           ))}
