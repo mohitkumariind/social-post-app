@@ -85,7 +85,31 @@ export default function UserManagement() {
     return s ? [s] : [];
   };
 
+  // party id -> display label (prefer short form)
   const [partyLabelMap, setPartyLabelMap] = useState<Record<string, string>>({});
+
+  const acronym = (s: string): string => {
+    const words = s
+      .trim()
+      .split(/[\s\-_/]+/)
+      .map((w) => w.trim())
+      .filter(Boolean);
+    const a = words.map((w) => w[0]?.toUpperCase()).join('');
+    return a.length >= 2 && a.length <= 10 ? a : '';
+  };
+
+  const shortFromPartyName = (name: string): string => {
+    const n = String(name ?? '').trim();
+    if (!n) return '';
+    // If name itself is already short (e.g. BJP), keep it.
+    if (n.length <= 12 && !n.includes(' ')) return n.toUpperCase();
+    // Try mapping via shared constants (handles full names too).
+    const id = normalizePartyId(n);
+    const short = getPartyLabel(id || n);
+    if (short && short !== n) return short;
+    // Last resort: acronym from words.
+    return acronym(n);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -101,7 +125,9 @@ export default function UserManagement() {
         for (const r of (data ?? []) as any[]) {
           const id = String(r?.id ?? '').trim();
           const name = String(r?.name ?? '').trim();
-          if (id && name) map[id] = name;
+          if (!id || !name) continue;
+          const short = shortFromPartyName(name);
+          map[id] = short || name;
         }
         setPartyLabelMap(map);
       } catch (e) {
@@ -127,12 +153,10 @@ export default function UserManagement() {
     const raw = String(rawParty ?? '').trim();
     if (!raw) return { id: '', label: '' };
     const id = normalizePartyId(raw);
+    const fromDb = partyLabelMap[id];
+    if (fromDb) return { id, label: fromDb };
     const short = partyShortLabel(id || raw);
     if (short) return { id, label: short };
-
-    // If party is stored as numeric/string id, derive from DB name as a fallback.
-    const labelFromDb = partyLabelMap[id];
-    if (labelFromDb) return { id, label: labelFromDb };
 
     // Final fallback: use raw.
     return { id, label: raw };
