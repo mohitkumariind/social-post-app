@@ -44,6 +44,7 @@ interface AppUser {
   email?: string;
   role?: string;
   assigned_state_ids?: number[];
+  assigned_group_ids?: string[];
   party: string;
   party_label: string;
   designation1?: string;
@@ -71,6 +72,7 @@ interface AppUser {
 }
 
 type StateRow = { id: string; name: string };
+type GroupRow = { id: string; name: string };
 
 export default function UserManagement() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -214,6 +216,9 @@ export default function UserManagement() {
     assigned_state_ids: Array.isArray((row as any).assigned_state_ids)
       ? (row as any).assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
       : [],
+    assigned_group_ids: Array.isArray((row as any).assigned_group_ids)
+      ? (row as any).assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+      : [],
     designation1: String(row.designation1 ?? row.designation ?? ''),
     designation2: String(row.designation2 ?? row.designation_2 ?? ''),
     designation3: String(row.designation3 ?? row.designation_3 ?? ''),
@@ -265,12 +270,18 @@ export default function UserManagement() {
 
   const waDigits = (v: unknown): string => String(v ?? '').replace(/[^\d]/g, '');
 
-  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[] } | null>(null);
+  const [viewer, setViewer] = useState<{
+    role: 'admin' | 'moderator' | 'campaign_manager';
+    assigned_state_ids: number[];
+    assigned_group_ids: string[];
+  } | null>(null);
   const isModerator = viewer?.role === 'moderator';
   const isAdmin = viewer?.role === 'admin';
 
   const [statesList, setStatesList] = useState<StateRow[]>([]);
   const [statesLoading, setStatesLoading] = useState(false);
+  const [groupsList, setGroupsList] = useState<GroupRow[]>([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -297,12 +308,37 @@ export default function UserManagement() {
   }, [isAdmin]);
 
   useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    (async () => {
+      setGroupsLoading(true);
+      try {
+        const res = await fetch('/api/admin/groups', { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = (await res.json().catch(() => ({}))) as { groups?: Array<{ tag?: unknown; name?: unknown }> };
+        if (cancelled) return;
+        const mapped = (d.groups ?? [])
+          .map((g) => ({ id: String(g.tag ?? '').trim(), name: String(g.name ?? '').trim() }))
+          .filter((g) => g.id && g.name);
+        setGroupsList(mapped);
+      } catch {
+        if (!cancelled) setGroupsList([]);
+      } finally {
+        if (!cancelled) setGroupsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
         if (!res.ok) return;
-        const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_ids?: unknown };
+        const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_ids?: unknown; assigned_group_ids?: unknown };
         if (cancelled) return;
         const role =
           d.role === 'moderator'
@@ -315,7 +351,8 @@ export default function UserManagement() {
         const ids = Array.isArray(d.assigned_state_ids)
           ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
           : [];
-        if (role) setViewer({ role, assigned_state_ids: ids });
+        const gids = Array.isArray(d.assigned_group_ids) ? d.assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean) : [];
+        if (role) setViewer({ role, assigned_state_ids: ids, assigned_group_ids: gids });
       } catch {
         /* ignore */
       }
@@ -420,6 +457,7 @@ export default function UserManagement() {
   const [roleSaving, setRoleSaving] = useState(false);
   const [roleValue, setRoleValue] = useState<'user' | 'moderator' | 'admin' | 'campaign_manager'>('user');
   const [roleStateIds, setRoleStateIds] = useState<string[]>([]);
+  const [roleGroupIds, setRoleGroupIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (!roleUser) return;
@@ -428,6 +466,8 @@ export default function UserManagement() {
     setRoleValue(role);
     const sids = Array.isArray(roleUser.assigned_state_ids) ? roleUser.assigned_state_ids : [];
     setRoleStateIds(sids.map((n) => String(n)));
+    const gids = Array.isArray(roleUser.assigned_group_ids) ? roleUser.assigned_group_ids : [];
+    setRoleGroupIds(gids.map((x) => String(x).trim()).filter(Boolean));
   }, [roleUser?.id]);
 
   // --- FILTER OPTIONS (derived from current dataset) ---
@@ -715,6 +755,61 @@ export default function UserManagement() {
                   </div>
                 </div>
               ) : null}
+
+              {roleValue === 'campaign_manager' ? (
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    Assigned Groups
+                  </label>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {roleGroupIds.length === 0 ? (
+                        <span className="text-xs font-bold text-slate-400">No groups selected</span>
+                      ) : (
+                        roleGroupIds.map((id) => {
+                          const name = groupsList.find((g) => g.id === id)?.name ?? id;
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => setRoleGroupIds((prev) => prev.filter((x) => x !== id))}
+                              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-black text-slate-700"
+                              disabled={roleSaving}
+                              title="Remove group"
+                            >
+                              {name}
+                              <X size={14} />
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-100">
+                      {groupsLoading ? (
+                        <div className="p-3 text-xs font-bold text-slate-400">Loading groups…</div>
+                      ) : (
+                        groupsList.map((g) => {
+                          const checked = roleGroupIds.includes(g.id);
+                          return (
+                            <label key={g.id} className="flex items-center gap-3 px-3 py-2 border-b border-slate-50 last:border-b-0 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  const on = e.target.checked;
+                                  setRoleGroupIds((prev) => (on ? Array.from(new Set([...prev, g.id])) : prev.filter((x) => x !== g.id)));
+                                }}
+                                disabled={roleSaving}
+                              />
+                              <span className="text-sm font-bold text-slate-800">{g.name}</span>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="flex gap-3 pt-2">
@@ -732,6 +827,10 @@ export default function UserManagement() {
                 onClick={async () => {
                   if (roleValue === 'moderator' && roleStateIds.length === 0) {
                     setToast({ message: 'Select at least one state for moderator', tone: 'error' });
+                    return;
+                  }
+                  if (roleValue === 'campaign_manager' && roleGroupIds.length === 0) {
+                    setToast({ message: 'Select at least one group for campaign manager', tone: 'error' });
                     return;
                   }
 
@@ -753,6 +852,7 @@ export default function UserManagement() {
                         id: String(roleUser.id),
                         role: nextRole,
                         assigned_state_ids: nextRole === 'moderator' ? roleStateIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)) : [],
+                        assigned_group_ids: nextRole === 'campaign_manager' ? roleGroupIds : [],
                       }),
                     });
                     const d = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; profile?: any };
@@ -763,21 +863,25 @@ export default function UserManagement() {
                       Array.isArray(d.profile?.assigned_state_ids)
                         ? d.profile.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
                         : [];
+                    const updatedAssignedGroupIds =
+                      Array.isArray(d.profile?.assigned_group_ids)
+                        ? d.profile.assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+                        : [];
 
                     setUsers((prev) =>
                       prev.map((u) =>
                         String(u.id) === String(roleUser.id)
-                          ? { ...u, role: updatedRole, assigned_state_ids: updatedAssignedIds }
+                          ? { ...u, role: updatedRole, assigned_state_ids: updatedAssignedIds, assigned_group_ids: updatedAssignedGroupIds }
                           : u
                       )
                     );
                     setSelectedUser((prev) =>
                       prev && String(prev.id) === String(roleUser.id)
-                        ? { ...prev, role: updatedRole, assigned_state_ids: updatedAssignedIds }
+                        ? { ...prev, role: updatedRole, assigned_state_ids: updatedAssignedIds, assigned_group_ids: updatedAssignedGroupIds }
                         : prev
                     );
                     setRoleUser((prev) =>
-                      prev ? { ...prev, role: updatedRole, assigned_state_ids: updatedAssignedIds } : null
+                      prev ? { ...prev, role: updatedRole, assigned_state_ids: updatedAssignedIds, assigned_group_ids: updatedAssignedGroupIds } : null
                     );
                     setToast({ message: 'Role updated', tone: 'success' });
                     setRoleUser(null);

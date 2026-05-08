@@ -4,6 +4,7 @@ export type RbacUser = {
   id: string;
   role: RbacRole;
   assigned_state_ids: number[];
+  assigned_group_ids?: string[];
   owned_groups?: (string | number)[];
 };
 
@@ -71,5 +72,24 @@ export function requireGroupScope(resourceGroupIds: unknown, ownedGroups: unknow
   if (res.length === 0) throw new RbacError('Forbidden', 403);
   if (owned.size === 0) throw new RbacError('Forbidden', 403);
   if (!res.every((g) => owned.has(g))) throw new RbacError('Forbidden', 403);
+}
+
+/**
+ * Campaign manager group assignment check (parallel to moderator assigned_state_ids).
+ * - admin: bypass
+ * - campaign_manager: groupId must be included in assigned_group_ids
+ * - moderator: unchanged / not applicable here
+ */
+export function requireGroupAssignment(
+  user: Pick<RbacUser, 'role' | 'assigned_group_ids'>,
+  groupId: unknown
+): void {
+  if (user.role === 'admin') return;
+  if (user.role !== 'campaign_manager') return;
+  const assigned = new Set(toStrArray(user.assigned_group_ids));
+  const gid = String(groupId ?? '').trim();
+  if (!gid) throw new RbacError('Forbidden', 403);
+  if (assigned.size === 0) throw new RbacError('Forbidden', 403);
+  if (!assigned.has(gid)) throw new RbacError('Forbidden', 403);
 }
 

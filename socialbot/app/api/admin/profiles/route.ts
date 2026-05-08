@@ -108,6 +108,7 @@ type PatchBody = {
   id?: string;
   role?: 'user' | 'moderator' | 'admin' | string;
   assigned_state_ids?: unknown;
+  assigned_group_ids?: unknown;
 };
 
 function toNumArr(v: unknown): number[] {
@@ -116,6 +117,12 @@ function toNumArr(v: unknown): number[] {
   return arr
     .map((x) => (typeof x === 'number' ? x : Number(x)))
     .filter((n) => Number.isFinite(n));
+}
+
+function toStrArr(v: unknown): string[] {
+  if (v == null) return [];
+  const arr = Array.isArray(v) ? v : [v];
+  return arr.map((x) => String(x ?? '').trim()).filter(Boolean);
 }
 
 export async function PATCH(request: NextRequest) {
@@ -148,6 +155,12 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'assigned_state_ids is required for moderators' }, { status: 400 });
   }
 
+  let assigned_group_ids = toStrArr(body.assigned_group_ids);
+  if (role !== 'campaign_manager') assigned_group_ids = [];
+  if (role === 'campaign_manager' && assigned_group_ids.length === 0) {
+    return NextResponse.json({ error: 'assigned_group_ids is required for campaign managers' }, { status: 400 });
+  }
+
   const admin = createServiceRoleClient();
   if (!admin) {
     return NextResponse.json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, { status: 503 });
@@ -155,9 +168,9 @@ export async function PATCH(request: NextRequest) {
 
   const { data, error } = await admin
     .from('profiles')
-    .update({ role, assigned_state_ids })
+    .update({ role, assigned_state_ids, assigned_group_ids })
     .eq('id', id)
-    .select('id, role, assigned_state_ids')
+    .select('id, role, assigned_state_ids, assigned_group_ids')
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

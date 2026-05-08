@@ -88,6 +88,7 @@ export type ProfileRoleResult = {
 export type ProfileAccessResult = {
   role: string | null;
   assigned_state_ids: number[];
+  assigned_group_ids: string[];
   usedServiceRole: boolean;
   errorMessage?: string;
 };
@@ -134,6 +135,7 @@ export async function fetchProfileAccessForMiddleware(
     return {
       role: null,
       assigned_state_ids: [],
+      assigned_group_ids: [],
       usedServiceRole: false,
       errorMessage: 'NEXT_PUBLIC_SUPABASE_URL missing',
     };
@@ -145,7 +147,7 @@ export async function fetchProfileAccessForMiddleware(
     });
     const { data, error } = await admin
       .from('profiles')
-      .select('role, assigned_state_ids')
+      .select('role, assigned_state_ids, assigned_group_ids')
       .eq('id', userId)
       .single();
 
@@ -153,6 +155,7 @@ export async function fetchProfileAccessForMiddleware(
       return {
         role: null,
         assigned_state_ids: [],
+        assigned_group_ids: [],
         usedServiceRole: true,
         errorMessage: error?.message ?? 'no row (service role)',
       };
@@ -162,12 +165,15 @@ export async function fetchProfileAccessForMiddleware(
     const role =
       typeof r === 'string' ? r.trim() : r != null ? String(r).trim() : null;
     const assigned_state_ids = toNumArr((data as any).assigned_state_ids);
-    return { role, assigned_state_ids, usedServiceRole: true };
+    const assigned_group_ids = Array.isArray((data as any).assigned_group_ids)
+      ? (data as any).assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+      : [];
+    return { role, assigned_state_ids, assigned_group_ids, usedServiceRole: true };
   }
 
   const { data, error } = await anonSupabase
     .from('profiles')
-    .select('role, assigned_state_ids')
+    .select('role, assigned_state_ids, assigned_group_ids')
     .eq('id', userId)
     .single();
 
@@ -178,6 +184,7 @@ export async function fetchProfileAccessForMiddleware(
     return {
       role: null,
       assigned_state_ids: [],
+      assigned_group_ids: [],
       usedServiceRole: false,
       errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
     };
@@ -187,9 +194,13 @@ export async function fetchProfileAccessForMiddleware(
   const role =
     typeof r === 'string' ? r.trim() : r != null ? String(r).trim() : null;
   const assigned_state_ids = toNumArr((data as any).assigned_state_ids);
+  const assigned_group_ids = Array.isArray((data as any).assigned_group_ids)
+    ? (data as any).assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+    : [];
   return {
     role,
     assigned_state_ids,
+    assigned_group_ids,
     usedServiceRole: false,
     errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
   };
