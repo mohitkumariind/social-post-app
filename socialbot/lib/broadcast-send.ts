@@ -10,6 +10,7 @@ export type BroadcastFilters = {
   state?: string | null;
   loksabha_id?: number | null;
   assembly_id?: number | null;
+  assigned_state_id?: number | null;
 };
 
 export type BroadcastFilterLabels = {
@@ -48,6 +49,9 @@ export async function fetchFilteredProfileIds(
   const state = typeof f.state === 'string' ? f.state.trim() : '';
   if (party) q = q.eq('party', party);
   if (state) q = q.eq('state', state);
+  if (f.assigned_state_id != null && !Number.isNaN(Number(f.assigned_state_id))) {
+    q = q.eq('assigned_state_id', Number(f.assigned_state_id));
+  }
   if (f.loksabha_id != null && !Number.isNaN(Number(f.loksabha_id))) {
     q = q.eq('loksabha_id', Number(f.loksabha_id));
   }
@@ -123,6 +127,8 @@ export async function runBroadcast(
       payload.filters?.loksabha_id != null ? Number(payload.filters.loksabha_id) : null,
     assembly_id:
       payload.filters?.assembly_id != null ? Number(payload.filters.assembly_id) : null,
+    assigned_state_id:
+      (payload.filters as any)?.assigned_state_id != null ? Number((payload.filters as any).assigned_state_id) : null,
   };
 
   const profileIds = await fetchFilteredProfileIds(admin, allWorkers, filters);
@@ -173,6 +179,7 @@ export async function runBroadcast(
     state: filters.state,
     loksabha_id: filters.loksabha_id,
     assembly_id: filters.assembly_id,
+    assigned_state_id: filters.assigned_state_id,
     labels: payload.filter_labels ?? {},
   };
 

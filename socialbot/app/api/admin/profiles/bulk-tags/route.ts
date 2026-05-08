@@ -13,6 +13,9 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
+  if (auth.role === 'moderator') {
+    return NextResponse.json({ error: 'Moderators cannot bulk edit profile tags' }, { status: 403 });
+  }
 
   let body: Body = {};
   try {

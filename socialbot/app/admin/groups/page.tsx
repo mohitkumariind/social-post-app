@@ -38,6 +38,27 @@ export default function GroupManagementPage() {
   const [deleteConfirmTag, setDeleteConfirmTag] = useState<string | null>(null);
   const [busyTag, setBusyTag] = useState<string | null>(null);
 
+  const [viewerRole, setViewerRole] = useState<'admin' | 'moderator' | null>(null);
+  const isModerator = viewerRole === 'moderator';
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const d = (await res.json().catch(() => ({}))) as { role?: string };
+        if (cancelled) return;
+        setViewerRole(d.role === 'moderator' ? 'moderator' : d.role === 'admin' ? 'admin' : null);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!toast) return;
     const t = window.setTimeout(() => setToast(null), 2800);
@@ -268,14 +289,16 @@ export default function GroupManagementPage() {
                 >
                   Add
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setDeleteConfirmTag(g.tag)}
-                  disabled={busyTag === g.tag}
-                  className="inline-flex h-10 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 px-4 text-[10px] font-black uppercase tracking-widest text-rose-700 shadow-sm transition-all hover:bg-rose-100 active:scale-95 disabled:opacity-50"
-                >
-                  Delete
-                </button>
+                {!isModerator ? (
+                  <button
+                    type="button"
+                    onClick={() => setDeleteConfirmTag(g.tag)}
+                    disabled={busyTag === g.tag}
+                    className="inline-flex h-10 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 px-4 text-[10px] font-black uppercase tracking-widest text-rose-700 shadow-sm transition-all hover:bg-rose-100 active:scale-95 disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
+                ) : null}
               </div>
             </div>
           ))}

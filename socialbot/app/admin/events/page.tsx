@@ -298,12 +298,14 @@ export default function App() {
 
   useEffect(() => {
     const fetchEvents = async () => {
-      const { data, error } = await supabase.from('events').select('*').order('created_at', { ascending: false });
-      if (error) {
-        if (__DEV__) console.error('fetchEvents error:', error);
+      const res = await fetch('/api/admin/events', { credentials: 'same-origin' });
+      const payload = (await res.json().catch(() => ({}))) as { events?: any[]; error?: string };
+      if (!res.ok) {
+        if (__DEV__) console.error('fetchEvents error:', payload.error ?? res.status);
         setEvents([]);
         return;
       }
+      const data = payload.events ?? [];
       const base: CampaignEvent[] = (data || [])
         .map((row: { id?: string; name: string; start?: string; end?: string; language?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; target_groups?: string | string[]; captions?: unknown }) => ({
           id: String(row.id ?? '').trim(),
@@ -465,21 +467,34 @@ export default function App() {
 
   const updateEventByIdOrName = async (ev: Pick<CampaignEvent, 'id' | 'name'>, patch: Record<string, unknown>) => {
     const idStr = String(ev.id ?? '').trim();
-    if (isLikelyEventUuid(idStr)) {
-      const r = await supabase.from('events').update(patch).eq('id', idStr);
-      if (!r.error) return r;
+    if (!isLikelyEventUuid(idStr)) {
+      return { data: null, error: { message: 'Missing stable event id; cannot update.' } } as any;
     }
-    return supabase.from('events').update(patch).eq('name', ev.name);
+    const res = await fetch('/api/admin/events', {
+      method: 'PATCH',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: idStr, patch }),
+    });
+    const d = (await res.json().catch(() => ({}))) as { event?: any; error?: string };
+    if (!res.ok) return { data: null, error: { message: d.error || `HTTP ${res.status}` } } as any;
+    return { data: d.event, error: null } as any;
   };
 
   const deleteEventRowByIdOrName = async (ev: CampaignEvent) => {
     const idStr = String(ev.id ?? '').trim();
-    if (isLikelyEventUuid(idStr)) {
-      const { error } = await supabase.from('events').delete().eq('id', idStr);
-      if (!error) return;
+    if (!isLikelyEventUuid(idStr)) {
+      devConsole.error('Events delete error: Missing stable event id.');
+      return;
     }
-    const { error } = await supabase.from('events').delete().eq('name', ev.name);
-    if (error) devConsole.error('Events delete error:', error);
+    const res = await fetch(`/api/admin/events?id=${encodeURIComponent(idStr)}`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+    });
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      devConsole.error('Events delete error:', d.error ?? res.status);
+    }
   };
 
   /**
@@ -533,17 +548,20 @@ export default function App() {
       if (assemblyIdArr.length > 0) payload.assembly_id = assemblyIdArr;
     }
     payload.target_groups = targetGroupsArr;
-    const { data, error } = await supabase
-      .from('events')
-      .insert(payload)
-      .select()
-      .single();
-    if (error) {
-      devConsole.error('Insert Error:', error.message, error.details, error.hint);
-      alert('Error: ' + error.message);
+    const res = await fetch('/api/admin/events', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const resp = (await res.json().catch(() => ({}))) as { event?: any; error?: string };
+    if (!res.ok) {
+      devConsole.error('Insert Error:', resp.error ?? res.status);
+      alert('Error: ' + (resp.error || `HTTP ${res.status}`));
       return;
     }
-    if (data.id == null || String(data.id).trim() === '') {
+    const data = resp.event;
+    if (data?.id == null || String(data.id).trim() === '') {
       alert('Event created but no id was returned — check Supabase RLS and .select() on insert.');
       return;
     }

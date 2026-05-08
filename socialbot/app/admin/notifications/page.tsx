@@ -61,6 +61,34 @@ export default function NotificationBroadcastCenterPage() {
   const [loksabhaId, setLoksabhaId] = useState('');
   const [assemblyId, setAssemblyId] = useState('');
 
+  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_id: number | null } | null>(null);
+  const isModerator = viewer?.role === 'moderator';
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_id?: unknown };
+        if (cancelled) return;
+        const role = d.role === 'moderator' ? 'moderator' : d.role === 'admin' ? 'admin' : null;
+        const asn =
+          typeof d.assigned_state_id === 'number'
+            ? d.assigned_state_id
+            : d.assigned_state_id != null
+              ? Number(d.assigned_state_id)
+              : null;
+        if (role) setViewer({ role, assigned_state_id: Number.isFinite(asn as number) ? (asn as number) : null });
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [states, setStates] = useState<GeoRow[]>([]);
   const [loksabhas, setLoksabhas] = useState<GeoRow[]>([]);
   const [assemblies, setAssemblies] = useState<GeoRow[]>([]);
@@ -105,6 +133,15 @@ export default function NotificationBroadcastCenterPage() {
   );
 
   const trimmedImageUrl = imageUrl.trim();
+
+  useEffect(() => {
+    if (!isModerator) return;
+    if (viewer?.assigned_state_id == null) return;
+    // Force moderator to their assigned state.
+    const next = String(viewer.assigned_state_id);
+    if (stateId !== next) setStateId(next);
+    if (allWorkers) setAllWorkers(false);
+  }, [isModerator, viewer?.assigned_state_id, stateId, allWorkers]);
 
   useEffect(() => {
     setImagePreviewBroken(false);
@@ -413,6 +450,7 @@ export default function NotificationBroadcastCenterPage() {
             onChange={(e) => setAllWorkers(e.target.checked)}
             className="h-4 w-4 rounded border-slate-300"
             style={{ accentColor: ACCENT }}
+            disabled={isModerator}
           />
           <span className="text-sm font-bold text-slate-800">All workers (bypass filters)</span>
         </label>
@@ -440,7 +478,7 @@ export default function NotificationBroadcastCenterPage() {
               className={selectClass}
               value={stateId}
               onChange={(e) => setStateId(e.target.value)}
-              disabled={allWorkers || geoLoading}
+              disabled={isModerator || allWorkers || geoLoading}
             >
               <option value="">Any state</option>
               {states.map((s) => (

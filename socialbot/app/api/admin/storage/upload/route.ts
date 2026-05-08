@@ -44,6 +44,14 @@ export async function POST(request: NextRequest) {
   if (!ALLOWED_BUCKETS.has(bucket)) {
     return NextResponse.json({ error: 'Invalid bucket' }, { status: 400 });
   }
+  if (auth.role === 'moderator') {
+    if (auth.assigned_state_id == null) {
+      return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+    }
+    if (bucket !== 'user-frames') {
+      return NextResponse.json({ error: 'Moderators can only upload user frames' }, { status: 403 });
+    }
+  }
 
   let path: string;
   try {
@@ -57,6 +65,26 @@ export async function POST(request: NextRequest) {
 
   if (!(file instanceof Blob)) {
     return NextResponse.json({ error: 'Missing file' }, { status: 400 });
+  }
+
+  if (auth.role === 'moderator') {
+    // Enforce: public/<userId>/... and userId must belong to the moderator's assigned state.
+    const parts = path.split('/').filter(Boolean); // e.g. ["public","<userId>",...]
+    const userId = parts.length >= 2 && parts[0] === 'public' ? parts[1] : '';
+    if (!userId) {
+      return NextResponse.json({ error: 'Invalid path for moderator uploads' }, { status: 400 });
+    }
+    const { data: prof, error: profErr } = await admin
+      .from('profiles')
+      .select('id, assigned_state_id')
+      .eq('id', userId)
+      .maybeSingle();
+    if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
+    const assigned = (prof as any)?.assigned_state_id;
+    const assignedNum = typeof assigned === 'number' ? assigned : assigned != null ? Number(assigned) : null;
+    if (assignedNum == null || assignedNum !== auth.assigned_state_id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
   }
 
   const buf = Buffer.from(await file.arrayBuffer());

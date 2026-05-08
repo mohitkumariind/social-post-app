@@ -8,6 +8,9 @@ export async function GET() {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
+  if (auth.role === 'moderator') {
+    return NextResponse.json({ error: 'Moderators cannot access global tags' }, { status: 403 });
+  }
 
   const admin = createServiceRoleClient();
   const db = admin ?? supabase;

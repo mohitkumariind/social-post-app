@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
-import { fetchProfileRoleForMiddleware, isAdminRole } from '@/lib/supabase/session-helpers';
+import { fetchProfileAccessForMiddleware, isAdminRole, isModeratorRole } from '@/lib/supabase/session-helpers';
+import type { AdminRole } from '@/lib/permissions';
 
 /** Same allowlist as middleware — must stay in sync for API routes. */
 export const ADMIN_EMAIL_BYPASS = 'mohitkumariind@gmail.com';
@@ -14,15 +15,19 @@ export function isAdminEmailBypass(email: string | null | undefined): boolean {
  */
 export async function validateAdminSession(
   supabase: SupabaseClient
-): Promise<{ ok: true; user: User } | { ok: false; status: 401 | 403 }> {
+): Promise<
+  | { ok: true; user: User; role: AdminRole; assigned_state_id: number | null }
+  | { ok: false; status: 401 | 403 }
+> {
   const {
     data: { user },
     error,
   } = await supabase.auth.getUser();
   if (error || !user) return { ok: false, status: 401 };
-  if (isAdminEmailBypass(user.email)) return { ok: true, user };
-  const { role } = await fetchProfileRoleForMiddleware(user.id, supabase);
-  if (isAdminRole(role)) return { ok: true, user };
+  if (isAdminEmailBypass(user.email)) return { ok: true, user, role: 'admin', assigned_state_id: null };
+  const { role, assigned_state_id } = await fetchProfileAccessForMiddleware(user.id, supabase);
+  if (isAdminRole(role)) return { ok: true, user, role: 'admin', assigned_state_id };
+  if (isModeratorRole(role)) return { ok: true, user, role: 'moderator', assigned_state_id };
   return { ok: false, status: 403 };
 }
 

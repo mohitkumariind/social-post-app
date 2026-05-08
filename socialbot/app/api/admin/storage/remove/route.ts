@@ -44,6 +44,14 @@ export async function POST(request: NextRequest) {
   if (!ALLOWED_BUCKETS.has(bucket)) {
     return NextResponse.json({ error: 'Invalid bucket' }, { status: 400 });
   }
+  if (auth.role === 'moderator') {
+    if (auth.assigned_state_id == null) {
+      return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+    }
+    if (bucket !== 'user-frames') {
+      return NextResponse.json({ error: 'Moderators can only remove user frames' }, { status: 403 });
+    }
+  }
 
   const paths: string[] = [];
   for (const raw of pathsRaw) {
@@ -59,6 +67,31 @@ export async function POST(request: NextRequest) {
 
   if (paths.length === 0) {
     return NextResponse.json({ ok: true, removed: 0 });
+  }
+
+  if (auth.role === 'moderator') {
+    // All paths must be under public/<userId>/ and user must belong to assigned state.
+    const userIds = new Set<string>();
+    for (const p of paths) {
+      const parts = p.split('/').filter(Boolean);
+      const uid = parts.length >= 2 && parts[0] === 'public' ? parts[1] : '';
+      if (!uid) return NextResponse.json({ error: 'Invalid path for moderator remove' }, { status: 400 });
+      userIds.add(uid);
+      if (userIds.size > 20) return NextResponse.json({ error: 'Too many user paths' }, { status: 400 });
+    }
+    for (const uid of userIds) {
+      const { data: prof, error: profErr } = await admin
+        .from('profiles')
+        .select('id, assigned_state_id')
+        .eq('id', uid)
+        .maybeSingle();
+      if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
+      const assigned = (prof as any)?.assigned_state_id;
+      const assignedNum = typeof assigned === 'number' ? assigned : assigned != null ? Number(assigned) : null;
+      if (assignedNum == null || assignedNum !== auth.assigned_state_id) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+    }
   }
 
   const { error } = await admin.storage.from(bucket).remove(paths);

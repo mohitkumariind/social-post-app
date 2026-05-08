@@ -2,8 +2,9 @@ import { type NextRequest } from 'next/server';
 import { ADMIN_EMAIL_BYPASS } from '@/lib/admin-gate';
 import {
   createSupabaseProxyClient,
-  fetchProfileRoleForMiddleware,
+  fetchProfileAccessForMiddleware,
   isAdminRole,
+  isModeratorRole,
   redirectPreservingAuthCookies,
 } from '@/lib/supabase/session-helpers';
 
@@ -67,7 +68,7 @@ export async function proxy(request: NextRequest) {
   if (isAdminLogin) {
     if (user) {
       proxyLog('[proxy] Step 2 (login): fetch role for userId', user.id);
-      const { role, usedServiceRole, errorMessage } = await fetchProfileRoleForMiddleware(
+      const { role, usedServiceRole, errorMessage } = await fetchProfileAccessForMiddleware(
         user.id,
         supabase
       );
@@ -77,7 +78,7 @@ export async function proxy(request: NextRequest) {
         errorMessage,
         isAdmin: isAdminRole(role),
       });
-      if (isAdminRole(role)) {
+      if (isAdminRole(role) || isModeratorRole(role)) {
         return redirectPreservingAuthCookies(request, sessionResponse, '/admin');
       }
     }
@@ -92,8 +93,8 @@ export async function proxy(request: NextRequest) {
       return redirectPreservingAuthCookies(request, sessionResponse, u.pathname + u.search);
     }
 
-    proxyLog('[proxy] Step 2 (gate): fetch role for profile id === auth id', user.id);
-    const { role, usedServiceRole, errorMessage } = await fetchProfileRoleForMiddleware(
+    proxyLog('[proxy] Step 2 (gate): fetch role/access for profile id === auth id', user.id);
+    const { role, usedServiceRole, errorMessage } = await fetchProfileAccessForMiddleware(
       user.id,
       supabase
     );
@@ -104,9 +105,25 @@ export async function proxy(request: NextRequest) {
       isAdmin: isAdminRole(role),
     });
 
-    if (!isAdminRole(role)) {
+    const isAdmin = isAdminRole(role);
+    const isModerator = isModeratorRole(role);
+
+    if (!isAdmin && !isModerator) {
       proxyLog('[proxy] Step 4: FORBIDDEN → /admin/login?error=forbidden');
       return redirectPreservingAuthCookies(request, sessionResponse, '/admin/login?error=forbidden');
+    }
+
+    if (isModerator) {
+      const allowed =
+        pathname === '/admin' ||
+        pathname.startsWith('/admin/users') ||
+        pathname.startsWith('/admin/events') ||
+        pathname.startsWith('/admin/notifications') ||
+        pathname.startsWith('/admin/groups');
+      if (!allowed) {
+        proxyLog('[proxy] Step 4: moderator blocked route', { pathname });
+        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/login?error=forbidden');
+      }
     }
 
     proxyLog('[proxy] Step 4: OK allow admin');

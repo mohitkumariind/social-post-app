@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import React, { useEffect, useMemo, useState } from 'react';
 
 const navItems = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
@@ -22,6 +23,31 @@ const navItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [role, setRole] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const d = (await res.json().catch(() => ({}))) as { role?: string | null };
+        if (cancelled) return;
+        setRole(typeof d.role === 'string' ? d.role : null);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const visibleNavItems = useMemo(() => {
+    if (role?.toLowerCase() !== 'moderator') return navItems;
+    // Moderator: Dashboard, Users, Events, Notifications, Groups
+    return navItems.filter((i) => i.href !== '/admin/parties');
+  }, [role]);
 
   return (
     <aside className="fixed left-0 top-0 z-40 h-screen w-64 border-r border-zinc-800 bg-zinc-950">
@@ -31,7 +57,7 @@ export default function Sidebar() {
         </span>
       </div>
       <nav className="flex flex-col gap-1 p-4">
-        {navItems.map(({ href, label, icon: Icon }) => {
+        {visibleNavItems.map(({ href, label, icon: Icon }) => {
           const isActive =
             href === '/admin'
               ? pathname === '/admin'

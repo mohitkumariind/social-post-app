@@ -153,6 +153,9 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
+  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
+    return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+  }
 
   const admin = createServiceRoleClient();
   if (!admin) {
@@ -166,13 +169,42 @@ export async function GET(request: NextRequest) {
       const grp = await resolveGroup(admin, tag);
       if (!grp) return NextResponse.json({ error: 'Invalid group id/name' }, { status: 400 });
       const rows = await fetchMembersForGroupId(admin, grp.id);
-      const members = rows.map((r) => ({
+      const membersAll = rows.map((r) => ({
         id: String(r.id ?? ''),
         name: String(r.name ?? ''),
         phone: String(r.phone ?? ''),
         avatar_url: String(r.avatar_url ?? ''),
         group_id: toNum((r as any).group_id),
       }));
+      const members =
+        auth.role === 'moderator'
+          ? membersAll.filter((m) => {
+              // Only include members in the assigned state, and do not return phone (personal info).
+              return true;
+            }).map((m) => ({ ...m, phone: '' }))
+          : membersAll;
+
+      if (auth.role === 'moderator') {
+        const memberIds = membersAll.map((m) => m.id).filter(Boolean);
+        if (memberIds.length > 0) {
+          const { data: stRows, error: stErr } = await admin
+            .from('profiles')
+            .select('id, assigned_state_id')
+            .in('id', memberIds);
+          if (stErr) throw new Error(stErr.message);
+          const allowed = new Set(
+            (stRows ?? [])
+              .filter((r: any) => {
+                const n = typeof r.assigned_state_id === 'number' ? r.assigned_state_id : r.assigned_state_id != null ? Number(r.assigned_state_id) : null;
+                return n != null && n === auth.assigned_state_id;
+              })
+              .map((r: any) => String(r.id))
+          );
+          const filtered = membersAll.filter((m) => allowed.has(m.id)).map((m) => ({ ...m, phone: '' }));
+          return NextResponse.json({ tag: String(grp.id), name: grp.name, members: filtered }, { headers: { 'Cache-Control': 'no-store' } });
+        }
+        return NextResponse.json({ tag: String(grp.id), name: grp.name, members: [] }, { headers: { 'Cache-Control': 'no-store' } });
+      }
 
       return NextResponse.json({ tag: String(grp.id), name: grp.name, members }, { headers: { 'Cache-Control': 'no-store' } });
     }
@@ -181,7 +213,26 @@ export async function GET(request: NextRequest) {
     const { data: groupRows, error: gErr } = await admin.from('groups').select('id, name').order('id', { ascending: true });
     if (gErr) throw new Error(gErr.message);
 
-    const countsRows = await fetchAllProfileIdAndGroupId(admin);
+    const countsRowsAll = await fetchAllProfileIdAndGroupId(admin);
+    const countsRows =
+      auth.role === 'moderator'
+        ? await (async () => {
+            const ids = countsRowsAll.map((r) => r.id).filter(Boolean);
+            if (ids.length === 0) return [];
+            const { data: stRows, error: stErr } = await admin
+              .from('profiles')
+              .select('id, assigned_state_id, group_id')
+              .in('id', ids);
+            if (stErr) throw new Error(stErr.message);
+            return (stRows ?? [])
+              .filter((r: any) => {
+                const n = typeof r.assigned_state_id === 'number' ? r.assigned_state_id : r.assigned_state_id != null ? Number(r.assigned_state_id) : null;
+                return n != null && n === auth.assigned_state_id;
+              })
+              .map((r: any) => ({ id: String(r.id ?? ''), group_id: (r as any).group_id }))
+              .filter((r) => r.id);
+          })()
+        : countsRowsAll;
     const counts = new Map<string, number>();
     for (const g of aggregateGroupIds(countsRows)) counts.set(g.tag, g.count);
 
@@ -203,6 +254,9 @@ export async function DELETE(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
+  }
+  if (auth.role === 'moderator') {
+    return NextResponse.json({ error: 'Moderators cannot delete groups' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -237,6 +291,9 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
+  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
+    return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+  }
 
   const admin = createServiceRoleClient();
   if (!admin) {
@@ -261,6 +318,24 @@ export async function POST(request: NextRequest) {
   const grp = await resolveGroup(admin, tag, { createIfMissing: true });
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
 
+  if (auth.role === 'moderator') {
+    const { data: rows, error: stErr } = await admin
+      .from('profiles')
+      .select('id, assigned_state_id')
+      .in('id', userIds);
+    if (stErr) return NextResponse.json({ error: stErr.message }, { status: 500 });
+    const allowed = (rows ?? [])
+      .filter((r: any) => {
+        const n = typeof r.assigned_state_id === 'number' ? r.assigned_state_id : r.assigned_state_id != null ? Number(r.assigned_state_id) : null;
+        return n != null && n === auth.assigned_state_id;
+      })
+      .map((r: any) => String(r.id))
+      .filter(Boolean);
+    if (allowed.length !== userIds.length) {
+      return NextResponse.json({ error: 'Forbidden: includes users outside assigned state' }, { status: 403 });
+    }
+  }
+
   const { error: upErr } = await admin.from('profiles').update({ group_id: grp.id }).in('id', userIds);
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
 
@@ -275,6 +350,9 @@ export async function PATCH(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
+  }
+  if (auth.role === 'moderator') {
+    return NextResponse.json({ error: 'Moderators cannot modify groups after creation' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();

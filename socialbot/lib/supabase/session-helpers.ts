@@ -85,6 +85,19 @@ export type ProfileRoleResult = {
   errorMessage?: string;
 };
 
+export type ProfileAccessResult = {
+  role: string | null;
+  assigned_state_id: number | null;
+  usedServiceRole: boolean;
+  errorMessage?: string;
+};
+
+function toNum(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
  * Prefer service role so RLS cannot hide `profiles.role`. Falls back to anon client if key missing.
  * `userId` must be `auth.users.id` (same as `profiles.id`).
@@ -94,22 +107,44 @@ export async function fetchProfileRoleForMiddleware(
   userId: string,
   anonSupabase: SupabaseClient
 ): Promise<ProfileRoleResult> {
+  const a = await fetchProfileAccessForMiddleware(userId, anonSupabase);
+  return { role: a.role, usedServiceRole: a.usedServiceRole, errorMessage: a.errorMessage };
+}
+
+/**
+ * Prefer service role so RLS cannot hide `profiles.role` / `profiles.assigned_state_id`.
+ * Falls back to anon client if key missing.
+ */
+export async function fetchProfileAccessForMiddleware(
+  userId: string,
+  anonSupabase: SupabaseClient
+): Promise<ProfileAccessResult> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
   if (!url) {
-    return { role: null, usedServiceRole: false, errorMessage: 'NEXT_PUBLIC_SUPABASE_URL missing' };
+    return {
+      role: null,
+      assigned_state_id: null,
+      usedServiceRole: false,
+      errorMessage: 'NEXT_PUBLIC_SUPABASE_URL missing',
+    };
   }
 
   if (serviceKey) {
     const admin = createClient(url, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const { data, error } = await admin.from('profiles').select('role').eq('id', userId).single();
+    const { data, error } = await admin
+      .from('profiles')
+      .select('role, assigned_state_id')
+      .eq('id', userId)
+      .single();
 
     if (error || data == null) {
       return {
         role: null,
+        assigned_state_id: null,
         usedServiceRole: true,
         errorMessage: error?.message ?? 'no row (service role)',
       };
@@ -118,12 +153,35 @@ export async function fetchProfileRoleForMiddleware(
     const r = (data as { role?: unknown }).role;
     const role =
       typeof r === 'string' ? r.trim() : r != null ? String(r).trim() : null;
-    return { role, usedServiceRole: true };
+    const assigned_state_id = toNum((data as any).assigned_state_id);
+    return { role, assigned_state_id, usedServiceRole: true };
   }
 
-  const role = await fetchProfileRole(anonSupabase, userId);
+  const { data, error } = await anonSupabase
+    .from('profiles')
+    .select('role, assigned_state_id')
+    .eq('id', userId)
+    .single();
+
+  if (error || data == null) {
+    if (__DEV__ && error?.code !== 'PGRST116') {
+      console.warn('[proxy] profiles.role fetch (anon):', error?.message ?? 'no row');
+    }
+    return {
+      role: null,
+      assigned_state_id: null,
+      usedServiceRole: false,
+      errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
+    };
+  }
+
+  const r = (data as { role?: unknown }).role;
+  const role =
+    typeof r === 'string' ? r.trim() : r != null ? String(r).trim() : null;
+  const assigned_state_id = toNum((data as any).assigned_state_id);
   return {
     role,
+    assigned_state_id,
     usedServiceRole: false,
     errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
   };
@@ -131,4 +189,8 @@ export async function fetchProfileRoleForMiddleware(
 
 export function isAdminRole(role: string | null): boolean {
   return role != null && role.toLowerCase() === 'admin';
+}
+
+export function isModeratorRole(role: string | null): boolean {
+  return role != null && role.toLowerCase() === 'moderator';
 }

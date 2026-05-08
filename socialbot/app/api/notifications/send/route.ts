@@ -32,6 +32,9 @@ export async function POST(request: Request) {
       auth.status
     );
   }
+  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
+    return json({ error: 'Moderator is missing assigned_state_id' }, 403);
+  }
 
   const admin = createServiceRoleClient();
   if (!admin) {
@@ -42,6 +45,18 @@ export async function POST(request: Request) {
   const expo = new Expo(accessToken ? { accessToken } : undefined);
 
   try {
+    // Enforce moderator: only assigned state users, regardless of provided filters.
+    if (auth.role === 'moderator') {
+      payload = {
+        ...payload,
+        all_workers: false,
+        filters: {
+          ...(payload.filters ?? {}),
+          assigned_state_id: auth.assigned_state_id,
+        } as any,
+      };
+    }
+
     const result = await runBroadcast(admin, expo, payload);
     if (!result.ok) {
       const status = result.error.includes('required') ? 400 : 500;

@@ -38,33 +38,33 @@ interface UserFrame {
 interface AppUser {
   id: string | number;
   avatar_url: string;
-  language: string;
+  language?: string;
   name: string;
-  phone: string;
-  email: string;
+  phone?: string;
+  email?: string;
   party: string;
   party_label: string;
-  designation1: string;
-  designation2: string;
-  designation3: string;
-  designation4: string;
-  state: string;
-  state_id: number | null;
-  district: string;
-  constituency: string;
-  loksabha: string;
-  loksabha_id: number | null;
-  assembly_id: number | null;
-  assembly: string;
-  joinDate: string;
-  dob: string;
-  gender: string;
+  designation1?: string;
+  designation2?: string;
+  designation3?: string;
+  designation4?: string;
+  state?: string;
+  state_id?: number | null;
+  district?: string;
+  constituency?: string;
+  loksabha?: string;
+  loksabha_id?: number | null;
+  assembly_id?: number | null;
+  assembly?: string;
+  joinDate?: string;
+  dob?: string;
+  gender?: string;
   group_tags: string[];
-  group_id: number | null;
-  whatsapp: string;
-  facebook: string;
-  twitter: string;
-  instagram: string;
+  group_id?: number | null;
+  whatsapp?: string;
+  facebook?: string;
+  twitter?: string;
+  instagram?: string;
   personalFrames: UserFrame[];
 }
 
@@ -119,18 +119,9 @@ export default function UserManagement() {
   const displayPartyLabel = (partyId: string, partyLabel: string): string => {
     const fromDb = partyLabelMap[partyId];
     if (fromDb) return fromDb;
-    // If partyId itself is numeric and DB map isn't ready, don't show the id.
-    if (isLikelyNumericId(partyId)) return '';
     // If the stored label is just an id like "7", don't show it.
     if (isLikelyNumericId(partyLabel)) return '';
     return partyLabel;
-  };
-
-  const safePartyText = (partyId: string, partyLabel: string): string => {
-    const primary = displayPartyLabel(partyId, partyLabel);
-    if (primary) return primary;
-    if (isLikelyNumericId(partyId)) return '';
-    return getPartyLabel(partyId);
   };
 
   useEffect(() => {
@@ -265,6 +256,34 @@ export default function UserManagement() {
   };
 
   const waDigits = (v: unknown): string => String(v ?? '').replace(/[^\d]/g, '');
+
+  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_id: number | null } | null>(null);
+  const isModerator = viewer?.role === 'moderator';
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_id?: unknown };
+        if (cancelled) return;
+        const role = d.role === 'moderator' ? 'moderator' : d.role === 'admin' ? 'admin' : null;
+        const asn =
+          typeof d.assigned_state_id === 'number'
+            ? d.assigned_state_id
+            : d.assigned_state_id != null
+              ? Number(d.assigned_state_id)
+              : null;
+        if (role) setViewer({ role, assigned_state_id: Number.isFinite(asn as number) ? (asn as number) : null });
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterParty, setFilterParty] = useState('All');
@@ -545,14 +564,17 @@ export default function UserManagement() {
                 <div className="w-24 h-24 bg-blue-600 rounded-[30px] flex items-center justify-center text-white shadow-xl shadow-blue-500/20"><User size={48} /></div>
                 <div>
                     <h2 className="text-4xl font-black tracking-tight leading-none">{selectedUser.name}</h2>
-                    <div className="flex items-center gap-4 mt-3">
-                        <span className="bg-blue-600 text-[11px] font-black uppercase px-3 py-1 rounded-lg tracking-widest">
-                          {fmt(safePartyText(selectedUser.party, selectedUser.party_label))}
-                        </span>
-                    </div>
+                    {!isModerator ? (
+                      <div className="flex items-center gap-4 mt-3">
+                          <span className="bg-blue-600 text-[11px] font-black uppercase px-3 py-1 rounded-lg tracking-widest">
+                            {fmt(displayPartyLabel(selectedUser.party, selectedUser.party_label) || getPartyLabel(selectedUser.party))}
+                          </span>
+                      </div>
+                    ) : null}
                 </div>
             </div>
             <div className="p-10 grid grid-cols-1 lg:grid-cols-12 gap-10 max-h-[60vh] overflow-y-auto bg-white">
+                {!isModerator ? (
                 <div className="lg:col-span-4 space-y-8 border-r border-slate-100 pr-6">
                     <div className="space-y-6">
                         <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Personal Info</h3>
@@ -565,7 +587,7 @@ export default function UserManagement() {
                     <div className="space-y-6">
                         <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Profile</h3>
                         <div className="space-y-3 text-xs font-bold text-slate-800">
-                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Party</span><span className="font-bold text-slate-800">{fmt(safePartyText(selectedUser.party, selectedUser.party_label))}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Party</span><span className="font-bold text-slate-800">{fmt(displayPartyLabel(selectedUser.party, selectedUser.party_label) || getPartyLabel(selectedUser.party))}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">State</span><span className="font-bold text-slate-800">{fmt(selectedUser.state)}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Lok Sabha</span><span className="font-bold text-slate-800">{fmt(selectedUser.loksabha)}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Assembly</span><span className="font-bold text-slate-800">{fmt(selectedUser.assembly || selectedUser.constituency)}</span></div>
@@ -600,9 +622,10 @@ export default function UserManagement() {
                       </div>
                     ) : null}
                 </div>
+                ) : null}
 
                 {/* UPDATED: USER FRAMES SECTION */}
-                <div className="lg:col-span-8 space-y-6">
+                <div className={`${isModerator ? 'lg:col-span-12' : 'lg:col-span-8'} space-y-6`}>
                     <div className="flex items-center justify-between px-2">
                         <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><History size={14} className="text-blue-500" /> User Frames</h3>
                         <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{selectedUser.personalFrames.length} Frames</p>
@@ -665,6 +688,7 @@ export default function UserManagement() {
       </div>
 
       {/* ADVANCED FILTERS */}
+      {!isModerator ? (
       <div className="bg-white p-5 rounded-[40px] border border-slate-200 shadow-lg space-y-4">
         <div className="flex flex-col md:flex-row gap-4">
           <div className="flex items-center gap-4 flex-[2] bg-slate-50 p-4 rounded-2xl border border-slate-100 focus-within:border-blue-300 transition-all">
@@ -735,6 +759,7 @@ export default function UserManagement() {
           </div>
         </div>
       </div>
+      ) : null}
 
       {/* USER LIST GRID */}
       {usersLoading ? (
@@ -746,9 +771,11 @@ export default function UserManagement() {
             key={user.id}
             className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm hover:shadow-md transition-all duration-300 group flex flex-col relative overflow-hidden"
           >
-            <div className="absolute top-6 right-6">
-              <button onClick={() => setIsDeleting(user)} className="p-2 text-slate-200 hover:text-red-500 transition-all"><Trash2 size={18} /></button>
-            </div>
+            {!isModerator ? (
+              <div className="absolute top-6 right-6">
+                <button onClick={() => setIsDeleting(user)} className="p-2 text-slate-200 hover:text-red-500 transition-all"><Trash2 size={18} /></button>
+              </div>
+            ) : null}
 
             <div className="flex flex-col items-center text-center pt-3">
               {String(user.avatar_url ?? '').trim() ? (
@@ -769,54 +796,58 @@ export default function UserManagement() {
                   <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Name</span>
                   <span className="font-bold text-slate-900 text-right">{fmt(user.name)}</span>
                 </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Party Name</span>
-                  <span className="font-bold text-slate-800 text-right">
-                    {fmt(safePartyText(user.party, user.party_label))}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Mobile</span>
-                  <span className="flex items-center gap-2 justify-end">
-                    <span className="font-bold text-slate-800 text-right">{fmt(user.phone)}</span>
-                    {waDigits(user.phone) ? (
-                      <a
-                        href={`https://wa.me/${waDigits(user.phone)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center justify-center text-emerald-600 hover:text-emerald-700"
-                        aria-label="WhatsApp"
-                        title="WhatsApp"
-                      >
-                        <MessageCircle size={16} />
-                      </a>
-                    ) : (
-                      <span
-                        className="inline-flex items-center justify-center text-slate-300"
-                        aria-label="WhatsApp unavailable"
-                        title="WhatsApp unavailable"
-                      >
-                        <MessageCircle size={16} />
+                {!isModerator ? (
+                  <>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Party Name</span>
+                      <span className="font-bold text-slate-800 text-right">
+                        {fmt(displayPartyLabel(user.party, user.party_label) || getPartyLabel(user.party))}
                       </span>
-                    )}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">State</span>
-                  <span className="font-bold text-slate-800 text-right">{fmt(user.state)}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Lok Sabha</span>
-                  <span className="font-bold text-slate-800 text-right">{fmt(user.loksabha)}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Assembly</span>
-                  <span className="font-bold text-slate-800 text-right">{fmt(user.assembly || user.constituency)}</span>
-                </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Mobile</span>
+                      <span className="flex items-center gap-2 justify-end">
+                        <span className="font-bold text-slate-800 text-right">{fmt(user.phone)}</span>
+                        {waDigits(user.phone) ? (
+                          <a
+                            href={`https://wa.me/${waDigits(user.phone)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center justify-center text-emerald-600 hover:text-emerald-700"
+                            aria-label="WhatsApp"
+                            title="WhatsApp"
+                          >
+                            <MessageCircle size={16} />
+                          </a>
+                        ) : (
+                          <span
+                            className="inline-flex items-center justify-center text-slate-300"
+                            aria-label="WhatsApp unavailable"
+                            title="WhatsApp unavailable"
+                          >
+                            <MessageCircle size={16} />
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">State</span>
+                      <span className="font-bold text-slate-800 text-right">{fmt(user.state)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Lok Sabha</span>
+                      <span className="font-bold text-slate-800 text-right">{fmt(user.loksabha)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Assembly</span>
+                      <span className="font-bold text-slate-800 text-right">{fmt(user.assembly || user.constituency)}</span>
+                    </div>
+                  </>
+                ) : null}
               </div>
             </div>
 
-            {user.group_tags.length > 0 && (
+            {!isModerator && user.group_tags.length > 0 && (
               <div className="mt-4 flex flex-wrap gap-1.5 justify-center">
                 {user.group_tags.slice(0, 6).map((t) => (
                   <span
@@ -836,7 +867,7 @@ export default function UserManagement() {
             )}
 
             <button onClick={() => openUserProfile(user)} className="mt-6 w-full py-3 bg-slate-50 rounded-2xl text-[9px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-100 transition-all flex items-center justify-center gap-2 active:scale-95">
-              Profile & Frames <ExternalLink size={14} />
+              {isModerator ? 'Frames' : 'Profile & Frames'} <ExternalLink size={14} />
             </button>
           </div>
         ))}

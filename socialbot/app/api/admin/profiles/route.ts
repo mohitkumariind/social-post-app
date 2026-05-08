@@ -8,6 +8,9 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
+  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
+    return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+  }
 
   const admin = createServiceRoleClient();
   const db = admin ?? supabase;
@@ -23,8 +26,14 @@ export async function GET(request: NextRequest) {
   const assembly_id = assemblyIdRaw ? Number(assemblyIdRaw) : null;
 
   const buildQuery = (orderBy: 'created_at' | 'id') => {
-    let q = db.from('profiles').select('*');
+    // Moderators must not receive personal info from this endpoint.
+    const selectCols =
+      auth.role === 'moderator'
+        ? 'id,name,avatar_url,assigned_state_id'
+        : '*';
+    let q = db.from('profiles').select(selectCols);
 
+    if (auth.role === 'moderator') q = q.eq('assigned_state_id', auth.assigned_state_id);
     if (party) q = q.eq('party', party);
     if (state) q = q.eq('state', state);
     if (loksabha_id != null && !Number.isNaN(loksabha_id)) q = q.eq('loksabha_id', loksabha_id);
@@ -74,6 +83,9 @@ export async function DELETE(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
+  }
+  if (auth.role === 'moderator') {
+    return NextResponse.json({ error: 'Moderators cannot delete users' }, { status: 403 });
   }
 
   const id = request.nextUrl.searchParams.get('id');
