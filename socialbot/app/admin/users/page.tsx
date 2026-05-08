@@ -42,6 +42,8 @@ interface AppUser {
   name: string;
   phone?: string;
   email?: string;
+  role?: string;
+  assigned_state_id?: number | null;
   party: string;
   party_label: string;
   designation1?: string;
@@ -67,6 +69,8 @@ interface AppUser {
   instagram?: string;
   personalFrames: UserFrame[];
 }
+
+type StateRow = { id: string; name: string };
 
 export default function UserManagement() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -206,6 +210,13 @@ export default function UserManagement() {
     name: String(row.name ?? ''),
     phone: String(row.phone ?? row.phone_number ?? ''),
     email: String(row.email ?? ''),
+    role: typeof (row as any).role === 'string' ? String((row as any).role) : (row as any).role != null ? String((row as any).role) : undefined,
+    assigned_state_id:
+      typeof (row as any).assigned_state_id === 'number'
+        ? (row as any).assigned_state_id
+        : (row as any).assigned_state_id != null && String((row as any).assigned_state_id).trim()
+          ? Number((row as any).assigned_state_id)
+          : null,
     designation1: String(row.designation1 ?? row.designation ?? ''),
     designation2: String(row.designation2 ?? row.designation_2 ?? ''),
     designation3: String(row.designation3 ?? row.designation_3 ?? ''),
@@ -259,6 +270,34 @@ export default function UserManagement() {
 
   const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_id: number | null } | null>(null);
   const isModerator = viewer?.role === 'moderator';
+  const isAdmin = viewer?.role === 'admin';
+
+  const [statesList, setStatesList] = useState<StateRow[]>([]);
+  const [statesLoading, setStatesLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    (async () => {
+      setStatesLoading(true);
+      try {
+        const { data, error } = await supabase.from('states').select('id,name').order('name', { ascending: true });
+        if (cancelled) return;
+        if (error) throw error;
+        const mapped = (data ?? [])
+          .map((r: any) => ({ id: String(r.id ?? ''), name: String(r.name ?? '').trim() }))
+          .filter((r: any) => r.id && r.name);
+        setStatesList(mapped);
+      } catch {
+        if (!cancelled) setStatesList([]);
+      } finally {
+        if (!cancelled) setStatesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
 
   useEffect(() => {
     let cancelled = false;
@@ -367,6 +406,30 @@ export default function UserManagement() {
 
   const [selectedUser, setSelectedUser] = useState<AppUser | null>(null);
   const [isDeleting, setIsDeleting] = useState<AppUser | null>(null);
+
+  const [toast, setToast] = useState<{ message: string; tone: 'success' | 'error' } | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 2800);
+    return () => window.clearTimeout(t);
+  }, [toast]);
+
+  const [roleUser, setRoleUser] = useState<AppUser | null>(null);
+  const [roleSaving, setRoleSaving] = useState(false);
+  const [roleValue, setRoleValue] = useState<'user' | 'moderator' | 'admin'>('user');
+  const [roleStateId, setRoleStateId] = useState<string>('');
+
+  useEffect(() => {
+    if (!roleUser) return;
+    const r = String(roleUser.role ?? 'user').trim().toLowerCase();
+    const role = (r === 'admin' || r === 'moderator' || r === 'user') ? (r as any) : 'user';
+    setRoleValue(role);
+    const sid = roleUser.assigned_state_id != null && !Number.isNaN(Number(roleUser.assigned_state_id))
+      ? String(roleUser.assigned_state_id)
+      : '';
+    setRoleStateId(sid);
+  }, [roleUser?.id]);
 
   // --- FILTER OPTIONS (derived from current dataset) ---
   const states = Array.from(new Set(users.map((u) => u.state).filter(Boolean)));
@@ -533,6 +596,17 @@ export default function UserManagement() {
       
       <input type="file" ref={fileInputRef} onChange={handleBulkUploadFrames} className="hidden" multiple accept="image/png" />
 
+      {toast ? (
+        <div
+          className={`fixed bottom-8 left-1/2 z-[210] max-w-md -translate-x-1/2 rounded-xl px-5 py-3 text-center text-sm font-bold text-white shadow-lg ${
+            toast.tone === 'success' ? 'bg-emerald-600' : 'bg-rose-600'
+          }`}
+          role="status"
+        >
+          {toast.message}
+        </div>
+      ) : null}
+
       {/* DELETE MODAL */}
       {isDeleting && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
@@ -554,6 +628,137 @@ export default function UserManagement() {
           </div>
         </div>
       )}
+
+      {/* ROLE MANAGEMENT MODAL (admin-only) */}
+      {isAdmin && roleUser ? (
+        <div className="fixed inset-0 z-[205] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-[40px] p-8 max-w-lg w-full space-y-6 shadow-2xl relative">
+            <button
+              onClick={() => setRoleUser(null)}
+              className="absolute top-6 right-6 w-10 h-10 bg-slate-900 text-white rounded-2xl flex items-center justify-center hover:bg-blue-600 transition-all shadow-xl"
+              aria-label="Close role management"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="space-y-1">
+              <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Role Management</p>
+              <h3 className="text-xl font-black text-slate-900 leading-tight">{fmt(roleUser.name)}</h3>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              <div>
+                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Role</label>
+                <select
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 shadow-sm outline-none focus:border-blue-400"
+                  value={roleValue}
+                  onChange={(e) => setRoleValue(e.target.value as any)}
+                  disabled={roleSaving}
+                >
+                  <option value="user">User</option>
+                  <option value="moderator">Moderator</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+
+              {roleValue === 'moderator' ? (
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    Assigned State
+                  </label>
+                  <select
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 shadow-sm outline-none focus:border-blue-400 disabled:opacity-60"
+                    value={roleStateId}
+                    onChange={(e) => setRoleStateId(e.target.value)}
+                    disabled={roleSaving || statesLoading}
+                  >
+                    <option value="">{statesLoading ? 'Loading states…' : 'Select state'}</option>
+                    {statesList.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setRoleUser(null)}
+                disabled={roleSaving}
+                className="flex-1 py-3 bg-slate-100 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-700 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={roleSaving}
+                onClick={async () => {
+                  if (roleValue === 'moderator' && !roleStateId) {
+                    setToast({ message: 'Select a state for moderator', tone: 'error' });
+                    return;
+                  }
+
+                  const prevRole = String(roleUser.role ?? 'user').trim().toLowerCase();
+                  const nextRole = roleValue;
+                  const needsConfirm = nextRole === 'admin' || nextRole === 'moderator' || prevRole === 'admin' || prevRole === 'moderator';
+                  if (needsConfirm) {
+                    const ok = window.confirm(`Confirm role change: ${prevRole || 'user'} → ${nextRole}?`);
+                    if (!ok) return;
+                  }
+
+                  setRoleSaving(true);
+                  try {
+                    const res = await fetch('/api/admin/profiles', {
+                      method: 'PATCH',
+                      credentials: 'same-origin',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        id: String(roleUser.id),
+                        role: nextRole,
+                        assigned_state_id: nextRole === 'moderator' ? Number(roleStateId) : null,
+                      }),
+                    });
+                    const d = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; profile?: any };
+                    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+
+                    const updatedRole = String(d.profile?.role ?? nextRole);
+                    const updatedAssigned =
+                      d.profile?.assigned_state_id != null ? Number(d.profile.assigned_state_id) : null;
+
+                    setUsers((prev) =>
+                      prev.map((u) =>
+                        String(u.id) === String(roleUser.id)
+                          ? { ...u, role: updatedRole, assigned_state_id: updatedAssigned }
+                          : u
+                      )
+                    );
+                    setSelectedUser((prev) =>
+                      prev && String(prev.id) === String(roleUser.id)
+                        ? { ...prev, role: updatedRole, assigned_state_id: updatedAssigned }
+                        : prev
+                    );
+                    setRoleUser((prev) =>
+                      prev ? { ...prev, role: updatedRole, assigned_state_id: updatedAssigned } : null
+                    );
+                    setToast({ message: 'Role updated', tone: 'success' });
+                    setRoleUser(null);
+                  } catch (e) {
+                    setToast({ message: e instanceof Error ? e.message : 'Save failed', tone: 'error' });
+                  } finally {
+                    setRoleSaving(false);
+                  }
+                }}
+                className="flex-1 py-3 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all disabled:opacity-60"
+              >
+                {roleSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* USER PROFILE MODAL */}
       {selectedUser && (
@@ -869,6 +1074,16 @@ export default function UserManagement() {
             <button onClick={() => openUserProfile(user)} className="mt-6 w-full py-3 bg-slate-50 rounded-2xl text-[9px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-100 transition-all flex items-center justify-center gap-2 active:scale-95">
               {isModerator ? 'Frames' : 'Profile & Frames'} <ExternalLink size={14} />
             </button>
+
+            {isAdmin ? (
+              <button
+                type="button"
+                onClick={() => setRoleUser(user)}
+                className="mt-2 w-full py-3 bg-white border border-slate-200 rounded-2xl text-[9px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50 transition-all flex items-center justify-center gap-2 active:scale-95"
+              >
+                Manage Role <Info size={14} />
+              </button>
+            ) : null}
           </div>
         ))}
       </div>

@@ -103,3 +103,61 @@ export async function DELETE(request: NextRequest) {
 
   return NextResponse.json({ ok: true });
 }
+
+type PatchBody = {
+  id?: string;
+  role?: 'user' | 'moderator' | 'admin' | string;
+  assigned_state_id?: number | string | null;
+};
+
+function toNumOrNull(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+export async function PATCH(request: NextRequest) {
+  const supabase = await createSupabaseServerClient();
+  const auth = await validateAdminSession(supabase);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
+  }
+  if (auth.role !== 'admin') {
+    return NextResponse.json({ error: 'Only admins can update roles' }, { status: 403 });
+  }
+
+  let body: PatchBody = {};
+  try {
+    body = (await request.json()) as PatchBody;
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const id = String(body.id ?? '').trim();
+  if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
+
+  const roleRaw = String(body.role ?? '').trim().toLowerCase();
+  const role = roleRaw === 'admin' || roleRaw === 'moderator' || roleRaw === 'user' ? roleRaw : '';
+  if (!role) return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
+
+  let assigned_state_id = toNumOrNull(body.assigned_state_id);
+  if (role !== 'moderator') assigned_state_id = null;
+  if (role === 'moderator' && assigned_state_id == null) {
+    return NextResponse.json({ error: 'assigned_state_id is required for moderators' }, { status: 400 });
+  }
+
+  const admin = createServiceRoleClient();
+  if (!admin) {
+    return NextResponse.json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, { status: 503 });
+  }
+
+  const { data, error } = await admin
+    .from('profiles')
+    .update({ role, assigned_state_id })
+    .eq('id', id)
+    .select('id, role, assigned_state_id')
+    .single();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true, profile: data }, { headers: { 'Cache-Control': 'no-store' } });
+}
