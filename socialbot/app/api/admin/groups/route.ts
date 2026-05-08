@@ -64,6 +64,17 @@ function isMissingTableErr(err: { message?: string } | null | undefined, tableNa
   return msg.includes(tableName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('schema cache') || msg.includes('not found'));
 }
 
+function groupMembershipsMissingResponse() {
+  return NextResponse.json(
+    {
+      error: "DB schema missing table public.group_memberships. Run Supabase migrations and refresh schema cache, then retry.",
+      schemaMissing: true,
+      missingTable: 'group_memberships',
+    },
+    { status: 503, headers: { 'Cache-Control': 'no-store' } }
+  );
+}
+
 async function hasGroupMembershipsTable(admin: SupabaseClient): Promise<boolean> {
   // Best-effort check: query 0 rows. If table missing, PostgREST errors.
   const r = await admin.from('group_memberships').select('group_id', { count: 'exact', head: true }).limit(1);
@@ -84,7 +95,10 @@ async function listMemberIdsForGroup(admin: SupabaseClient, groupId: number): Pr
       .eq('group_id', groupId)
       .order('user_id', { ascending: true })
       .range(from, from + pageSize - 1);
-    if (error) throw new Error(error.message);
+    if (error) {
+      if (isMissingTableErr(error as any, 'group_memberships')) throw new Error('__MISSING_GROUP_MEMBERSHIPS__');
+      throw new Error(error.message);
+    }
     const rows = (data ?? []) as any[];
     if (rows.length === 0) break;
     for (const r of rows) out.push(String(r.user_id ?? '').trim());
@@ -120,12 +134,18 @@ async function fetchMembersForGroupIdViaMemberships(admin: SupabaseClient, group
 async function addMembersToGroup(admin: SupabaseClient, groupId: number, userIds: string[]) {
   const rows = userIds.map((u) => ({ group_id: groupId, user_id: u }));
   const { error } = await admin.from('group_memberships').upsert(rows, { onConflict: 'group_id,user_id' });
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (isMissingTableErr(error as any, 'group_memberships')) throw new Error('__MISSING_GROUP_MEMBERSHIPS__');
+    throw new Error(error.message);
+  }
 }
 
 async function removeMembersFromGroup(admin: SupabaseClient, groupId: number, userIds: string[]) {
   const { error } = await admin.from('group_memberships').delete().eq('group_id', groupId).in('user_id', userIds);
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (isMissingTableErr(error as any, 'group_memberships')) throw new Error('__MISSING_GROUP_MEMBERSHIPS__');
+    throw new Error(error.message);
+  }
 }
 
 async function countMembersByGroupId(admin: SupabaseClient): Promise<Map<number, number>> {
@@ -138,7 +158,10 @@ async function countMembersByGroupId(admin: SupabaseClient): Promise<Map<number,
       .select('group_id')
       .order('group_id', { ascending: true })
       .range(from, from + pageSize - 1);
-    if (error) throw new Error(error.message);
+    if (error) {
+      if (isMissingTableErr(error as any, 'group_memberships')) throw new Error('__MISSING_GROUP_MEMBERSHIPS__');
+      throw new Error(error.message);
+    }
     const rows = (data ?? []) as any[];
     if (rows.length === 0) break;
     for (const r of rows) {
@@ -355,9 +378,17 @@ export async function GET(request: NextRequest) {
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
       }
-      const rows = hasMemberships
-        ? await fetchMembersForGroupIdViaMemberships(admin, grp.id)
-        : await fetchMembersForGroupId(admin, grp.id);
+      let rows: any[] = [];
+      if (hasMemberships) {
+        try {
+          rows = await fetchMembersForGroupIdViaMemberships(admin, grp.id);
+        } catch (e) {
+          if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') return groupMembershipsMissingResponse();
+          throw e;
+        }
+      } else {
+        rows = await fetchMembersForGroupId(admin, grp.id);
+      }
       const membersAll = rows.map((r) => ({
         id: String(r.id ?? ''),
         name: String(r.name ?? ''),
@@ -422,7 +453,15 @@ export async function GET(request: NextRequest) {
     const counts =
       hasMemberships
         ? await (async () => {
-            const base = await countMembersByGroupId(admin);
+            let base: Map<number, number>;
+            try {
+              base = await countMembersByGroupId(admin);
+            } catch (e) {
+              if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') {
+                throw new Error('__MISSING_GROUP_MEMBERSHIPS__');
+              }
+              throw e;
+            }
             // For assigned-group campaign managers, counts should reflect only their visible groups.
             if (auth.role === 'campaign_manager') {
               const allowed = new Set(Array.isArray(auth.assigned_group_ids) ? auth.assigned_group_ids : []);
@@ -474,6 +513,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ groups }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
+    if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') return groupMembershipsMissingResponse();
     const msg = e instanceof Error ? e.message : 'Failed to load groups';
     return NextResponse.json({ error: msg }, { status: 500 });
   }
@@ -528,13 +568,22 @@ export async function DELETE(request: NextRequest) {
     }
   }
 
-  const memberIds = hasMemberships ? await listMemberIdsForGroup(admin, grp.id) : [];
+  let memberIds: string[] = [];
+  if (hasMemberships) {
+    try {
+      memberIds = await listMemberIdsForGroup(admin, grp.id);
+    } catch (e) {
+      if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') return groupMembershipsMissingResponse();
+      throw e;
+    }
+  }
   if (hasMemberships) {
     // Removing the group: membership rows will be deleted by FK CASCADE on group delete,
     // but remove them explicitly so we can return accurate affected_users_count even if delete fails.
     try {
       await removeMembersFromGroup(admin, grp.id, memberIds);
     } catch (e) {
+      if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') return groupMembershipsMissingResponse();
       return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to remove members' }, { status: 500 });
     }
   } else {
@@ -677,6 +726,7 @@ export async function POST(request: NextRequest) {
     try {
       await addMembersToGroup(admin, grp.id, userIds);
     } catch (e) {
+      if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') return groupMembershipsMissingResponse();
       return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to add members' }, { status: 500 });
     }
   } else {
@@ -761,6 +811,7 @@ export async function PATCH(request: NextRequest) {
       try {
         await addMembersToGroup(admin, gid, [userId]);
       } catch (e) {
+        if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') return groupMembershipsMissingResponse();
         return NextResponse.json({ error: e instanceof Error ? e.message : 'Add failed' }, { status: 500 });
       }
       // Do not modify profiles.group_id in many-to-many mode.
@@ -790,6 +841,7 @@ export async function PATCH(request: NextRequest) {
       try {
         for (const gid of gids) await removeMembersFromGroup(admin, gid, [userId]);
       } catch (e) {
+        if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') return groupMembershipsMissingResponse();
         return NextResponse.json({ error: e instanceof Error ? e.message : 'Remove failed' }, { status: 500 });
       }
       next = current;
