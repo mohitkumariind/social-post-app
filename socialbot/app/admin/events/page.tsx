@@ -463,6 +463,7 @@ export default function App() {
   // Prune selected LS to only those still available (preserve when possible).
   useEffect(() => {
     if (availableLoksabhas.length === 0) return;
+    if (newLoksabha.includes('ALL')) return;
     const allowed = new Set(availableLoksabhas.map((l) => String(l.id)));
     const cleaned = newLoksabha.filter((id) => id !== 'ALL' && allowed.has(String(id)));
     if (cleaned.length !== newLoksabha.length) setNewLoksabha(cleaned);
@@ -526,6 +527,7 @@ export default function App() {
   // Prune selected assemblies to only those still available (preserve when possible).
   useEffect(() => {
     if (availableAssemblies.length === 0) return;
+    if (newAssembly.includes('ALL')) return;
     const allowed = new Set(availableAssemblies.map((a) => String(a.id)));
     const cleaned = newAssembly.filter((id) => id !== 'ALL' && allowed.has(String(id)));
     if (cleaned.length !== newAssembly.length) setNewAssembly(cleaned);
