@@ -608,8 +608,7 @@ export default function GroupManagementPage() {
                   {searchResults.length > 0 && (
                     <ul className="mt-3 max-h-40 space-y-2 overflow-y-auto">
                       {searchResults.map((r) => {
-                        const already =
-                          members.some((m) => m.id === r.id) || (r.group_id != null && String(r.group_id) === String(detailTag));
+                      const already = members.some((m) => m.id === r.id);
                         return (
                           <li key={r.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2 text-xs font-bold">
                             <span className="truncate text-slate-800">{r.name || '—'} · {r.phone || '—'}</span>
