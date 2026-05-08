@@ -145,11 +145,20 @@ export async function fetchProfileAccessForMiddleware(
     const admin = createClient(url, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const { data, error } = await admin
-      .from('profiles')
-      .select('role, assigned_state_ids, assigned_group_ids')
-      .eq('id', userId)
-      .single();
+    const tryWithAssignedGroups = async () =>
+      await admin.from('profiles').select('role, assigned_state_ids, assigned_group_ids').eq('id', userId).single();
+
+    const tryWithoutAssignedGroups = async () =>
+      await admin.from('profiles').select('role, assigned_state_ids').eq('id', userId).single();
+
+    let { data, error } = await tryWithAssignedGroups();
+    const msg = String((error as any)?.message ?? '').toLowerCase();
+    const missingAssignedGroups = msg.includes('assigned_group_ids') && (msg.includes('does not exist') || msg.includes('schema cache'));
+    if (error && missingAssignedGroups) {
+      const r2 = await tryWithoutAssignedGroups();
+      data = (r2 as any).data ?? null;
+      error = (r2 as any).error ?? null;
+    }
 
     if (error || data == null) {
       return {
@@ -171,11 +180,20 @@ export async function fetchProfileAccessForMiddleware(
     return { role, assigned_state_ids, assigned_group_ids, usedServiceRole: true };
   }
 
-  const { data, error } = await anonSupabase
-    .from('profiles')
-    .select('role, assigned_state_ids, assigned_group_ids')
-    .eq('id', userId)
-    .single();
+  const tryAnonWithAssignedGroups = async () =>
+    await anonSupabase.from('profiles').select('role, assigned_state_ids, assigned_group_ids').eq('id', userId).single();
+
+  const tryAnonWithoutAssignedGroups = async () =>
+    await anonSupabase.from('profiles').select('role, assigned_state_ids').eq('id', userId).single();
+
+  let { data, error } = await tryAnonWithAssignedGroups();
+  const msg = String((error as any)?.message ?? '').toLowerCase();
+  const missingAssignedGroups = msg.includes('assigned_group_ids') && (msg.includes('does not exist') || msg.includes('schema cache'));
+  if (error && missingAssignedGroups) {
+    const r2 = await tryAnonWithoutAssignedGroups();
+    data = (r2 as any).data ?? null;
+    error = (r2 as any).error ?? null;
+  }
 
   if (error || data == null) {
     if (__DEV__ && error?.code !== 'PGRST116') {

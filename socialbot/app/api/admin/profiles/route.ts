@@ -125,6 +125,11 @@ function toStrArr(v: unknown): string[] {
   return arr.map((x) => String(x ?? '').trim()).filter(Boolean);
 }
 
+function isMissingColumnErr(err: { message?: string } | null | undefined, columnName: string) {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('schema cache'));
+}
+
 export async function PATCH(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
@@ -173,6 +178,19 @@ export async function PATCH(request: NextRequest) {
     .select('id, role, assigned_state_ids, assigned_group_ids')
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    if (isMissingColumnErr(error as any, 'assigned_group_ids')) {
+      return NextResponse.json(
+        {
+          error:
+            "DB schema missing column profiles.assigned_group_ids. Apply the migration and refresh Supabase schema cache, then retry.",
+          schemaMissing: true,
+          missingColumn: 'assigned_group_ids',
+        },
+        { status: 503 }
+      );
+    }
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
   return NextResponse.json({ ok: true, profile: data }, { headers: { 'Cache-Control': 'no-store' } });
 }
