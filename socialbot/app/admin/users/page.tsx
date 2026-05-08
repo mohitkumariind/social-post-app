@@ -119,9 +119,18 @@ export default function UserManagement() {
   const displayPartyLabel = (partyId: string, partyLabel: string): string => {
     const fromDb = partyLabelMap[partyId];
     if (fromDb) return fromDb;
+    // If partyId itself is numeric and DB map isn't ready, don't show the id.
+    if (isLikelyNumericId(partyId)) return '';
     // If the stored label is just an id like "7", don't show it.
     if (isLikelyNumericId(partyLabel)) return '';
     return partyLabel;
+  };
+
+  const safePartyText = (partyId: string, partyLabel: string): string => {
+    const primary = displayPartyLabel(partyId, partyLabel);
+    if (primary) return primary;
+    if (isLikelyNumericId(partyId)) return '';
+    return getPartyLabel(partyId);
   };
 
   useEffect(() => {
@@ -538,7 +547,7 @@ export default function UserManagement() {
                     <h2 className="text-4xl font-black tracking-tight leading-none">{selectedUser.name}</h2>
                     <div className="flex items-center gap-4 mt-3">
                         <span className="bg-blue-600 text-[11px] font-black uppercase px-3 py-1 rounded-lg tracking-widest">
-                          {fmt(displayPartyLabel(selectedUser.party, selectedUser.party_label) || getPartyLabel(selectedUser.party))}
+                          {fmt(safePartyText(selectedUser.party, selectedUser.party_label))}
                         </span>
                     </div>
                 </div>
@@ -556,7 +565,7 @@ export default function UserManagement() {
                     <div className="space-y-6">
                         <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Profile</h3>
                         <div className="space-y-3 text-xs font-bold text-slate-800">
-                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Party</span><span className="font-bold text-slate-800">{fmt(displayPartyLabel(selectedUser.party, selectedUser.party_label) || getPartyLabel(selectedUser.party))}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Party</span><span className="font-bold text-slate-800">{fmt(safePartyText(selectedUser.party, selectedUser.party_label))}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">State</span><span className="font-bold text-slate-800">{fmt(selectedUser.state)}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Lok Sabha</span><span className="font-bold text-slate-800">{fmt(selectedUser.loksabha)}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Assembly</span><span className="font-bold text-slate-800">{fmt(selectedUser.assembly || selectedUser.constituency)}</span></div>
@@ -763,7 +772,7 @@ export default function UserManagement() {
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Party Name</span>
                   <span className="font-bold text-slate-800 text-right">
-                    {fmt(displayPartyLabel(user.party, user.party_label) || getPartyLabel(user.party))}
+                    {fmt(safePartyText(user.party, user.party_label))}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
