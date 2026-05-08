@@ -391,7 +391,7 @@ export async function DELETE(request: NextRequest) {
   if (!tag) return NextResponse.json({ error: 'Missing group id/name' }, { status: 400 });
   const grp = await resolveGroup(admin, tag);
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
-  if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
+  if (auth.role === 'moderator') {
     try {
       requireOwnership(grp.created_by, auth.user.id);
     } catch {
