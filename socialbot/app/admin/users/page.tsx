@@ -655,7 +655,29 @@ export default function UserManagement() {
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Mobile</span>
-                  <span className="font-bold text-slate-800 text-right">{fmt(user.phone)}</span>
+                  <span className="flex items-center gap-2 justify-end">
+                    <span className="font-bold text-slate-800 text-right">{fmt(user.phone)}</span>
+                    {waDigits(user.phone) ? (
+                      <a
+                        href={`https://wa.me/${waDigits(user.phone)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center justify-center text-emerald-600 hover:text-emerald-700"
+                        aria-label="WhatsApp"
+                        title="WhatsApp"
+                      >
+                        <MessageCircle size={16} />
+                      </a>
+                    ) : (
+                      <span
+                        className="inline-flex items-center justify-center text-slate-300"
+                        aria-label="WhatsApp unavailable"
+                        title="WhatsApp unavailable"
+                      >
+                        <MessageCircle size={16} />
+                      </span>
+                    )}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">State</span>
@@ -690,46 +712,6 @@ export default function UserManagement() {
                 )}
               </div>
             )}
-
-            <div className="mt-5 space-y-2 text-xs font-semibold text-slate-700">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Mobile</span>
-                <span className="flex items-center gap-2">
-                  <span className="font-bold text-slate-800">{fmt(user.phone)}</span>
-                  {waDigits(user.phone) ? (
-                    <a
-                      href={`https://wa.me/${waDigits(user.phone)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center justify-center text-emerald-600 hover:text-emerald-700"
-                      aria-label="WhatsApp"
-                      title="WhatsApp"
-                    >
-                      <MessageCircle size={16} />
-                    </a>
-                  ) : (
-                    <span className="inline-flex items-center justify-center text-slate-300" aria-label="WhatsApp unavailable" title="WhatsApp unavailable">
-                      <MessageCircle size={16} />
-                    </span>
-                  )}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">State</span>
-                <span className="font-bold text-slate-800">{fmt(user.state)}</span>
-              </div>
-
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Lok Sabha</span>
-                <span className="font-bold text-slate-800">{fmt(user.loksabha)}</span>
-              </div>
-
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Assembly</span>
-                <span className="font-bold text-slate-800">{fmt(user.assembly || user.constituency)}</span>
-              </div>
-            </div>
 
             <button onClick={() => openUserProfile(user)} className="mt-6 w-full py-3 bg-slate-50 rounded-2xl text-[9px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-100 transition-all flex items-center justify-center gap-2 active:scale-95">
               Profile & Frames <ExternalLink size={14} />
