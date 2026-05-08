@@ -54,22 +54,24 @@ export async function GET() {
           .gte('created_at', startOfTodayIso())
           .overlaps('assigned_state_ids', auth.assigned_state_ids)
       : db.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', startOfTodayIso()),
-    // Recent posts (best-effort filter)
-    (async () => {
-      const nowIso = new Date().toISOString();
-      const r = await db
-        .from('posts')
-        .select('id,title,created_at')
-        .eq('status', 'published')
-        .is('deleted_at', null)
-        .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`)
-        .order('created_at', { ascending: false })
-        .limit(5);
-      if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
-        return await db.from('posts').select('id,title,created_at').order('created_at', { ascending: false }).limit(5);
-      }
-      return r as any;
-    })(),
+    // Recent posts: admin-only (hide for moderator + campaign_manager)
+    auth.role === 'admin'
+      ? (async () => {
+          const nowIso = new Date().toISOString();
+          const r = await db
+            .from('posts')
+            .select('id,title,created_at')
+            .eq('status', 'published')
+            .is('deleted_at', null)
+            .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`)
+            .order('created_at', { ascending: false })
+            .limit(5);
+          if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
+            return await db.from('posts').select('id,title,created_at').order('created_at', { ascending: false }).limit(5);
+          }
+          return r as any;
+        })()
+      : ({ data: [], error: null } as any),
     db.from('events').select('id,name,end').order('end', { ascending: true }).limit(3),
   ]);
 

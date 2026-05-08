@@ -36,6 +36,15 @@ export default function Dashboard() {
     let cancelled = false;
 
     (async () => {
+      let role: string | null = null;
+      try {
+        const vr = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
+        const vd = (await vr.json().catch(() => ({}))) as { role?: string | null };
+        role = typeof vd.role === 'string' ? vd.role : null;
+      } catch {
+        role = null;
+      }
+
       const res = await fetch('/api/admin/dashboard-stats', { credentials: 'same-origin' });
       if (!res.ok) {
         if (__DEV__) {
@@ -59,12 +68,16 @@ export default function Dashboard() {
       setEventsCount(payload.eventsCount);
       setNewUsersToday(payload.newUsersToday);
 
+      const r = (role ?? '').toLowerCase();
+      const canSeeRecentPosts = r === 'admin';
       setRecentPosts(
-        (payload.recentPosts || []).map((p) => ({
-          id: p.id,
-          title: String(p.title ?? '').trim() || '—',
-          date: fmtDateShort(p.created_at),
-        }))
+        canSeeRecentPosts
+          ? (payload.recentPosts || []).map((p) => ({
+              id: p.id,
+              title: String(p.title ?? '').trim() || '—',
+              date: fmtDateShort(p.created_at),
+            }))
+          : []
       );
 
       setUpcomingEvents(
@@ -118,32 +131,34 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 bg-white rounded-[40px] border border-slate-100 shadow-sm flex flex-col overflow-hidden">
-          <div className="p-8 border-b border-slate-50 flex justify-between items-center">
-            <div className="flex items-center gap-3">
-              <BarChart3 className="text-blue-600" />
-              <h3 className="font-black text-slate-900 text-lg">Recent posts</h3>
+      {recentPosts.length > 0 ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2 bg-white rounded-[40px] border border-slate-100 shadow-sm flex flex-col overflow-hidden">
+            <div className="p-8 border-b border-slate-50 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <BarChart3 className="text-blue-600" />
+                <h3 className="font-black text-slate-900 text-lg">Recent posts</h3>
+              </div>
             </div>
-          </div>
-          <table className="w-full text-left">
-            <thead>
-              <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
-                <th className="px-8 py-4">Post title</th>
-                <th className="px-8 py-4 text-right">Added</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {recentPosts.map((post) => (
-                <tr key={post.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-8 py-5 font-bold text-slate-800">{post.title}</td>
-                  <td className="px-8 py-5 text-right font-black text-slate-500">{post.date}</td>
+            <table className="w-full text-left">
+              <thead>
+                <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
+                  <th className="px-8 py-4">Post title</th>
+                  <th className="px-8 py-4 text-right">Added</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {recentPosts.map((post) => (
+                  <tr key={post.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="px-8 py-5 font-bold text-slate-800">{post.title}</td>
+                    <td className="px-8 py-5 text-right font-black text-slate-500">{post.date}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="space-y-4 pt-4">
         <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] px-2 flex items-center gap-2">
