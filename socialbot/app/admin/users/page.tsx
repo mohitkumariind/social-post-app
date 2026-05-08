@@ -114,14 +114,28 @@ export default function UserManagement() {
     };
   }, []);
 
+  const partyShortLabel = (idOrRaw: string): string => {
+    const raw = String(idOrRaw ?? '').trim();
+    if (!raw) return '';
+    const id = normalizePartyId(raw);
+    const short = getPartyLabel(id || raw); // from constants: shortName for known parties
+    if (short && short !== id && short !== raw) return short;
+    return '';
+  };
+
   const resolvePartyText = (rawParty: unknown): { id: string; label: string } => {
     const raw = String(rawParty ?? '').trim();
     if (!raw) return { id: '', label: '' };
     const id = normalizePartyId(raw);
+    const short = partyShortLabel(id || raw);
+    if (short) return { id, label: short };
+
+    // If party is stored as numeric/string id, derive from DB name as a fallback.
     const labelFromDb = partyLabelMap[id];
     if (labelFromDb) return { id, label: labelFromDb };
-    const fallback = getPartyLabel(id || raw);
-    return { id, label: fallback || raw };
+
+    // Final fallback: use raw.
+    return { id, label: raw };
   };
 
   // When party labels arrive, retrofit already-loaded users (avoids showing numeric ids like "7").
@@ -130,6 +144,12 @@ export default function UserManagement() {
     if (keys.length === 0) return;
     setUsers((prev) =>
       prev.map((u) => {
+        const short = partyShortLabel(u.party);
+        if (short) {
+          if (u.party_label === short) return u;
+          return { ...u, party_label: short };
+        }
+
         const fromDb = partyLabelMap[u.party];
         if (!fromDb) return u;
         if (u.party_label === fromDb) return u;
@@ -481,7 +501,7 @@ export default function UserManagement() {
                     <h2 className="text-4xl font-black tracking-tight leading-none">{selectedUser.name}</h2>
                     <div className="flex items-center gap-4 mt-3">
                         <span className="bg-blue-600 text-[11px] font-black uppercase px-3 py-1 rounded-lg tracking-widest">
-                          {fmt(partyLabelMap[selectedUser.party] || selectedUser.party_label || getPartyLabel(selectedUser.party))}
+                          {fmt(selectedUser.party_label || partyLabelMap[selectedUser.party] || getPartyLabel(selectedUser.party))}
                         </span>
                     </div>
                 </div>
@@ -706,7 +726,7 @@ export default function UserManagement() {
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Party Name</span>
                   <span className="font-bold text-slate-800 text-right">
-                    {fmt(partyLabelMap[user.party] || user.party_label || getPartyLabel(user.party))}
+                    {fmt(user.party_label || partyLabelMap[user.party] || getPartyLabel(user.party))}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
