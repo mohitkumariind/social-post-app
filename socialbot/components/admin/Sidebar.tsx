@@ -52,10 +52,11 @@ export default function Sidebar() {
       return navItems.filter((i) => i.href !== '/admin/parties' && i.href !== '/admin/activity-center');
     }
     if (r === 'campaign_manager') {
-      // Campaign Manager: Dashboard, Events, Notifications, Groups (NO Activity Center)
+      // Campaign Manager: Dashboard, Users, Events, Notifications, Groups (NO Activity Center)
       return navItems.filter(
         (i) =>
           i.href === '/admin' ||
+          i.href === '/admin/users' ||
           i.href === '/admin/events' ||
           i.href === '/admin/groups' ||
           i.href === '/admin/notifications'
