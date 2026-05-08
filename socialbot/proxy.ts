@@ -124,7 +124,7 @@ export async function proxy(request: NextRequest) {
         pathname.startsWith('/admin/groups');
       if (!allowed) {
         proxyLog('[proxy] Step 4: moderator blocked route', { pathname });
-        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/login?error=forbidden');
+        return redirectPreservingAuthCookies(request, sessionResponse, '/admin');
       }
     }
 
@@ -136,7 +136,7 @@ export async function proxy(request: NextRequest) {
         pathname.startsWith('/admin/groups');
       if (!allowed) {
         proxyLog('[proxy] Step 4: campaign_manager blocked route', { pathname });
-        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/login?error=forbidden');
+        return redirectPreservingAuthCookies(request, sessionResponse, '/admin');
       }
     }
 

@@ -241,6 +241,7 @@ export default function App() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [scheduledAt, setScheduledAt] = useState<string>(''); // datetime-local
+  const [scheduleUiOpen, setScheduleUiOpen] = useState(false);
   const [newParty, setNewParty] = useState<string[]>([]);
   const [newState, setNewState] = useState<string[]>([]);
   const [newLoksabha, setNewLoksabha] = useState<string[]>([]);
@@ -704,6 +705,7 @@ export default function App() {
     setStartDate('');
     setEndDate('');
     setScheduledAt('');
+    setScheduleUiOpen(false);
     setNewParty([]);
     setNewState([]);
     setNewLoksabha([]);
@@ -1336,7 +1338,7 @@ export default function App() {
               </div>
               <div className="shrink-0 px-4 sm:px-5 py-4 border-t border-slate-100 bg-white">
                 <div className="flex gap-4">
-                  <button onClick={() => { setEditingEvent(null); setNewName(''); setStartDate(''); setEndDate(''); setScheduledAt(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
+                  <button onClick={() => { setEditingEvent(null); setNewName(''); setStartDate(''); setEndDate(''); setScheduledAt(''); setScheduleUiOpen(false); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
                   <button onClick={handleSaveEvent} disabled={!newName.trim() || !startDate || !endDate} className="flex-1 py-3 sm:py-4 bg-blue-600 text-white rounded-2xl font-bold disabled:opacity-30">Save</button>
                 </div>
               </div>
@@ -1467,12 +1469,27 @@ export default function App() {
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Schedule publish</span>
-              <input type="datetime-local" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
-              <div className="mt-2 flex justify-end">
-                <button type="button" onClick={() => setScheduledAt('')} className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700">
-                  Publish now
+              {!scheduleUiOpen ? (
+                <button
+                  type="button"
+                  onClick={() => setScheduleUiOpen(true)}
+                  className="w-full rounded-xl bg-slate-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-100"
+                >
+                  Schedule Event
                 </button>
-              </div>
+              ) : (
+                <>
+                  <input type="datetime-local" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
+                  <div className="mt-2 flex justify-end gap-3">
+                    <button type="button" onClick={() => setScheduleUiOpen(false)} className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700">
+                      Close
+                    </button>
+                    <button type="button" onClick={() => setScheduledAt('')} className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700">
+                      Publish now
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
               <MultiSelectDropdown

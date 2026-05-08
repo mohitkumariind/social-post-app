@@ -48,21 +48,22 @@ export default function Sidebar() {
   const visibleNavItems = useMemo(() => {
     const r = role?.toLowerCase() ?? '';
     if (r === 'moderator') {
-      // Moderator: Dashboard, Users, Events, Notifications, Groups
-      return navItems.filter((i) => i.href !== '/admin/parties');
+      // Moderator: Dashboard, Users, Events, Notifications, Groups (NO Activity Center)
+      return navItems.filter((i) => i.href !== '/admin/parties' && i.href !== '/admin/activity-center');
     }
     if (r === 'campaign_manager') {
-      // Campaign Manager: Dashboard, Events, Notifications, Groups
+      // Campaign Manager: Dashboard, Events, Notifications, Groups (NO Activity Center)
       return navItems.filter(
         (i) =>
           i.href === '/admin' ||
           i.href === '/admin/events' ||
           i.href === '/admin/groups' ||
-          i.href === '/admin/notifications' ||
-          i.href === '/admin/activity-center'
+          i.href === '/admin/notifications'
       );
     }
-    return navItems;
+    // Admin (and only admin) can see Activity Center. Safe-by-default: hide until role is known.
+    if (r === 'admin') return navItems;
+    return navItems.filter((i) => i.href !== '/admin/activity-center');
   }, [role]);
 
   return (

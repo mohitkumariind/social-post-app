@@ -38,7 +38,7 @@ export default function GroupManagementPage() {
   const [deleteConfirmTag, setDeleteConfirmTag] = useState<string | null>(null);
   const [busyTag, setBusyTag] = useState<string | null>(null);
 
-  const [viewerRole, setViewerRole] = useState<'admin' | 'moderator' | null>(null);
+  const [viewerRole, setViewerRole] = useState<'admin' | 'moderator' | 'campaign_manager' | null>(null);
   const isModerator = viewerRole === 'moderator';
 
   useEffect(() => {
@@ -49,7 +49,15 @@ export default function GroupManagementPage() {
         if (!res.ok) return;
         const d = (await res.json().catch(() => ({}))) as { role?: string };
         if (cancelled) return;
-        setViewerRole(d.role === 'moderator' ? 'moderator' : d.role === 'admin' ? 'admin' : null);
+        setViewerRole(
+          d.role === 'moderator'
+            ? 'moderator'
+            : d.role === 'campaign_manager'
+              ? 'campaign_manager'
+              : d.role === 'admin'
+                ? 'admin'
+                : null
+        );
       } catch {
         /* ignore */
       }
