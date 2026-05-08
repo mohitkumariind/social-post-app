@@ -124,6 +124,20 @@ export default function UserManagement() {
     return { id, label: fallback || raw };
   };
 
+  // When party labels arrive, retrofit already-loaded users (avoids showing numeric ids like "7").
+  useEffect(() => {
+    const keys = Object.keys(partyLabelMap);
+    if (keys.length === 0) return;
+    setUsers((prev) =>
+      prev.map((u) => {
+        const fromDb = partyLabelMap[u.party];
+        if (!fromDb) return u;
+        if (u.party_label === fromDb) return u;
+        return { ...u, party_label: fromDb };
+      })
+    );
+  }, [partyLabelMap]);
+
   const mapProfileToAppUser = (row: Record<string, unknown>): AppUser => ({
     ...(() => {
       const p = resolvePartyText((row as any).party ?? (row as any).party_id ?? (row as any).partyName);
@@ -466,8 +480,9 @@ export default function UserManagement() {
                 <div>
                     <h2 className="text-4xl font-black tracking-tight leading-none">{selectedUser.name}</h2>
                     <div className="flex items-center gap-4 mt-3">
-                        <span className="bg-blue-600 text-[11px] font-black uppercase px-3 py-1 rounded-lg tracking-widest">{getPartyLabel(selectedUser.party)} Member</span>
-                        <span className="text-slate-500 font-bold text-xs uppercase tracking-widest italic">Since {selectedUser.joinDate}</span>
+                        <span className="bg-blue-600 text-[11px] font-black uppercase px-3 py-1 rounded-lg tracking-widest">
+                          {fmt(partyLabelMap[selectedUser.party] || selectedUser.party_label || getPartyLabel(selectedUser.party))}
+                        </span>
                     </div>
                 </div>
             </div>
@@ -478,16 +493,16 @@ export default function UserManagement() {
                         <div className="space-y-4">
                             <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Phone size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{selectedUser.phone}</p></div>
                             <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Mail size={18} /></div><p className="font-bold text-slate-800 truncate tracking-tight">{selectedUser.email}</p></div>
-                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Globe size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.state)}</p></div>
-                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Flag size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.party_label || getPartyLabel(selectedUser.party))}</p></div>
-                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><MapPin size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.loksabha)}</p></div>
-                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><MapPin size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.assembly || selectedUser.constituency)}</p></div>
                         </div>
                     </div>
 
                     <div className="space-y-6">
                         <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Profile</h3>
                         <div className="space-y-3 text-xs font-bold text-slate-800">
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Party</span><span className="font-bold text-slate-800">{fmt(partyLabelMap[selectedUser.party] || selectedUser.party_label || getPartyLabel(selectedUser.party))}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">State</span><span className="font-bold text-slate-800">{fmt(selectedUser.state)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Lok Sabha</span><span className="font-bold text-slate-800">{fmt(selectedUser.loksabha)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Assembly</span><span className="font-bold text-slate-800">{fmt(selectedUser.assembly || selectedUser.constituency)}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Language</span><span className="font-bold text-slate-800">{fmt(selectedUser.language)}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Designation 1</span><span className="font-bold text-slate-800">{fmt(selectedUser.designation1)}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Designation 2</span><span className="font-bold text-slate-800">{fmt(selectedUser.designation2)}</span></div>
@@ -690,7 +705,9 @@ export default function UserManagement() {
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Party Name</span>
-                  <span className="font-bold text-slate-800 text-right">{fmt(user.party_label || getPartyLabel(user.party))}</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {fmt(partyLabelMap[user.party] || user.party_label || getPartyLabel(user.party))}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Mobile</span>
