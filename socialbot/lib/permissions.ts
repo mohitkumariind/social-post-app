@@ -2,7 +2,7 @@ export type AdminRole = 'admin' | 'moderator';
 
 export type ViewerAccess = {
   role: AdminRole | null;
-  assigned_state_id: number | null;
+  assigned_state_ids: number[];
 };
 
 export function isAdmin(role: string | null | undefined): boolean {
@@ -23,8 +23,8 @@ export function canAccessState(
 ): boolean {
   if (isAdmin(viewer.role)) return true;
   if (!isModerator(viewer.role)) return false;
-  if (viewer.assigned_state_id == null) return false;
+  if (!Array.isArray(viewer.assigned_state_ids) || viewer.assigned_state_ids.length === 0) return false;
   if (stateId == null) return false;
-  return Number(viewer.assigned_state_id) === Number(stateId);
+  return viewer.assigned_state_ids.some((x) => Number(x) === Number(stateId));
 }
 

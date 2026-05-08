@@ -45,8 +45,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid bucket' }, { status: 400 });
   }
   if (auth.role === 'moderator') {
-    if (auth.assigned_state_id == null) {
-      return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+    if (auth.assigned_state_ids.length === 0) {
+      return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
     }
     if (bucket !== 'user-frames') {
       return NextResponse.json({ error: 'Moderators can only remove user frames' }, { status: 403 });
@@ -82,13 +82,14 @@ export async function POST(request: NextRequest) {
     for (const uid of userIds) {
       const { data: prof, error: profErr } = await admin
         .from('profiles')
-        .select('id, assigned_state_id')
+        .select('id, assigned_state_ids')
         .eq('id', uid)
         .maybeSingle();
       if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
-      const assigned = (prof as any)?.assigned_state_id;
-      const assignedNum = typeof assigned === 'number' ? assigned : assigned != null ? Number(assigned) : null;
-      if (assignedNum == null || assignedNum !== auth.assigned_state_id) {
+      const idsArr = Array.isArray((prof as any)?.assigned_state_ids) ? (prof as any).assigned_state_ids : [];
+      const viewerStates = auth.assigned_state_ids.map(Number);
+      const ok = idsArr.some((x: any) => viewerStates.includes(Number(x)));
+      if (!ok) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     }

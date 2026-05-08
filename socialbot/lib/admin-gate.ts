@@ -16,7 +16,7 @@ export function isAdminEmailBypass(email: string | null | undefined): boolean {
 export async function validateAdminSession(
   supabase: SupabaseClient
 ): Promise<
-  | { ok: true; user: User; role: AdminRole; assigned_state_id: number | null }
+  | { ok: true; user: User; role: AdminRole; assigned_state_ids: number[] }
   | { ok: false; status: 401 | 403 }
 > {
   const {
@@ -24,10 +24,10 @@ export async function validateAdminSession(
     error,
   } = await supabase.auth.getUser();
   if (error || !user) return { ok: false, status: 401 };
-  if (isAdminEmailBypass(user.email)) return { ok: true, user, role: 'admin', assigned_state_id: null };
-  const { role, assigned_state_id } = await fetchProfileAccessForMiddleware(user.id, supabase);
-  if (isAdminRole(role)) return { ok: true, user, role: 'admin', assigned_state_id };
-  if (isModeratorRole(role)) return { ok: true, user, role: 'moderator', assigned_state_id };
+  if (isAdminEmailBypass(user.email)) return { ok: true, user, role: 'admin', assigned_state_ids: [] };
+  const { role, assigned_state_ids } = await fetchProfileAccessForMiddleware(user.id, supabase);
+  if (isAdminRole(role)) return { ok: true, user, role: 'admin', assigned_state_ids };
+  if (isModeratorRole(role)) return { ok: true, user, role: 'moderator', assigned_state_ids };
   return { ok: false, status: 403 };
 }
 

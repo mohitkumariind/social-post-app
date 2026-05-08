@@ -8,8 +8,8 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -29,11 +29,11 @@ export async function GET(request: NextRequest) {
     // Moderators must not receive personal info from this endpoint.
     const selectCols =
       auth.role === 'moderator'
-        ? 'id,name,avatar_url,assigned_state_id'
+        ? 'id,name,avatar_url,assigned_state_ids'
         : '*';
     let q = db.from('profiles').select(selectCols);
 
-    if (auth.role === 'moderator') q = q.eq('assigned_state_id', auth.assigned_state_id);
+    if (auth.role === 'moderator') q = q.overlaps('assigned_state_ids', auth.assigned_state_ids);
     if (party) q = q.eq('party', party);
     if (state) q = q.eq('state', state);
     if (loksabha_id != null && !Number.isNaN(loksabha_id)) q = q.eq('loksabha_id', loksabha_id);
@@ -107,13 +107,15 @@ export async function DELETE(request: NextRequest) {
 type PatchBody = {
   id?: string;
   role?: 'user' | 'moderator' | 'admin' | string;
-  assigned_state_id?: number | string | null;
+  assigned_state_ids?: unknown;
 };
 
-function toNumOrNull(v: unknown): number | null {
-  if (v == null || v === '') return null;
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
+function toNumArr(v: unknown): number[] {
+  if (v == null) return [];
+  const arr = Array.isArray(v) ? v : [v];
+  return arr
+    .map((x) => (typeof x === 'number' ? x : Number(x)))
+    .filter((n) => Number.isFinite(n));
 }
 
 export async function PATCH(request: NextRequest) {
@@ -140,10 +142,10 @@ export async function PATCH(request: NextRequest) {
   const role = roleRaw === 'admin' || roleRaw === 'moderator' || roleRaw === 'user' ? roleRaw : '';
   if (!role) return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
 
-  let assigned_state_id = toNumOrNull(body.assigned_state_id);
-  if (role !== 'moderator') assigned_state_id = null;
-  if (role === 'moderator' && assigned_state_id == null) {
-    return NextResponse.json({ error: 'assigned_state_id is required for moderators' }, { status: 400 });
+  let assigned_state_ids = toNumArr(body.assigned_state_ids);
+  if (role !== 'moderator') assigned_state_ids = [];
+  if (role === 'moderator' && assigned_state_ids.length === 0) {
+    return NextResponse.json({ error: 'assigned_state_ids is required for moderators' }, { status: 400 });
   }
 
   const admin = createServiceRoleClient();
@@ -153,9 +155,9 @@ export async function PATCH(request: NextRequest) {
 
   const { data, error } = await admin
     .from('profiles')
-    .update({ role, assigned_state_id })
+    .update({ role, assigned_state_ids })
     .eq('id', id)
-    .select('id, role, assigned_state_id')
+    .select('id, role, assigned_state_ids')
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

@@ -153,8 +153,8 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -189,14 +189,15 @@ export async function GET(request: NextRequest) {
         if (memberIds.length > 0) {
           const { data: stRows, error: stErr } = await admin
             .from('profiles')
-            .select('id, assigned_state_id')
+            .select('id, assigned_state_ids')
             .in('id', memberIds);
           if (stErr) throw new Error(stErr.message);
+          const viewerStates = auth.assigned_state_ids.map(Number);
           const allowed = new Set(
             (stRows ?? [])
               .filter((r: any) => {
-                const n = typeof r.assigned_state_id === 'number' ? r.assigned_state_id : r.assigned_state_id != null ? Number(r.assigned_state_id) : null;
-                return n != null && n === auth.assigned_state_id;
+                const ids = Array.isArray(r.assigned_state_ids) ? r.assigned_state_ids : [];
+                return ids.some((x: any) => viewerStates.includes(Number(x)));
               })
               .map((r: any) => String(r.id))
           );
@@ -221,13 +222,14 @@ export async function GET(request: NextRequest) {
             if (ids.length === 0) return [];
             const { data: stRows, error: stErr } = await admin
               .from('profiles')
-              .select('id, assigned_state_id, group_id')
+              .select('id, assigned_state_ids, group_id')
               .in('id', ids);
             if (stErr) throw new Error(stErr.message);
+            const viewerStates = auth.assigned_state_ids.map(Number);
             return (stRows ?? [])
               .filter((r: any) => {
-                const n = typeof r.assigned_state_id === 'number' ? r.assigned_state_id : r.assigned_state_id != null ? Number(r.assigned_state_id) : null;
-                return n != null && n === auth.assigned_state_id;
+                const idsArr = Array.isArray(r.assigned_state_ids) ? r.assigned_state_ids : [];
+                return idsArr.some((x: any) => viewerStates.includes(Number(x)));
               })
               .map((r: any) => ({ id: String(r.id ?? ''), group_id: (r as any).group_id }))
               .filter((r) => r.id);
@@ -291,8 +293,8 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -321,13 +323,14 @@ export async function POST(request: NextRequest) {
   if (auth.role === 'moderator') {
     const { data: rows, error: stErr } = await admin
       .from('profiles')
-      .select('id, assigned_state_id')
+      .select('id, assigned_state_ids')
       .in('id', userIds);
     if (stErr) return NextResponse.json({ error: stErr.message }, { status: 500 });
+    const viewerStates = auth.assigned_state_ids.map(Number);
     const allowed = (rows ?? [])
       .filter((r: any) => {
-        const n = typeof r.assigned_state_id === 'number' ? r.assigned_state_id : r.assigned_state_id != null ? Number(r.assigned_state_id) : null;
-        return n != null && n === auth.assigned_state_id;
+        const idsArr = Array.isArray(r.assigned_state_ids) ? r.assigned_state_ids : [];
+        return idsArr.some((x: any) => viewerStates.includes(Number(x)));
       })
       .map((r: any) => String(r.id))
       .filter(Boolean);

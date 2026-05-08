@@ -10,7 +10,7 @@ export async function GET() {
   }
 
   return NextResponse.json(
-    { role: auth.role, assigned_state_id: auth.assigned_state_id },
+    { role: auth.role, assigned_state_ids: auth.assigned_state_ids },
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }

@@ -61,7 +61,7 @@ export default function NotificationBroadcastCenterPage() {
   const [loksabhaId, setLoksabhaId] = useState('');
   const [assemblyId, setAssemblyId] = useState('');
 
-  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_id: number | null } | null>(null);
+  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_ids: number[] } | null>(null);
   const isModerator = viewer?.role === 'moderator';
 
   useEffect(() => {
@@ -70,16 +70,13 @@ export default function NotificationBroadcastCenterPage() {
       try {
         const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
         if (!res.ok) return;
-        const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_id?: unknown };
+        const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_ids?: unknown };
         if (cancelled) return;
         const role = d.role === 'moderator' ? 'moderator' : d.role === 'admin' ? 'admin' : null;
-        const asn =
-          typeof d.assigned_state_id === 'number'
-            ? d.assigned_state_id
-            : d.assigned_state_id != null
-              ? Number(d.assigned_state_id)
-              : null;
-        if (role) setViewer({ role, assigned_state_id: Number.isFinite(asn as number) ? (asn as number) : null });
+        const ids = Array.isArray(d.assigned_state_ids)
+          ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
+          : [];
+        if (role) setViewer({ role, assigned_state_ids: ids });
       } catch {
         /* ignore */
       }
@@ -136,12 +133,14 @@ export default function NotificationBroadcastCenterPage() {
 
   useEffect(() => {
     if (!isModerator) return;
-    if (viewer?.assigned_state_id == null) return;
-    // Force moderator to their assigned state.
-    const next = String(viewer.assigned_state_id);
+    const ids = viewer?.assigned_state_ids ?? [];
+    if (ids.length === 0) return;
+    // Force moderator to one of their assigned states (keep current if allowed).
+    const allowed = ids.map(String);
+    const next = allowed.includes(stateId) ? stateId : allowed[0];
     if (stateId !== next) setStateId(next);
     if (allWorkers) setAllWorkers(false);
-  }, [isModerator, viewer?.assigned_state_id, stateId, allWorkers]);
+  }, [isModerator, viewer?.assigned_state_ids, stateId, allWorkers]);
 
   useEffect(() => {
     setImagePreviewBroken(false);

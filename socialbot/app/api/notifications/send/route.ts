@@ -32,8 +32,8 @@ export async function POST(request: Request) {
       auth.status
     );
   }
-  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
-    return json({ error: 'Moderator is missing assigned_state_id' }, 403);
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return json({ error: 'Moderator is missing assigned_state_ids' }, 403);
   }
 
   const admin = createServiceRoleClient();
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
         all_workers: false,
         filters: {
           ...(payload.filters ?? {}),
-          assigned_state_id: auth.assigned_state_id,
+          assigned_state_ids: auth.assigned_state_ids,
         } as any,
       };
     }

@@ -16,12 +16,17 @@ function hasAssignedState(stateIds: number[], assigned: number): boolean {
   return stateIds.includes(assigned);
 }
 
+function isSubset(sub: number[], sup: number[]): boolean {
+  const set = new Set(sup.map((n) => Number(n)));
+  return sub.every((n) => set.has(Number(n)));
+}
+
 export async function GET() {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
-  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
-    return json({ error: 'Moderator is missing assigned_state_id' }, 403);
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return json({ error: 'Moderator is missing assigned_state_ids' }, 403);
   }
 
   const admin = createServiceRoleClient();
@@ -29,8 +34,8 @@ export async function GET() {
 
   let q = db.from('events').select('*').order('created_at', { ascending: false }) as any;
   if (auth.role === 'moderator') {
-    // Only events targeting the assigned state (state_id int[] contains assigned id).
-    q = q.contains('state_id', [auth.assigned_state_id]);
+    // Only events targeting ANY of the moderator's states (overlap on state_id int[]).
+    q = q.overlaps('state_id', auth.assigned_state_ids);
   }
   const { data, error } = await q;
   if (error) return json({ error: error.message }, 500);
@@ -41,8 +46,8 @@ export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
-  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
-    return json({ error: 'Moderator is missing assigned_state_id' }, 403);
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return json({ error: 'Moderator is missing assigned_state_ids' }, 403);
   }
 
   let payload: Record<string, unknown> = {};
@@ -54,8 +59,11 @@ export async function POST(request: NextRequest) {
 
   if (auth.role === 'moderator') {
     const stateIds = toNumArray(payload.state_id);
-    if (!hasAssignedState(stateIds, auth.assigned_state_id!)) {
-      return json({ error: 'Forbidden: event must target assigned state' }, 403);
+    if (stateIds.length === 0) {
+      return json({ error: 'Forbidden: moderator event must target at least one state' }, 403);
+    }
+    if (!isSubset(stateIds, auth.assigned_state_ids)) {
+      return json({ error: 'Forbidden: event includes states outside assignment' }, 403);
     }
     const tg = Array.isArray(payload.target_groups) ? payload.target_groups : [];
     if (tg.length > 0) {
@@ -75,8 +83,8 @@ export async function PATCH(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
-  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
-    return json({ error: 'Moderator is missing assigned_state_id' }, 403);
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return json({ error: 'Moderator is missing assigned_state_ids' }, 403);
   }
 
   let body: { id?: string | number; patch?: Record<string, unknown> } = {};
@@ -96,9 +104,9 @@ export async function PATCH(request: NextRequest) {
     const { data: ev, error: evErr } = await admin.from('events').select('id,state_id,target_groups').eq('id', id).maybeSingle();
     if (evErr) return json({ error: evErr.message }, 500);
     const existingStateIds = toNumArray((ev as any)?.state_id);
-    if (!hasAssignedState(existingStateIds, auth.assigned_state_id!)) return json({ error: 'Forbidden' }, 403);
+    if (existingStateIds.length === 0 || !isSubset(existingStateIds, auth.assigned_state_ids)) return json({ error: 'Forbidden' }, 403);
     const nextStateIds = patch.state_id != null ? toNumArray(patch.state_id) : existingStateIds;
-    if (!hasAssignedState(nextStateIds, auth.assigned_state_id!)) return json({ error: 'Forbidden: cannot remove assigned state' }, 403);
+    if (nextStateIds.length === 0 || !isSubset(nextStateIds, auth.assigned_state_ids)) return json({ error: 'Forbidden: cannot set states outside assignment' }, 403);
     const nextTargetGroups = patch.target_groups != null ? (Array.isArray(patch.target_groups) ? patch.target_groups : []) : ((ev as any)?.target_groups ?? []);
     if (Array.isArray(nextTargetGroups) && nextTargetGroups.length > 0) return json({ error: 'Forbidden: moderators cannot use target_groups events' }, 403);
   }
@@ -112,8 +120,8 @@ export async function DELETE(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
-  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
-    return json({ error: 'Moderator is missing assigned_state_id' }, 403);
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return json({ error: 'Moderator is missing assigned_state_ids' }, 403);
   }
 
   const id = (request.nextUrl.searchParams.get('id') ?? '').trim();
@@ -126,7 +134,7 @@ export async function DELETE(request: NextRequest) {
     const { data: ev, error: evErr } = await admin.from('events').select('id,state_id').eq('id', id).maybeSingle();
     if (evErr) return json({ error: evErr.message }, 500);
     const stateIds = toNumArray((ev as any)?.state_id);
-    if (!hasAssignedState(stateIds, auth.assigned_state_id!)) return json({ error: 'Forbidden' }, 403);
+    if (stateIds.length === 0 || !isSubset(stateIds, auth.assigned_state_ids)) return json({ error: 'Forbidden' }, 403);
   }
 
   const { error } = await admin.from('events').delete().eq('id', id);

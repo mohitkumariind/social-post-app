@@ -14,8 +14,8 @@ export async function GET() {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -30,7 +30,7 @@ export async function GET() {
     upcomingEventsRes,
   ] = await Promise.all([
     auth.role === 'moderator'
-      ? db.from('profiles').select('id', { count: 'exact', head: true }).eq('assigned_state_id', auth.assigned_state_id)
+      ? db.from('profiles').select('id', { count: 'exact', head: true }).overlaps('assigned_state_ids', auth.assigned_state_ids)
       : db.from('profiles').select('id', { count: 'exact', head: true }),
     db.from('posts').select('id', { count: 'exact', head: true }),
     db.from('events').select('id', { count: 'exact', head: true }),
@@ -39,7 +39,7 @@ export async function GET() {
           .from('profiles')
           .select('id', { count: 'exact', head: true })
           .gte('created_at', startOfTodayIso())
-          .eq('assigned_state_id', auth.assigned_state_id)
+          .overlaps('assigned_state_ids', auth.assigned_state_ids)
       : db.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', startOfTodayIso()),
     db.from('posts').select('id,title,created_at').order('created_at', { ascending: false }).limit(5),
     db.from('events').select('id,name,end').order('end', { ascending: true }).limit(3),

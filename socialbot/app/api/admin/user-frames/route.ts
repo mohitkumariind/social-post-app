@@ -8,8 +8,8 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_id == null) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_id' }, { status: 403 });
+  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
 
   const userId = (request.nextUrl.searchParams.get('user_id') ?? '').trim();
@@ -21,17 +21,18 @@ export async function GET(request: NextRequest) {
   const admin = createServiceRoleClient();
   const db = admin ?? supabase;
 
-  // Moderators may only access frames for users in their assigned_state_id.
+  // Moderators may only access frames for users in their assigned states.
   if (auth.role === 'moderator') {
     const { data: prof, error: profErr } = await db
       .from('profiles')
-      .select('id, assigned_state_id')
+      .select('id, assigned_state_ids')
       .eq('id', userId)
       .maybeSingle();
     if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
-    const assigned = (prof as any)?.assigned_state_id;
-    const assignedNum = typeof assigned === 'number' ? assigned : assigned != null ? Number(assigned) : null;
-    if (assignedNum == null || assignedNum !== auth.assigned_state_id) {
+    const idsArr = Array.isArray((prof as any)?.assigned_state_ids) ? (prof as any).assigned_state_ids : [];
+    const viewerStates = auth.assigned_state_ids.map(Number);
+    const ok = idsArr.some((x: any) => viewerStates.includes(Number(x)));
+    if (!ok) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
   }
