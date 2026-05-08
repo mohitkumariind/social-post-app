@@ -427,7 +427,31 @@ export async function DELETE(request: NextRequest) {
   const delPatch = { deleted_at: new Date().toISOString(), deleted_by: auth.user.id };
   const { data: after, error: delErr } = await admin.from('groups').update(delPatch).eq('id', grp.id).select('*').single();
   if (delErr) {
-    return NextResponse.json({ ok: true, group_id: grp.id, warning: delErr.message }, { headers: { 'Cache-Control': 'no-store' } });
+    // Backward-compatible: older DB may not have deleted_at/deleted_by columns yet.
+    if (isMissingColumnErr(delErr as any, 'deleted_at') || isMissingColumnErr(delErr as any, 'deleted_by')) {
+      const hard = await admin.from('groups').delete().eq('id', grp.id);
+      if ((hard as any).error) {
+        return NextResponse.json({ error: (hard as any).error?.message ?? 'Delete failed' }, { status: 500 });
+      }
+      void logAdminAction({
+        actor_user_id: auth.user.id,
+        actor_role: auth.role,
+        action_type: 'groups.delete',
+        resource_type: 'groups',
+        resource_id: String(grp.id),
+        resource_name: grp.name,
+        previous_data: before,
+        new_data: null,
+        metadata: { member_ids: memberIds, mode: 'hard_delete_fallback' },
+        affected_users_count: memberIds.length,
+        severity: 'warning',
+        undoable: false,
+        scope_group_ids: [String(grp.id)],
+        scope_user_ids: memberIds,
+      });
+      return NextResponse.json({ ok: true, group_id: grp.id, mode: 'hard_delete_fallback' }, { headers: { 'Cache-Control': 'no-store' } });
+    }
+    return NextResponse.json({ error: delErr.message }, { status: 500 });
   }
 
   void logAdminAction({
