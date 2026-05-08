@@ -64,6 +64,7 @@ function postCaptionsForNavigation(c: string | string[] | null | undefined): str
 }
 type EventRow = {
   name: string;
+  start: string;
   end: string;
   state_id?: number[] | number | null;
   loksabha_id?: number[] | number | null;
@@ -72,6 +73,13 @@ type EventRow = {
   group_id?: number[] | number | null;
   profile_ids?: string[] | string | null;
 };
+
+function parseUtcMs(input: unknown): number | null {
+  const s = String(input ?? '').trim();
+  if (!s) return null;
+  const ms = Date.parse(s);
+  return Number.isFinite(ms) ? ms : null;
+}
 
 function normalizeForCompare(value: string): string {
   return value.trim().toLowerCase();
@@ -632,7 +640,7 @@ export default function DashboardScreen() {
       const runNumeric = async () =>
         await supabase
           .from('events')
-          .select('name,end,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids')
+          .select('name,start,end,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids')
           .order('end', { ascending: true })
           .limit(500);
 
@@ -661,17 +669,18 @@ export default function DashboardScreen() {
         return;
       }
       const raw = ((data ?? []) as any[]).filter(Boolean);
-      const today = new Date();
-      today.setUTCHours(0, 0, 0, 0);
+      const nowUtcMs = Date.now();
       const filteredEvents = raw
         .filter((ev) => {
           return canUserSeeContent(userInfoRef.current, ev);
         })
         .filter((ev) => {
-        const evEndDate = new Date(ev.end);
-        evEndDate.setUTCHours(0, 0, 0, 0);
-        return evEndDate.getTime() >= today.getTime();
-      });
+          const startMs = parseUtcMs((ev as any).start);
+          const endMs = parseUtcMs((ev as any).end);
+          // Default-deny for malformed/missing lifecycle bounds.
+          if (startMs == null || endMs == null) return false;
+          return nowUtcMs >= startMs && nowUtcMs <= endMs;
+        });
       setEvents(filteredEvents);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err ?? 'Failed to load events');

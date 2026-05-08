@@ -599,8 +599,8 @@ export default function App() {
 
   const createEvent = async () => {
     if (!newName || !startDate || !endDate) return;
-    const startVal = `${startDate}T00:00:00`;
-    const endVal = `${endDate}T23:59:59`;
+    const startVal = `${startDate}T00:00:00Z`;
+    const endVal = `${endDate}T23:59:59Z`;
     const payload: Record<string, unknown> = { name: newName, start: startVal, end: endVal, captions: [] };
     const partyArr = newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
     const stateArr = newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
@@ -964,8 +964,8 @@ export default function App() {
 
     const updatePayload: Record<string, unknown> = {
       name: newName.trim(),
-      start: `${startDate}T00:00:00`,
-      end: `${endDate}T23:59:59`,
+      start: `${startDate}T00:00:00Z`,
+      end: `${endDate}T23:59:59Z`,
       captions: editingEvent.captions,
     };
     const partyArr = newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
@@ -1045,8 +1045,8 @@ export default function App() {
     const captionsForPosts = normalizeCaptionsFromDb(updatePayload.captions);
     await syncGraphicsPostCaptions(evForSync, captionsForPosts);
 
-    const newStart = `${startDate}T00:00:00`;
-    const newEnd = `${endDate}T23:59:59`;
+    const newStart = `${startDate}T00:00:00Z`;
+    const newEnd = `${endDate}T23:59:59Z`;
     const updated: CampaignEvent = {
       ...editingEvent,
       name: targetCategory,
