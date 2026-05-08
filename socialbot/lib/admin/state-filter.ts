@@ -1,4 +1,4 @@
-export type ViewerRole = 'admin' | 'moderator';
+export type ViewerRole = 'admin' | 'moderator' | 'campaign_manager';
 
 export type ViewerAccess = {
   role: ViewerRole;
@@ -31,11 +31,23 @@ export function getStateVisibility(args: {
   const { viewer, viewerLoading, allStates } = args;
   const viewerReady = !viewerLoading && !!viewer?.role;
   const isModerator = viewer?.role === 'moderator';
+  const isCampaignManager = viewer?.role === 'campaign_manager';
 
   if (!viewerReady) {
     return {
       visibleStates: [],
       viewerReady: false,
+      isModerator: false,
+      hasSingleAssignedState: false,
+      singleAssignedStateId: null,
+    };
+  }
+
+  // Campaign managers never target by state in the admin UX.
+  if (isCampaignManager) {
+    return {
+      visibleStates: [],
+      viewerReady: true,
       isModerator: false,
       hasSingleAssignedState: false,
       singleAssignedStateId: null,
