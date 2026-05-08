@@ -38,21 +38,32 @@ interface UserFrame {
 interface AppUser {
   id: string | number;
   avatar_url: string;
+  language: string;
   name: string;
   phone: string;
   email: string;
   party: string;
-  designation: string;
+  designation1: string;
+  designation2: string;
+  designation3: string;
+  designation4: string;
   state: string;
+  state_id: number | null;
   district: string;
   constituency: string;
   loksabha: string;
   loksabha_id: number | null;
   assembly_id: number | null;
+  assembly: string;
   joinDate: string;
   dob: string;
   gender: string;
   group_tags: string[];
+  group_id: number | null;
+  whatsapp: string;
+  facebook: string;
+  twitter: string;
+  instagram: string;
   personalFrames: UserFrame[];
 }
 
@@ -76,12 +87,22 @@ export default function UserManagement() {
   const mapProfileToAppUser = (row: Record<string, unknown>): AppUser => ({
     id: typeof row.id === 'string' || typeof row.id === 'number' ? row.id : String(row.id ?? row.user_id ?? ''),
     avatar_url: String(row.avatar_url ?? ''),
+    language: String(row.language ?? ''),
     name: String(row.name ?? ''),
     phone: String(row.phone ?? row.phone_number ?? ''),
     email: String(row.email ?? ''),
     party: normalizePartyId(String(row.party ?? '')),
-    designation: String(row.designation ?? ''),
+    designation1: String(row.designation1 ?? row.designation ?? ''),
+    designation2: String(row.designation2 ?? row.designation_2 ?? ''),
+    designation3: String(row.designation3 ?? row.designation_3 ?? ''),
+    designation4: String(row.designation4 ?? row.designation_4 ?? ''),
     state: String(row.state ?? ''),
+    state_id:
+      typeof row.state_id === 'number'
+        ? row.state_id
+        : row.state_id != null && String(row.state_id).trim()
+          ? Number(row.state_id)
+          : null,
     district: String(row.district ?? ''),
     constituency: String(row.constituency ?? row.assembly ?? ''),
     loksabha: String(row.loksabha ?? ''),
@@ -97,10 +118,21 @@ export default function UserManagement() {
         : row.assembly_id != null && String(row.assembly_id).trim()
           ? Number(row.assembly_id)
           : null,
+    assembly: String(row.assembly ?? ''),
     joinDate: (row.join_date ?? row.created_at) ? new Date(String(row.join_date ?? row.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
     dob: row.dob ? new Date(String(row.dob)).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '',
     gender: String(row.gender ?? ''),
     group_tags: toStrArr(row.group_tags),
+    group_id:
+      typeof row.group_id === 'number'
+        ? row.group_id
+        : row.group_id != null && String(row.group_id).trim()
+          ? Number(row.group_id)
+          : null,
+    whatsapp: String(row.whatsapp ?? ''),
+    facebook: String(row.facebook ?? ''),
+    twitter: String(row.twitter ?? ''),
+    instagram: String(row.instagram ?? ''),
     personalFrames: [],
   });
 
@@ -403,9 +435,50 @@ export default function UserManagement() {
                         <div className="space-y-4">
                             <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Phone size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{selectedUser.phone}</p></div>
                             <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Mail size={18} /></div><p className="font-bold text-slate-800 truncate tracking-tight">{selectedUser.email}</p></div>
-                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><MapPin size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{selectedUser.constituency}</p></div>
+                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Globe size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.state)}</p></div>
+                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Flag size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{getPartyLabel(selectedUser.party)}</p></div>
+                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><MapPin size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.loksabha)}</p></div>
+                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><MapPin size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.assembly || selectedUser.constituency)}</p></div>
                         </div>
                     </div>
+
+                    <div className="space-y-6">
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Profile</h3>
+                        <div className="space-y-3 text-xs font-bold text-slate-800">
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Language</span><span className="font-bold text-slate-800">{fmt(selectedUser.language)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Designation 1</span><span className="font-bold text-slate-800">{fmt(selectedUser.designation1)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Designation 2</span><span className="font-bold text-slate-800">{fmt(selectedUser.designation2)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Designation 3</span><span className="font-bold text-slate-800">{fmt(selectedUser.designation3)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Designation 4</span><span className="font-bold text-slate-800">{fmt(selectedUser.designation4)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">State ID</span><span className="font-bold text-slate-800">{selectedUser.state_id == null || Number.isNaN(selectedUser.state_id) ? 'N/A' : String(selectedUser.state_id)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Lok Sabha ID</span><span className="font-bold text-slate-800">{selectedUser.loksabha_id == null || Number.isNaN(selectedUser.loksabha_id) ? 'N/A' : String(selectedUser.loksabha_id)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Assembly ID</span><span className="font-bold text-slate-800">{selectedUser.assembly_id == null || Number.isNaN(selectedUser.assembly_id) ? 'N/A' : String(selectedUser.assembly_id)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Group ID</span><span className="font-bold text-slate-800">{selectedUser.group_id == null || Number.isNaN(selectedUser.group_id) ? 'N/A' : String(selectedUser.group_id)}</span></div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-6">
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Social</h3>
+                        <div className="space-y-3 text-xs font-bold text-slate-800">
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">WhatsApp</span><span className="font-bold text-slate-800">{fmt(selectedUser.whatsapp || selectedUser.phone)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Facebook</span><span className="font-bold text-slate-800">{fmt(selectedUser.facebook)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Twitter</span><span className="font-bold text-slate-800">{fmt(selectedUser.twitter)}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Instagram</span><span className="font-bold text-slate-800">{fmt(selectedUser.instagram)}</span></div>
+                        </div>
+                    </div>
+
+                    {selectedUser.group_tags.length > 0 ? (
+                      <div className="space-y-4">
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Group Tags</h3>
+                        <div className="flex flex-wrap gap-2">
+                          {selectedUser.group_tags.slice(0, 20).map((t) => (
+                            <span key={t} className="inline-flex items-center bg-indigo-50 text-indigo-700 border border-indigo-100 px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest">
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                 </div>
 
                 {/* UPDATED: USER FRAMES SECTION */}
@@ -571,10 +644,32 @@ export default function UserManagement() {
                 </div>
               )}
 
-              <h4 className="mt-3 text-sm font-semibold text-slate-900 leading-tight">{fmt(user.name)}</h4>
-              <p className="mt-1 text-[9px] font-black text-slate-500 uppercase tracking-widest">
-                {fmt(getPartyLabel(user.party))}
-              </p>
+              <div className="mt-3 w-full space-y-2 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Name</span>
+                  <span className="font-bold text-slate-900 text-right">{fmt(user.name)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Party Name</span>
+                  <span className="font-bold text-slate-800 text-right">{fmt(getPartyLabel(user.party))}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Mobile</span>
+                  <span className="font-bold text-slate-800 text-right">{fmt(user.phone)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">State</span>
+                  <span className="font-bold text-slate-800 text-right">{fmt(user.state)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Lok Sabha</span>
+                  <span className="font-bold text-slate-800 text-right">{fmt(user.loksabha)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Assembly</span>
+                  <span className="font-bold text-slate-800 text-right">{fmt(user.assembly || user.constituency)}</span>
+                </div>
+              </div>
             </div>
 
             {user.group_tags.length > 0 && (
@@ -628,6 +723,11 @@ export default function UserManagement() {
               <div className="flex items-center justify-between gap-3">
                 <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Lok Sabha</span>
                 <span className="font-bold text-slate-800">{fmt(user.loksabha)}</span>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Assembly</span>
+                <span className="font-bold text-slate-800">{fmt(user.assembly || user.constituency)}</span>
               </div>
             </div>
 

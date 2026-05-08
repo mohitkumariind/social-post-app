@@ -282,7 +282,24 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       const partyCanon = normalizePartyId(rawParty, parties) || rawParty;
       const avatarUrl = String(p.avatar_url ?? '').trim();
 
+      const stateIdNum =
+        typeof p.state_id === 'number' ? p.state_id : p.state_id != null ? Number(p.state_id) : null;
+      const partyIdNum =
+        typeof p.party_id === 'number' ? p.party_id : p.party_id != null ? Number(p.party_id) : null;
+      const groupIdNum =
+        typeof p.group_id === 'number' ? p.group_id : p.group_id != null ? Number(p.group_id) : null;
+      const groupTags =
+        Array.isArray(p.group_tags)
+          ? (p.group_tags as unknown[]).map((x) => String(x).trim()).filter(Boolean)
+          : typeof p.group_tags === 'string'
+            ? p.group_tags
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : [];
+
       const next: ProfileFormData = {
+        profile_id: uid,
         language: String(p.language ?? '').trim(),
         name: String(p.name ?? '').trim(),
         phone: String(p.phone ?? p.phone_number ?? '').trim(),
@@ -293,9 +310,10 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         designation4: String(p.designation4 ?? p.designation_4 ?? '').trim(),
         avatar_url: avatarUrl,
         partyName: partyCanon,
+        party_id: partyIdNum,
         state: String(p.state ?? '').trim(),
-        stateId:
-          typeof p.state_id === 'number' ? p.state_id : p.state_id != null ? Number(p.state_id) : null,
+        state_id: stateIdNum,
+        stateId: stateIdNum,
         loksabha_id: typeof p.loksabha_id === 'number' ? p.loksabha_id : p.loksabha_id != null ? Number(p.loksabha_id) : null,
         assembly_id: typeof p.assembly_id === 'number' ? p.assembly_id : p.assembly_id != null ? Number(p.assembly_id) : null,
         loksabha: String(p.loksabha ?? '').trim(),
@@ -304,10 +322,15 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         facebook: String(p.facebook ?? '').trim(),
         twitter: String(p.twitter ?? '').trim(),
         instagram: String(p.instagram ?? '').trim(),
+        group_tags: groupTags,
+        group_id: groupIdNum,
       };
 
       if (Number.isNaN(next.loksabha_id as number)) next.loksabha_id = null;
       if (Number.isNaN(next.assembly_id as number)) next.assembly_id = null;
+      if (Number.isNaN(next.state_id as number)) next.state_id = null;
+      if (Number.isNaN(next.party_id as number)) next.party_id = null;
+      if (Number.isNaN(next.group_id as number)) next.group_id = null;
 
       const { stateId: _omitStateId, ...userPayload } = next;
       setFormData((prev) => ({ ...prev, ...next }));
