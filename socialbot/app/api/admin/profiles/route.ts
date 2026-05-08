@@ -139,7 +139,7 @@ export async function PATCH(request: NextRequest) {
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 
   const roleRaw = String(body.role ?? '').trim().toLowerCase();
-  const role = roleRaw === 'admin' || roleRaw === 'moderator' || roleRaw === 'user' ? roleRaw : '';
+  const role = roleRaw === 'admin' || roleRaw === 'moderator' || roleRaw === 'campaign_manager' || roleRaw === 'user' ? roleRaw : '';
   if (!role) return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
 
   let assigned_state_ids = toNumArr(body.assigned_state_ids);

@@ -265,7 +265,7 @@ export default function UserManagement() {
 
   const waDigits = (v: unknown): string => String(v ?? '').replace(/[^\d]/g, '');
 
-  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_ids: number[] } | null>(null);
+  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[] } | null>(null);
   const isModerator = viewer?.role === 'moderator';
   const isAdmin = viewer?.role === 'admin';
 
@@ -304,7 +304,14 @@ export default function UserManagement() {
         if (!res.ok) return;
         const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_ids?: unknown };
         if (cancelled) return;
-        const role = d.role === 'moderator' ? 'moderator' : d.role === 'admin' ? 'admin' : null;
+        const role =
+          d.role === 'moderator'
+            ? 'moderator'
+            : d.role === 'admin'
+              ? 'admin'
+              : d.role === 'campaign_manager'
+                ? 'campaign_manager'
+                : null;
         const ids = Array.isArray(d.assigned_state_ids)
           ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
           : [];
@@ -411,13 +418,13 @@ export default function UserManagement() {
 
   const [roleUser, setRoleUser] = useState<AppUser | null>(null);
   const [roleSaving, setRoleSaving] = useState(false);
-  const [roleValue, setRoleValue] = useState<'user' | 'moderator' | 'admin'>('user');
+  const [roleValue, setRoleValue] = useState<'user' | 'moderator' | 'admin' | 'campaign_manager'>('user');
   const [roleStateIds, setRoleStateIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (!roleUser) return;
     const r = String(roleUser.role ?? 'user').trim().toLowerCase();
-    const role = (r === 'admin' || r === 'moderator' || r === 'user') ? (r as any) : 'user';
+    const role = (r === 'admin' || r === 'moderator' || r === 'campaign_manager' || r === 'user') ? (r as any) : 'user';
     setRoleValue(role);
     const sids = Array.isArray(roleUser.assigned_state_ids) ? roleUser.assigned_state_ids : [];
     setRoleStateIds(sids.map((n) => String(n)));
@@ -650,6 +657,7 @@ export default function UserManagement() {
                   <option value="user">User</option>
                   <option value="moderator">Moderator</option>
                   <option value="admin">Admin</option>
+                  <option value="campaign_manager">Campaign Manager</option>
                 </select>
               </div>
 
