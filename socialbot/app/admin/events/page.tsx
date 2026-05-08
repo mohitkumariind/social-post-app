@@ -1159,7 +1159,7 @@ export default function App() {
                           options={viewerReady ? visibleStates : []}
                           selected={newState}
                           onSelect={setNewState}
-                          getValue={(s) => s.id}
+                          getValue={(s) => String(s.id)}
                           getLabel={(s) => s.name}
                           allLabel="All States"
                           loading={statesLoading || !viewerReady}
@@ -1314,7 +1314,7 @@ export default function App() {
                   options={viewerReady ? visibleStates : []}
                   selected={newState}
                   onSelect={setNewState}
-                  getValue={(s) => s.id}
+                  getValue={(s) => String(s.id)}
                   getLabel={(s) => s.name}
                   allLabel="All States"
                   loading={statesLoading || !viewerReady}
