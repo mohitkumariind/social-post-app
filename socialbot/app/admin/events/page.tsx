@@ -23,7 +23,7 @@ import {
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
-import { isPartyOtherId, LANGUAGE_OPTIONS, LANGUAGE_TO_STATES, PARTIES_DATA } from '@/lib/constants';
+import { isPartyOtherId, PARTIES_DATA } from '@/lib/constants';
 import { getStateVisibility } from '@/lib/admin/state-filter';
 import { captionsJsonForPostColumn, isLikelyEventUuid, normalizeCaptionsFromDb } from '@/lib/captions';
 
@@ -54,7 +54,6 @@ interface CampaignEvent {
   name: string;
   start: string;
   end: string;
-  language?: string;
   party?: string[];
   state?: string[];
   loksabha?: string[];
@@ -238,7 +237,6 @@ export default function App() {
   const [events, setEvents] = useState<CampaignEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [newName, setNewName] = useState('');
-  const [newLanguage, setNewLanguage] = useState<string>('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [newParty, setNewParty] = useState<string[]>([]);
@@ -258,7 +256,6 @@ export default function App() {
   const [isDeleting, setIsDeleting] = useState<CampaignEvent | null>(null);
   const [editingEvent, setEditingEvent] = useState<CampaignEvent | null>(null);
   const [workerNotifyToast, setWorkerNotifyToast] = useState(false);
-  const skipAutoStateRef = useRef(false);
   const skipLoksabhaResetCountRef = useRef(0);
 
   const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_ids: number[] } | null>(null);
@@ -345,12 +342,11 @@ export default function App() {
       }
       const data = payload.events ?? [];
       const base: CampaignEvent[] = (data || [])
-        .map((row: { id?: string; name: string; start?: string; end?: string; language?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; target_groups?: string | string[]; captions?: unknown }) => ({
+        .map((row: { id?: string; name: string; start?: string; end?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; target_groups?: string | string[]; captions?: unknown }) => ({
           id: String(row.id ?? '').trim(),
           name: row.name,
           start: row.start ?? '',
           end: row.end ?? '',
-          language: row.language ?? undefined,
           party: toStrArr(row.party),
           state: toStrArr(row.state),
           loksabha: toStrArr(row.loksabha),
@@ -382,21 +378,6 @@ export default function App() {
     fetchEvents().finally(() => setEventsLoading(false));
   }, []);
 
-  /** Language-to-State auto-select: map LANGUAGE_TO_STATES names to numeric IDs from visibleStates */
-  useEffect(() => {
-    if (skipAutoStateRef.current) {
-      skipAutoStateRef.current = false;
-      return;
-    }
-    if (newLanguage && visibleStates.length > 0) {
-      const matchedIds = visibleStates
-        .filter((s) => LANGUAGE_TO_STATES[newLanguage]?.includes(s.name))
-        .map((s) => String(s.id));
-      setNewState(matchedIds);
-    } else if (!newLanguage) {
-      setNewState([]);
-    }
-  }, [newLanguage, visibleStates]);
 
   // Moderator UX: lock state selection to assigned states (and avoid out-of-scope selections).
   useEffect(() => {
@@ -619,7 +600,6 @@ export default function App() {
     const startVal = `${startDate}T00:00:00`;
     const endVal = `${endDate}T23:59:59`;
     const payload: Record<string, unknown> = { name: newName, start: startVal, end: endVal, captions: [] };
-    if (newLanguage) payload.language = newLanguage;
     const partyArr = newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
     const stateArr = newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
     const loksabhaArr = newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
@@ -673,7 +653,6 @@ export default function App() {
       name: data.name,
       start: data.start ?? startVal,
       end: data.end ?? endVal,
-      language: newLanguage || undefined,
       party: partyArr.length ? partyArr : undefined,
       state: stateArr.length ? stateArr : undefined,
       loksabha: loksabhaArr.length ? loksabhaArr : undefined,
@@ -685,7 +664,6 @@ export default function App() {
     };
     setEvents((prev) => [ev, ...prev]);
     setNewName('');
-    setNewLanguage('');
     setStartDate('');
     setEndDate('');
     setNewParty([]);
@@ -697,9 +675,8 @@ export default function App() {
 
   const openEvent = async (ev: CampaignEvent) => {
     let postsQuery = supabase.from('posts').select('id, image_url, title').eq('category', ev.name);
-    if (ev.language && ev.language.trim()) postsQuery = postsQuery.eq('language', ev.language);
     const [eventsRes, postsRes] = await Promise.all([
-      fetchEventByIdOrName(ev, 'captions, party, state, language, loksabha, assembly'),
+      fetchEventByIdOrName(ev, 'captions, party, state, loksabha, assembly'),
       postsQuery.order('created_at', { ascending: false }),
     ]);
     if (eventsRes.error) devConsole.error('openEvent events fetch:', eventsRes.error);
@@ -710,8 +687,7 @@ export default function App() {
     const evState = toStrArr((eventRow?.state as string | string[] | undefined) ?? ev.state);
     const evLoksabha = toStrArr((eventRow?.loksabha as string | string[] | undefined) ?? ev.loksabha);
     const evAssembly = toStrArr((eventRow?.assembly as string | string[] | undefined) ?? ev.assembly);
-    const evLanguage = (eventRow?.language as string | undefined) ?? ev.language ?? '';
-    const evWithPartyState = { ...ev, language: evLanguage, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly };
+    const evWithPartyState = { ...ev, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly };
     const postsFromDb: Post[] = (postsRes.data || []).map((p: { id: string; image_url: string; title: string }) => ({
       id: p.id,
       url: p.image_url,
@@ -722,7 +698,7 @@ export default function App() {
     setEvents((prev) =>
       prev.map((e) =>
         e.id === ev.id
-          ? { ...e, language: evLanguage, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly, captions: dbCaptions, posts: postsFromDb, assetsCount: postsFromDb.length }
+          ? { ...e, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly, captions: dbCaptions, posts: postsFromDb, assetsCount: postsFromDb.length }
           : e
       )
     );
@@ -775,14 +751,13 @@ export default function App() {
         continue;
       }
 
-      /** category = event name (manual match; no FK). Use event's language, party, state, loksabha, assembly directly. */
+      /** category = event name (manual match; no FK). Use event targeting columns directly. */
       const postPayload: Record<string, unknown> = {
         title: file.name.replace(ext, ''),
         image_url: imageUrl,
         category: selectedEvent.name,
         /** Must match app/dashboard graphics filter (`is_video` false or null); DB default true would hide posts + break caption sync filters. */
         is_video: false,
-        language: selectedEvent.language || 'hindi',
         captions: batchCaptions,
         // Only numeric columns
         party_id: toNumArr(selectedEvent.party),
@@ -876,7 +851,6 @@ export default function App() {
   const deleteEvent = async (ev: CampaignEvent) => {
     try {
       let postsQuery = supabase.from('posts').select('id, image_url').eq('category', ev.name);
-      if (ev.language && ev.language.trim()) postsQuery = postsQuery.eq('language', ev.language);
       const { data: postsData } = await postsQuery;
       const postsToClean = postsData || [];
 
@@ -963,9 +937,7 @@ export default function App() {
   const openEditModal = (ev: CampaignEvent) => {
     setEditingEvent(ev);
     setNewName(ev.name);
-    skipAutoStateRef.current = true;
     skipLoksabhaResetCountRef.current = 2;
-    setNewLanguage(ev.language ?? '');
     setStartDate(toDateInputValue(ev.start));
     setEndDate(toDateInputValue(ev.end));
     const partyArr = toStrArr(ev.party);
@@ -994,7 +966,6 @@ export default function App() {
       end: `${endDate}T23:59:59`,
       captions: editingEvent.captions,
     };
-    if (newLanguage) updatePayload.language = newLanguage;
     const partyArr = newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
     const stateArr = newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
     const loksabhaArr = newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
@@ -1036,7 +1007,6 @@ export default function App() {
     const targetCategory = newName.trim();
     if (targetCategory !== originalName) {
       let catQ = supabase.from('posts').update({ category: targetCategory }).eq('category', originalName);
-      if (editingEvent.language) catQ = catQ.eq('language', editingEvent.language);
       await catQ;
     }
     const postUpdatePayload: Record<string, unknown> = {};
@@ -1062,7 +1032,6 @@ export default function App() {
     }
     if (Object.keys(postUpdatePayload).length > 0) {
       let pq = supabase.from('posts').update(postUpdatePayload).eq('category', targetCategory);
-      if (editingEvent.language) pq = pq.eq('language', editingEvent.language);
       await pq;
     }
 
@@ -1070,7 +1039,6 @@ export default function App() {
     const evForSync: CampaignEvent = {
       ...editingEvent,
       name: targetCategory,
-      language: newLanguage || editingEvent.language,
     };
     const captionsForPosts = normalizeCaptionsFromDb(updatePayload.captions);
     await syncGraphicsPostCaptions(evForSync, captionsForPosts);
@@ -1082,7 +1050,6 @@ export default function App() {
       name: targetCategory,
       start: newStart,
       end: newEnd,
-      language: newLanguage || undefined,
       party: targetGroupsArr.length > 0 ? undefined : partyArr.length ? partyArr : undefined,
       state: targetGroupsArr.length > 0 ? undefined : stateArr.length ? stateArr : undefined,
       loksabha: targetGroupsArr.length > 0 ? undefined : loksabhaArr.length ? loksabhaArr : undefined,
@@ -1096,7 +1063,6 @@ export default function App() {
 
     setEditingEvent(null);
     setNewName('');
-    setNewLanguage('');
     setStartDate('');
     setEndDate('');
     setNewParty([]);
@@ -1177,13 +1143,6 @@ export default function App() {
                   <div className="flex flex-col">
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</label>
                     <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30" />
-                  </div>
-                  <div className="flex flex-col">
-                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Language</label>
-                    <select value={newLanguage} onChange={(e) => setNewLanguage(e.target.value)} className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30">
-                      <option value="">Select…</option>
-                      {LANGUAGE_OPTIONS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
-                    </select>
                   </div>
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-1">
                     <div className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -1291,7 +1250,7 @@ export default function App() {
               </div>
               <div className="shrink-0 px-4 sm:px-5 py-4 border-t border-slate-100 bg-white">
                 <div className="flex gap-4">
-                  <button onClick={() => { setEditingEvent(null); setNewName(''); setNewLanguage(''); setStartDate(''); setEndDate(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
+                  <button onClick={() => { setEditingEvent(null); setNewName(''); setStartDate(''); setEndDate(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
                   <button onClick={handleSaveEvent} disabled={!newName.trim() || !startDate || !endDate} className="flex-1 py-3 sm:py-4 bg-blue-600 text-white rounded-2xl font-bold disabled:opacity-30">Save</button>
                 </div>
               </div>
@@ -1334,19 +1293,12 @@ export default function App() {
           )}
         </div>
 
-        {/* Create Event Strip - Language-First: Language → State (auto) → Party */}
+        {/* Create Event Strip */}
         <div className="bg-white p-4 rounded-[35px] border border-slate-200 shadow-lg">
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 items-end mb-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</span>
               <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm" />
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Language</span>
-              <select value={newLanguage} onChange={e => setNewLanguage(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
-                <option value="">Select…</option>
-                {LANGUAGE_OPTIONS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
-              </select>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               {hasSingleAssignedState && singleAssignedStateId ? (
@@ -1493,11 +1445,6 @@ export default function App() {
                         </div>
                         <h4 className="font-black text-slate-900 text-xl mb-1 flex items-center gap-2 flex-wrap">
                           {ev.name}
-                          {ev.language && (
-                            <span className="text-slate-500 font-bold text-sm px-2.5 py-0.5 rounded-lg bg-slate-100 border border-slate-200">
-                              [{LANGUAGE_OPTIONS.find(l => l.id === ev.language)?.label ?? ev.language}]
-                            </span>
-                          )}
                         </h4>
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-8 flex items-center gap-1.5"><Folder size={12} className="text-blue-500" /> {ev.assetsCount} Assets • {ev.captions.length} Captions</p>
                         <button 
@@ -1561,11 +1508,6 @@ export default function App() {
         <div className="md:text-right">
           <h2 className="text-3xl font-black text-slate-900 tracking-tight leading-none flex items-center gap-3 flex-wrap">
             {selectedEvent?.name}
-            {selectedEvent?.language && (
-              <span className="text-slate-500 font-bold text-base px-3 py-1 rounded-xl bg-slate-100 border border-slate-200">
-                [{LANGUAGE_OPTIONS.find(l => l.id === selectedEvent.language)?.label ?? selectedEvent.language}]
-              </span>
-            )}
           </h2>
           <p className="text-[10px] font-bold text-blue-600 uppercase mt-3 flex md:justify-end items-center gap-2">
             <Calendar size={14} /> {selectedEvent && formatDate(selectedEvent.start)} — {selectedEvent && formatDate(selectedEvent.end)}
