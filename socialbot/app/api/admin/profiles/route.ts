@@ -2,6 +2,25 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
+function toNumArr(v: unknown): number[] {
+  if (v == null) return [];
+  const arr = Array.isArray(v) ? v : [v];
+  return arr
+    .map((x) => (typeof x === 'number' ? x : Number(x)))
+    .filter((n) => Number.isFinite(n));
+}
+
+function isMissingTableErr(err: { message?: string } | null | undefined, tableName: string) {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return msg.includes(tableName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('schema cache') || msg.includes('not found'));
+}
+
+async function hasGroupMembershipsTable(db: any): Promise<boolean> {
+  const r = await db.from('group_memberships').select('group_id', { count: 'exact', head: true }).limit(1);
+  if ((r as any)?.error && isMissingTableErr((r as any).error, 'group_memberships')) return false;
+  return true;
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
@@ -28,12 +47,25 @@ export async function GET(request: NextRequest) {
   const buildQuery = (orderBy: 'created_at' | 'id') => {
     // Moderators must not receive personal info from this endpoint.
     const selectCols =
-      auth.role === 'moderator'
+      auth.role === 'moderator' || auth.role === 'campaign_manager'
         ? 'id,name,avatar_url,assigned_state_ids'
         : '*';
     let q = db.from('profiles').select(selectCols);
 
     if (auth.role === 'moderator') q = q.overlaps('assigned_state_ids', auth.assigned_state_ids);
+    if (auth.role === 'campaign_manager') {
+      const assigned = Array.isArray(auth.assigned_group_ids) ? auth.assigned_group_ids : [];
+      if (assigned.length === 0) {
+        // No assignments => no visibility
+        q = q.eq('id', '__none__');
+      } else {
+        // Prefer membership join table when available; fall back to legacy profiles.group_id.
+        // Note: group ids are stored as strings in assigned_group_ids.
+        const gids = assigned.map((x: any) => String(x ?? '').trim()).filter(Boolean);
+        // We'll apply filtering after we decide whether the table exists.
+        (q as any).__cm_group_ids = gids;
+      }
+    }
     if (party) q = q.eq('party', party);
     if (state) q = q.eq('state', state);
     if (loksabha_id != null && !Number.isNaN(loksabha_id)) q = q.eq('loksabha_id', loksabha_id);
@@ -51,8 +83,54 @@ export async function GET(request: NextRequest) {
   let data: unknown[] | null = null;
   let error: { message?: string } | null = null;
 
+  // If campaign_manager: precompute visible user ids (enforced server-side).
+  let cmVisibleUserIds: string[] | null = null;
+  if (auth.role === 'campaign_manager') {
+    const gids = (Array.isArray(auth.assigned_group_ids) ? auth.assigned_group_ids : []).map((x: any) => String(x ?? '').trim()).filter(Boolean);
+    if (gids.length === 0) {
+      cmVisibleUserIds = [];
+    } else if (await hasGroupMembershipsTable(db)) {
+      // membership-based visibility
+      const { data: memRows, error: memErr } = await db
+        .from('group_memberships')
+        .select('user_id,group_id')
+        .in('group_id', gids.map((x) => Number(x)).filter((n) => Number.isFinite(n)));
+      if (memErr) {
+        if (isMissingTableErr(memErr as any, 'group_memberships')) {
+          cmVisibleUserIds = null; // fall back below
+        } else {
+          return NextResponse.json({ error: memErr.message }, { status: 500 });
+        }
+      } else {
+        cmVisibleUserIds = Array.from(new Set((memRows ?? []).map((r: any) => String(r.user_id ?? '').trim()).filter(Boolean)));
+      }
+    }
+    // fallback: legacy profiles.group_id
+    if (cmVisibleUserIds === null) {
+      const gidsNum = gids.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+      if (gidsNum.length === 0) cmVisibleUserIds = [];
+      else {
+        // We will use .in('group_id', gidsNum) inside query by applying extra filter below (can't inject easily into buildQuery closure without globals)
+        // We'll just let buildQuery run then filter server-side if needed.
+        cmVisibleUserIds = null;
+      }
+    }
+  }
+
   {
-    const res = await buildQuery('created_at');
+    let q = buildQuery('created_at') as any;
+    if (auth.role === 'campaign_manager') {
+      if (Array.isArray(cmVisibleUserIds)) {
+        if (cmVisibleUserIds.length === 0) q = q.eq('id', '__none__');
+        else q = q.in('id', cmVisibleUserIds);
+      } else {
+        // legacy fallback
+        const gidsNum = toNumArr(auth.assigned_group_ids);
+        if (gidsNum.length === 0) q = q.eq('id', '__none__');
+        else q = q.in('group_id', gidsNum);
+      }
+    }
+    const res = await q;
     data = (res as any).data ?? null;
     error = (res as any).error ?? null;
   }
@@ -64,7 +142,18 @@ export async function GET(request: NextRequest) {
       msg.toLowerCase().includes('column') ||
       msg.toLowerCase().includes('does not exist');
     if (looksLikeMissingCreatedAt) {
-      const res2 = await buildQuery('id');
+      let q2 = buildQuery('id') as any;
+      if (auth.role === 'campaign_manager') {
+        if (Array.isArray(cmVisibleUserIds)) {
+          if (cmVisibleUserIds.length === 0) q2 = q2.eq('id', '__none__');
+          else q2 = q2.in('id', cmVisibleUserIds);
+        } else {
+          const gidsNum = toNumArr(auth.assigned_group_ids);
+          if (gidsNum.length === 0) q2 = q2.eq('id', '__none__');
+          else q2 = q2.in('group_id', gidsNum);
+        }
+      }
+      const res2 = await q2;
       data = (res2 as any).data ?? null;
       error = (res2 as any).error ?? null;
     }
@@ -110,14 +199,6 @@ type PatchBody = {
   assigned_state_ids?: unknown;
   assigned_group_ids?: unknown;
 };
-
-function toNumArr(v: unknown): number[] {
-  if (v == null) return [];
-  const arr = Array.isArray(v) ? v : [v];
-  return arr
-    .map((x) => (typeof x === 'number' ? x : Number(x)))
-    .filter((n) => Number.isFinite(n));
-}
 
 function toStrArr(v: unknown): string[] {
   if (v == null) return [];
