@@ -5,6 +5,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
+import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { RbacError, requireGroupAssignment, requireModeratorHasAssignedStates, requireOwnership, requireRole } from '@/lib/rbac/require';
 
 const NO_SERVICE_ROLE =
@@ -560,6 +561,18 @@ export async function DELETE(request: NextRequest) {
   if (!tag) return NextResponse.json({ error: 'Missing group id/name' }, { status: 400 });
   const grp = await resolveGroup(admin, tag);
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
+
+  {
+    const decision = canPerformMutation(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      'groups.delete',
+      { created_by: grp.created_by, group_id: String(grp.id) },
+      null,
+      { resourceType: 'groups', resourceId: String(grp.id), resourceName: grp.name }
+    );
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+  }
+
   const hasMemberships = await hasGroupMembershipsTable(admin);
   // canAccessResource intentionally NOT used here for moderators because delete has extra safeguards (state isolation) below.
 
@@ -709,6 +722,17 @@ export async function POST(request: NextRequest) {
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
   const hasMemberships = await hasGroupMembershipsTable(admin);
 
+  {
+    const decision = canPerformMutation(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      'groups.members.add',
+      { created_by: grp.created_by, group_id: String(grp.id) },
+      { userIds, tag: String(grp.id) } as any,
+      { resourceType: 'groups', resourceId: String(grp.id), resourceName: grp.name }
+    );
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+  }
+
   if (auth.role === 'moderator') {
     // Ownership-based access control: moderators can only use groups created by themselves.
     try {
@@ -809,6 +833,17 @@ export async function PATCH(request: NextRequest) {
     if (!Number.isFinite(gid)) return NextResponse.json({ error: 'Invalid group id in add[]' }, { status: 400 });
     const grp = await getGroupById(admin, gid);
     if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
+
+    {
+      const decision = canPerformMutation(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+        'groups.members.add',
+        { created_by: grp.created_by, group_id: String(grp.id) },
+        { userId, add: [String(gid)] } as any,
+        { resourceType: 'groups', resourceId: String(gid), resourceName: grp.name }
+      );
+      if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+    }
     if (auth.role === 'moderator') {
       try {
         requireOwnership(grp.created_by, auth.user.id);
@@ -852,6 +887,18 @@ export async function PATCH(request: NextRequest) {
     if (hasMemberships) {
       const idsToRemove = remove.map((x) => String(Number(x))).filter(Boolean);
       const gids = idsToRemove.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+      for (const gid of gids) {
+        const grp = await getGroupById(admin, gid);
+        if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
+        const decision = canPerformMutation(
+          { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+          'groups.members.remove',
+          { created_by: grp.created_by, group_id: String(grp.id) },
+          { userId, remove: [String(gid)] } as any,
+          { resourceType: 'groups', resourceId: String(gid), resourceName: grp.name }
+        );
+        if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+      }
       try {
         for (const gid of gids) await removeMembersFromGroup(admin, gid, [userId]);
       } catch (e) {

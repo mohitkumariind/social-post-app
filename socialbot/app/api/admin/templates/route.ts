@@ -3,6 +3,7 @@ import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate'
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireRole } from '@/lib/rbac/require';
+import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { withAudit } from '@/lib/audit/withAudit';
 
 function json(body: unknown, status = 200) {
@@ -56,6 +57,15 @@ export const POST = withAudit(
     };
     if (!row.title || !row.body) return json({ error: 'title and body are required' }, 400);
 
+    const decision = canPerformMutation(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      'templates.create',
+      null,
+      row as any,
+      { resourceType: 'notification_templates', resourceName: row.title }
+    );
+    if (!decision.ok) return json({ error: decision.reason }, 403);
+
     const { data, error } = await admin.from('notification_templates').insert(row as any).select('*').single();
     if (error) return json({ error: error.message }, 500);
     return json({ template: data });
@@ -103,6 +113,15 @@ export const PATCH = withAudit(
     ) {
       return json({ error: 'Forbidden' }, 403);
     }
+
+    const decision = canPerformMutation(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      'templates.update',
+      { created_by: before.created_by },
+      patch as any,
+      { resourceType: 'notification_templates', resourceId: id, resourceName: String(before?.title ?? '') }
+    );
+    if (!decision.ok) return json({ error: decision.reason }, 403);
 
     const safePatch: any = { updated_at: new Date().toISOString() };
     if (patch.title != null) safePatch.title = String(patch.title).trim();
@@ -157,6 +176,15 @@ export const DELETE = withAudit(
     ) {
       return json({ error: 'Forbidden' }, 403);
     }
+
+    const decision = canPerformMutation(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      'templates.delete',
+      { created_by: before.created_by },
+      null,
+      { resourceType: 'notification_templates', resourceId: id, resourceName: String(before?.title ?? '') }
+    );
+    if (!decision.ok) return json({ error: decision.reason }, 403);
 
     const patch = { deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() };
     const { data, error } = await admin.from('notification_templates').update(patch).eq('id', id).select('*').single();

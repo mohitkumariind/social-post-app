@@ -3,6 +3,7 @@ import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate'
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import type { BroadcastPayload } from '@/lib/broadcast-send';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { RbacError, requireModeratorHasAssignedStates, requireRole, toNumArray } from '@/lib/rbac/require';
 import { withAudit } from '@/lib/audit/withAudit';
 
@@ -66,6 +67,17 @@ export const POST = withAudit(
       );
       if (!ok) return json({ error: 'Forbidden' }, 403);
       (payload.filters as any).group_ids = groupIds;
+    }
+
+    {
+      const decision = canPerformMutation(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+        'notifications.schedule',
+        null,
+        { filters: (payload as any).filters } as any,
+        { resourceType: 'scheduled_notifications', resourceName: String((payload as any)?.title ?? '') }
+      );
+      if (!decision.ok) return json({ error: decision.reason }, 403);
     }
 
     const row = {

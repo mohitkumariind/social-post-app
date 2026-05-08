@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
+import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import {
   RbacError,
   requireModeratorHasAssignedStates,
@@ -109,6 +110,17 @@ export async function POST(request: NextRequest) {
     return json({ error: 'Invalid JSON body' }, 400);
   }
 
+  {
+    const decision = canPerformMutation(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      'events.create',
+      null,
+      payload,
+      { resourceType: 'events', resourceName: String((payload as any).name ?? '') }
+    );
+    if (!decision.ok) return json({ error: decision.reason }, 403);
+  }
+
   if (auth.role === 'moderator') {
     const stateIds = toNumArray(payload.state_id);
     if (stateIds.length === 0) {
@@ -202,6 +214,28 @@ export async function PATCH(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
+
+  // Pre-read minimal resource for write guard
+  const { data: evForGuard, error: evForGuardErr } = await admin
+    .from('events')
+    .select('id, created_by, state_id, target_groups, name')
+    .eq('id', id)
+    .maybeSingle();
+  if (evForGuardErr) return json({ error: evForGuardErr.message }, 500);
+  {
+    const decision = canPerformMutation(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      'events.update',
+      {
+        created_by: (evForGuard as any)?.created_by,
+        state_ids: (evForGuard as any)?.state_id,
+        group_ids: (evForGuard as any)?.target_groups,
+      },
+      patch as any,
+      { resourceType: 'events', resourceId: id, resourceName: String((evForGuard as any)?.name ?? '') }
+    );
+    if (!decision.ok) return json({ error: decision.reason }, 403);
+  }
 
   if (auth.role === 'moderator') {
     const { data: ev, error: evErr } = await admin
@@ -362,6 +396,27 @@ export async function DELETE(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
+
+  const { data: evForGuard, error: evForGuardErr } = await admin
+    .from('events')
+    .select('id, created_by, state_id, target_groups, name')
+    .eq('id', id)
+    .maybeSingle();
+  if (evForGuardErr) return json({ error: evForGuardErr.message }, 500);
+  {
+    const decision = canPerformMutation(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      'events.delete',
+      {
+        created_by: (evForGuard as any)?.created_by,
+        state_ids: (evForGuard as any)?.state_id,
+        group_ids: (evForGuard as any)?.target_groups,
+      },
+      null,
+      { resourceType: 'events', resourceId: id, resourceName: String((evForGuard as any)?.name ?? '') }
+    );
+    if (!decision.ok) return json({ error: decision.reason }, 403);
+  }
 
   if (auth.role === 'moderator') {
     const { data: ev, error: evErr } = await admin.from('events').select('id,state_id,created_by').eq('id', id).maybeSingle();
