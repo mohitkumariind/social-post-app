@@ -7,6 +7,15 @@ function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
+function isMissingTableErr(err: { message?: string } | null | undefined, tableName: string) {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return (
+    msg.includes('could not find the table') ||
+    msg.includes('schema cache') ||
+    (msg.includes(tableName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('relation')))
+  );
+}
+
 function toInt(v: string | null, d: number): number {
   const n = Number(v);
   return Number.isFinite(n) ? Math.max(1, Math.min(200, n)) : d;
@@ -67,10 +76,15 @@ export async function GET(request: NextRequest) {
   }
 
   const { data, error } = await query;
-  if (error) return json({ error: error.message }, 500);
+  if (error) {
+    if (isMissingTableErr(error, 'admin_logs')) {
+      return json({ logs: [], next_cursor_created_at: '', schemaMissing: true });
+    }
+    return json({ error: error.message }, 500);
+  }
   const rows = (data ?? []) as any[];
   const nextCursorCreatedAt = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
 
-  return json({ logs: rows, next_cursor_created_at: nextCursorCreatedAt });
+  return json({ logs: rows, next_cursor_created_at: nextCursorCreatedAt, schemaMissing: false });
 }
 

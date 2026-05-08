@@ -7,6 +7,15 @@ function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
+function isMissingTableErr(err: { message?: string } | null | undefined, tableName: string) {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return (
+    msg.includes('could not find the table') ||
+    msg.includes('schema cache') ||
+    (msg.includes(tableName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('relation')))
+  );
+}
+
 function pickPatchFromRow(row: Record<string, unknown>): Record<string, unknown> {
   const patch: Record<string, unknown> = { ...row };
   delete patch.id;
@@ -26,7 +35,12 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ logId: st
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
   const { data: logRow, error: logErr } = await admin.from('admin_logs').select('*').eq('id', logId).maybeSingle();
-  if (logErr) return json({ error: logErr.message }, 500);
+  if (logErr) {
+    if (isMissingTableErr(logErr, 'admin_logs')) {
+      return json({ error: 'Activity Center schema is not deployed yet (admin_logs missing)' }, 503);
+    }
+    return json({ error: logErr.message }, 500);
+  }
   if (!logRow) return json({ error: 'Not found' }, 404);
   if (!(logRow as any).undoable) return json({ error: 'This action is not undoable' }, 400);
   if ((logRow as any).undone_at) return json({ error: 'Already undone' }, 409);
