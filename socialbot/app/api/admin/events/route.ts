@@ -3,6 +3,7 @@ import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate'
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
 import {
   RbacError,
   requireModeratorHasAssignedStates,
@@ -79,32 +80,14 @@ export async function GET(request: NextRequest) {
   // Listing
   let q = db.from('events').select('*').order('created_at', { ascending: false }) as any;
   if (!includeDeleted) q = q.is('deleted_at', null);
-  if (auth.role === 'moderator') {
-    // Must satisfy BOTH: ownership and assigned states.
-    q = q.eq('created_by', auth.user.id).overlaps('state_id', auth.assigned_state_ids);
-  }
-  if (auth.role === 'campaign_manager') {
-    // Campaign managers: only events within assigned groups.
-    // (We keep service-role query broad, then filter server-side to avoid schema-specific query shapes.)
-  }
+  q = buildScopedQuery(
+    { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+    q,
+    'events'
+  );
   const { data, error } = await q;
   if (error) return json({ error: error.message }, 500);
-  const rows = Array.isArray(data) ? (data as any[]) : [];
-  const filtered =
-    auth.role === 'campaign_manager'
-      ? rows.filter((r) =>
-          canAccessResource(
-            {
-              id: auth.user.id,
-              role: auth.role,
-              assigned_state_ids: auth.assigned_state_ids,
-              assigned_group_ids: auth.assigned_group_ids,
-            },
-            { created_by: r.created_by, state_ids: r.state_id, group_ids: r.target_groups }
-          )
-        )
-      : rows;
-  return json({ events: filtered, usedServiceRole: !!admin });
+  return json({ events: data ?? [], usedServiceRole: !!admin });
 }
 
 export async function POST(request: NextRequest) {

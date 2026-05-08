@@ -4,6 +4,7 @@ import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate'
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
 import { RbacError, requireGroupAssignment, requireModeratorHasAssignedStates, requireOwnership, requireRole } from '@/lib/rbac/require';
 
 const NO_SERVICE_ROLE =
@@ -438,18 +439,31 @@ export async function GET(request: NextRequest) {
     }
 
     // Prefer authoritative group list from `groups` table; if deleted_at is missing in DB, fall back gracefully.
-    const baseRes = await selectGroupsListMaybeDeleted(admin);
-    if (baseRes.error) throw new Error(baseRes.error.message);
-    const groupRowsAll = ((baseRes.data ?? []) as any[]).filter((g) => (baseRes.hasDeletedAt ? (g as any).deleted_at == null : true));
-    const groupRows =
-      auth.role === 'moderator'
-        ? groupRowsAll.filter((g) => String((g as any).created_by ?? '').trim() === auth.user.id)
-        : auth.role === 'campaign_manager'
-          ? groupRowsAll.filter((g) => {
-              const gid = String((g as any).id ?? '').trim();
-              return gid && Array.isArray(auth.assigned_group_ids) && auth.assigned_group_ids.includes(gid);
-            })
-        : groupRowsAll;
+    // Build a scoped query instead of fetching all groups then filtering in JS.
+    let q = admin.from('groups').select('id, name, created_by, deleted_at').order('id', { ascending: true }) as any;
+    q = buildScopedQuery(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      q,
+      'groups'
+    );
+    const res = await q;
+    let groupRowsAll = ((res as any).data ?? []) as any[];
+    let baseErr = (res as any).error ?? null;
+    let hasDeletedAt = true;
+    if (baseErr && isMissingColumnErr(baseErr, 'deleted_at')) {
+      hasDeletedAt = false;
+      let q2 = admin.from('groups').select('id, name, created_by').order('id', { ascending: true }) as any;
+      q2 = buildScopedQuery(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+        q2,
+        'groups'
+      );
+      const res2 = await q2;
+      groupRowsAll = ((res2 as any).data ?? []) as any[];
+      baseErr = (res2 as any).error ?? null;
+    }
+    if (baseErr) throw new Error(baseErr.message);
+    const groupRows = groupRowsAll.filter((g) => (hasDeletedAt ? (g as any).deleted_at == null : true));
 
     const counts =
       hasMemberships

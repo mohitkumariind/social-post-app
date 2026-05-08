@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 
 function toNumArr(v: unknown): number[] {
   if (v == null) return [];
@@ -52,19 +53,12 @@ export async function GET(request: NextRequest) {
         : '*';
     let q = db.from('profiles').select(selectCols);
 
-    if (auth.role === 'moderator') q = q.overlaps('assigned_state_ids', auth.assigned_state_ids);
-    if (auth.role === 'campaign_manager') {
-      const assigned = Array.isArray(auth.assigned_group_ids) ? auth.assigned_group_ids : [];
-      if (assigned.length === 0) {
-        // No assignments => no visibility
-        q = q.eq('id', '__none__');
-      } else {
-        // Prefer membership join table when available; fall back to legacy profiles.group_id.
-        // Note: group ids are stored as strings in assigned_group_ids.
-        const gids = assigned.map((x: any) => String(x ?? '').trim()).filter(Boolean);
-        // We'll apply filtering after we decide whether the table exists.
-        (q as any).__cm_group_ids = gids;
-      }
+    if (auth.role === 'moderator') {
+      q = buildScopedQuery(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+        q,
+        'profiles'
+      );
     }
     if (party) q = q.eq('party', party);
     if (state) q = q.eq('state', state);
@@ -83,52 +77,22 @@ export async function GET(request: NextRequest) {
   let data: unknown[] | null = null;
   let error: { message?: string } | null = null;
 
-  // If campaign_manager: precompute visible user ids (enforced server-side).
-  let cmVisibleUserIds: string[] | null = null;
-  if (auth.role === 'campaign_manager') {
-    const gids = (Array.isArray(auth.assigned_group_ids) ? auth.assigned_group_ids : []).map((x: any) => String(x ?? '').trim()).filter(Boolean);
-    if (gids.length === 0) {
-      cmVisibleUserIds = [];
-    } else if (await hasGroupMembershipsTable(db)) {
-      // membership-based visibility
-      const { data: memRows, error: memErr } = await db
-        .from('group_memberships')
-        .select('user_id,group_id')
-        .in('group_id', gids.map((x) => Number(x)).filter((n) => Number.isFinite(n)));
-      if (memErr) {
-        if (isMissingTableErr(memErr as any, 'group_memberships')) {
-          cmVisibleUserIds = null; // fall back below
-        } else {
-          return NextResponse.json({ error: memErr.message }, { status: 500 });
-        }
-      } else {
-        cmVisibleUserIds = Array.from(new Set((memRows ?? []).map((r: any) => String(r.user_id ?? '').trim()).filter(Boolean)));
-      }
-    }
-    // fallback: legacy profiles.group_id
-    if (cmVisibleUserIds === null) {
-      const gidsNum = gids.map((x) => Number(x)).filter((n) => Number.isFinite(n));
-      if (gidsNum.length === 0) cmVisibleUserIds = [];
-      else {
-        // We will use .in('group_id', gidsNum) inside query by applying extra filter below (can't inject easily into buildQuery closure without globals)
-        // We'll just let buildQuery run then filter server-side if needed.
-        cmVisibleUserIds = null;
-      }
-    }
+  let cmAllowedProfileIds: string[] | null = null;
+  if (auth.role === 'campaign_manager' && admin) {
+    // Prefer membership-based IDs; if table missing, fall back inside buildScopedQuery.
+    const hasM = await hasGroupMembershipsTable(db);
+    if (hasM) cmAllowedProfileIds = await resolveAllowedProfileIdsForCampaignManager(admin, auth.assigned_group_ids);
   }
 
   {
     let q = buildQuery('created_at') as any;
     if (auth.role === 'campaign_manager') {
-      if (Array.isArray(cmVisibleUserIds)) {
-        if (cmVisibleUserIds.length === 0) q = q.eq('id', '__none__');
-        else q = q.in('id', cmVisibleUserIds);
-      } else {
-        // legacy fallback
-        const gidsNum = toNumArr(auth.assigned_group_ids);
-        if (gidsNum.length === 0) q = q.eq('id', '__none__');
-        else q = q.in('group_id', gidsNum);
-      }
+      q = buildScopedQuery(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+        q,
+        'profiles',
+        { allowed_profile_ids: Array.isArray(cmAllowedProfileIds) ? cmAllowedProfileIds : undefined }
+      );
     }
     const res = await q;
     data = (res as any).data ?? null;
@@ -144,14 +108,12 @@ export async function GET(request: NextRequest) {
     if (looksLikeMissingCreatedAt) {
       let q2 = buildQuery('id') as any;
       if (auth.role === 'campaign_manager') {
-        if (Array.isArray(cmVisibleUserIds)) {
-          if (cmVisibleUserIds.length === 0) q2 = q2.eq('id', '__none__');
-          else q2 = q2.in('id', cmVisibleUserIds);
-        } else {
-          const gidsNum = toNumArr(auth.assigned_group_ids);
-          if (gidsNum.length === 0) q2 = q2.eq('id', '__none__');
-          else q2 = q2.in('group_id', gidsNum);
-        }
+        q2 = buildScopedQuery(
+          { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+          q2,
+          'profiles',
+          { allowed_profile_ids: Array.isArray(cmAllowedProfileIds) ? cmAllowedProfileIds : undefined }
+        );
       }
       const res2 = await q2;
       data = (res2 as any).data ?? null;
