@@ -56,7 +56,7 @@ export default function ActivityCenterPage() {
       const d = (await res.json().catch(() => ({}))) as any;
       if (!res.ok) throw new Error(d?.error || 'Failed to load activity');
       if (d?.schemaMissing) {
-        setError('Activity Center DB is not deployed yet (admin_logs missing). Please run Supabase migrations and redeploy.');
+        setError('Activity Center is unavailable right now.');
       }
       const next = Array.isArray(d.logs) ? (d.logs as AdminLogRow[]) : [];
       const nextCursor = typeof d.next_cursor_created_at === 'string' ? d.next_cursor_created_at : '';

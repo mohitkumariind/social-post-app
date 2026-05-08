@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
-import { RbacError, requireModeratorHasAssignedStates, requireOwnership, requireRole } from '@/lib/rbac/require';
+import { RbacError, requireGroupAssignment, requireModeratorHasAssignedStates, requireOwnership, requireRole } from '@/lib/rbac/require';
 
 const NO_SERVICE_ROLE =
   'Group Management requires SUPABASE_SERVICE_ROLE_KEY on the server (Vercel env). Without it, only your own profile is visible under RLS, so group counts stay empty.';
@@ -245,10 +245,18 @@ export async function GET(request: NextRequest) {
     if (tag) {
       const grp = await resolveGroup(admin, tag);
       if (!grp) return NextResponse.json({ error: 'Invalid group id/name' }, { status: 400 });
-      if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
+      if (auth.role === 'moderator') {
         try {
           requireOwnership(grp.created_by, auth.user.id);
         } catch {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+      }
+      if (auth.role === 'campaign_manager') {
+        try {
+          requireGroupAssignment(auth, String(grp.id));
+        } catch (e) {
+          if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
       }
@@ -292,7 +300,7 @@ export async function GET(request: NextRequest) {
       }
 
       if (auth.role === 'campaign_manager') {
-        // Limited visibility, similar to moderators.
+        // Read-only visibility: allow only within assigned groups; redact phone.
         const filtered = membersAll.map((m) => ({ ...m, phone: '' }));
         return NextResponse.json({ tag: String(grp.id), name: grp.name, members: filtered }, { headers: { 'Cache-Control': 'no-store' } });
       }
@@ -305,8 +313,13 @@ export async function GET(request: NextRequest) {
     if (baseRes.error) throw new Error(baseRes.error.message);
     const groupRowsAll = ((baseRes.data ?? []) as any[]).filter((g) => (baseRes.hasDeletedAt ? (g as any).deleted_at == null : true));
     const groupRows =
-      auth.role === 'moderator' || auth.role === 'campaign_manager'
+      auth.role === 'moderator'
         ? groupRowsAll.filter((g) => String((g as any).created_by ?? '').trim() === auth.user.id)
+        : auth.role === 'campaign_manager'
+          ? groupRowsAll.filter((g) => {
+              const gid = String((g as any).id ?? '').trim();
+              return gid && Array.isArray(auth.assigned_group_ids) && auth.assigned_group_ids.includes(gid);
+            })
         : groupRowsAll;
 
     const countsRowsAll = await fetchAllProfileIdAndGroupId(admin);
@@ -329,7 +342,13 @@ export async function GET(request: NextRequest) {
               .map((r: any) => ({ id: String(r.id ?? ''), group_id: (r as any).group_id }))
               .filter((r) => r.id);
           })()
-        : countsRowsAll;
+        : auth.role === 'campaign_manager'
+          ? countsRowsAll.filter((r) => {
+              const gid = toNum(r.group_id);
+              if (gid == null) return false;
+              return Array.isArray(auth.assigned_group_ids) && auth.assigned_group_ids.includes(String(gid));
+            })
+          : countsRowsAll;
     const counts = new Map<string, number>();
     for (const g of aggregateGroupIds(countsRows)) counts.set(g.tag, g.count);
 
@@ -352,8 +371,11 @@ export async function DELETE(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
+  if (auth.role === 'campaign_manager') {
+    return NextResponse.json({ error: 'Campaign managers cannot modify groups' }, { status: 403 });
+  }
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireRole(auth, ['admin', 'moderator']);
     requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
@@ -438,8 +460,11 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
+  if (auth.role === 'campaign_manager') {
+    return NextResponse.json({ error: 'Campaign managers cannot modify groups' }, { status: 403 });
+  }
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireRole(auth, ['admin', 'moderator']);
     requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
@@ -511,8 +536,11 @@ export async function PATCH(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
+  if (auth.role === 'campaign_manager') {
+    return NextResponse.json({ error: 'Campaign managers cannot modify groups' }, { status: 403 });
+  }
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireRole(auth, ['admin', 'moderator']);
     requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
