@@ -43,6 +43,7 @@ interface AppUser {
   phone: string;
   email: string;
   party: string;
+  party_label: string;
   designation1: string;
   designation2: string;
   designation3: string;
@@ -84,14 +85,56 @@ export default function UserManagement() {
     return s ? [s] : [];
   };
 
+  const [partyLabelMap, setPartyLabelMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('parties')
+          .select('id,name')
+          .order('name', { ascending: true });
+        if (cancelled) return;
+        if (error) throw error;
+        const map: Record<string, string> = {};
+        for (const r of (data ?? []) as any[]) {
+          const id = String(r?.id ?? '').trim();
+          const name = String(r?.name ?? '').trim();
+          if (id && name) map[id] = name;
+        }
+        setPartyLabelMap(map);
+      } catch (e) {
+        // Best-effort: fall back to static `getPartyLabel`.
+        setPartyLabelMap({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const resolvePartyText = (rawParty: unknown): { id: string; label: string } => {
+    const raw = String(rawParty ?? '').trim();
+    if (!raw) return { id: '', label: '' };
+    const id = normalizePartyId(raw);
+    const labelFromDb = partyLabelMap[id];
+    if (labelFromDb) return { id, label: labelFromDb };
+    const fallback = getPartyLabel(id || raw);
+    return { id, label: fallback || raw };
+  };
+
   const mapProfileToAppUser = (row: Record<string, unknown>): AppUser => ({
+    ...(() => {
+      const p = resolvePartyText((row as any).party ?? (row as any).party_id ?? (row as any).partyName);
+      return { party: p.id, party_label: p.label };
+    })(),
     id: typeof row.id === 'string' || typeof row.id === 'number' ? row.id : String(row.id ?? row.user_id ?? ''),
     avatar_url: String(row.avatar_url ?? ''),
     language: String(row.language ?? ''),
     name: String(row.name ?? ''),
     phone: String(row.phone ?? row.phone_number ?? ''),
     email: String(row.email ?? ''),
-    party: normalizePartyId(String(row.party ?? '')),
     designation1: String(row.designation1 ?? row.designation ?? ''),
     designation2: String(row.designation2 ?? row.designation_2 ?? ''),
     designation3: String(row.designation3 ?? row.designation_3 ?? ''),
@@ -431,12 +474,12 @@ export default function UserManagement() {
             <div className="p-10 grid grid-cols-1 lg:grid-cols-12 gap-10 max-h-[60vh] overflow-y-auto bg-white">
                 <div className="lg:col-span-4 space-y-8 border-r border-slate-100 pr-6">
                     <div className="space-y-6">
-                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Member Info</h3>
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Personal Info</h3>
                         <div className="space-y-4">
                             <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Phone size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{selectedUser.phone}</p></div>
                             <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Mail size={18} /></div><p className="font-bold text-slate-800 truncate tracking-tight">{selectedUser.email}</p></div>
                             <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Globe size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.state)}</p></div>
-                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Flag size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{getPartyLabel(selectedUser.party)}</p></div>
+                            <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><Flag size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.party_label || getPartyLabel(selectedUser.party))}</p></div>
                             <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><MapPin size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.loksabha)}</p></div>
                             <div className="flex items-center gap-4"><div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400"><MapPin size={18} /></div><p className="font-bold text-slate-800 tracking-tight">{fmt(selectedUser.assembly || selectedUser.constituency)}</p></div>
                         </div>
@@ -450,15 +493,11 @@ export default function UserManagement() {
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Designation 2</span><span className="font-bold text-slate-800">{fmt(selectedUser.designation2)}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Designation 3</span><span className="font-bold text-slate-800">{fmt(selectedUser.designation3)}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Designation 4</span><span className="font-bold text-slate-800">{fmt(selectedUser.designation4)}</span></div>
-                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">State ID</span><span className="font-bold text-slate-800">{selectedUser.state_id == null || Number.isNaN(selectedUser.state_id) ? 'N/A' : String(selectedUser.state_id)}</span></div>
-                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Lok Sabha ID</span><span className="font-bold text-slate-800">{selectedUser.loksabha_id == null || Number.isNaN(selectedUser.loksabha_id) ? 'N/A' : String(selectedUser.loksabha_id)}</span></div>
-                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Assembly ID</span><span className="font-bold text-slate-800">{selectedUser.assembly_id == null || Number.isNaN(selectedUser.assembly_id) ? 'N/A' : String(selectedUser.assembly_id)}</span></div>
-                          <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Group ID</span><span className="font-bold text-slate-800">{selectedUser.group_id == null || Number.isNaN(selectedUser.group_id) ? 'N/A' : String(selectedUser.group_id)}</span></div>
                         </div>
                     </div>
 
                     <div className="space-y-6">
-                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Social</h3>
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Social Links</h3>
                         <div className="space-y-3 text-xs font-bold text-slate-800">
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">WhatsApp</span><span className="font-bold text-slate-800">{fmt(selectedUser.whatsapp || selectedUser.phone)}</span></div>
                           <div className="flex items-center justify-between gap-3"><span className="text-slate-400 font-black uppercase tracking-widest text-[9px]">Facebook</span><span className="font-bold text-slate-800">{fmt(selectedUser.facebook)}</span></div>
@@ -651,7 +690,7 @@ export default function UserManagement() {
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Party Name</span>
-                  <span className="font-bold text-slate-800 text-right">{fmt(getPartyLabel(user.party))}</span>
+                  <span className="font-bold text-slate-800 text-right">{fmt(user.party_label || getPartyLabel(user.party))}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Mobile</span>
