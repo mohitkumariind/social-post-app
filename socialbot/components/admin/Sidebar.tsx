@@ -7,6 +7,7 @@ import {
   Users,
   Bell,
   Tags,
+  ListOrdered,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -19,6 +20,7 @@ const navItems = [
   { href: '/admin/users', label: 'Users', icon: Users },
   { href: '/admin/groups', label: 'Group Management', icon: Tags },
   { href: '/admin/notifications', label: 'Broadcast', icon: Bell },
+  { href: '/admin/activity-center', label: 'Activity Center', icon: ListOrdered },
 ];
 
 export default function Sidebar() {
@@ -52,7 +54,12 @@ export default function Sidebar() {
     if (r === 'campaign_manager') {
       // Campaign Manager: Dashboard, Events, Notifications, Groups
       return navItems.filter(
-        (i) => i.href === '/admin' || i.href === '/admin/events' || i.href === '/admin/groups' || i.href === '/admin/notifications'
+        (i) =>
+          i.href === '/admin' ||
+          i.href === '/admin/events' ||
+          i.href === '/admin/groups' ||
+          i.href === '/admin/notifications' ||
+          i.href === '/admin/activity-center'
       );
     }
     return navItems;

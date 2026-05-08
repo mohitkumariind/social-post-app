@@ -2,6 +2,8 @@ import Expo from 'expo-server-sdk';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { runBroadcast, type BroadcastPayload } from '@/lib/broadcast-send';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { logAdminAction } from '@/lib/audit/logAdminAction';
+import { RbacError, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
 
 export const runtime = 'nodejs';
 
@@ -32,8 +34,12 @@ export async function POST(request: Request) {
       auth.status
     );
   }
-  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
-    return json({ error: 'Moderator is missing assigned_state_ids' }, 403);
+  try {
+    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireModeratorHasAssignedStates(auth);
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message }, e.status);
+    return json({ error: 'Forbidden' }, 403);
   }
 
   const admin = createServiceRoleClient();
@@ -87,6 +93,23 @@ export async function POST(request: Request) {
         status
       );
     }
+
+    const broadcastId = (result as any)?.broadcast_id ?? null;
+    void logAdminAction({
+      actor_user_id: auth.user.id,
+      actor_role: auth.role,
+      action_type: 'notifications.send',
+      resource_type: 'notifications',
+      resource_id: broadcastId,
+      resource_name: payload?.title ?? null,
+      previous_data: null,
+      new_data: { broadcast_id: broadcastId, payload },
+      severity: 'info',
+      undoable: false,
+      scope_state_ids: auth.role === 'moderator' ? auth.assigned_state_ids : [],
+      scope_group_ids: auth.role === 'campaign_manager' ? ((payload.filters as any)?.group_ids ?? []).map((x: any) => String(x)) : [],
+    });
+
     return json(result);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

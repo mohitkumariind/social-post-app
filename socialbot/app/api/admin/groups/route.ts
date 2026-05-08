@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { logAdminAction } from '@/lib/audit/logAdminAction';
+import { RbacError, requireModeratorHasAssignedStates, requireOwnership, requireRole } from '@/lib/rbac/require';
 
 const NO_SERVICE_ROLE =
   'Group Management requires SUPABASE_SERVICE_ROLE_KEY on the server (Vercel env). Without it, only your own profile is visible under RLS, so group counts stay empty.';
@@ -68,7 +70,7 @@ function requireModeratorOwnership(auth: { role: 'admin' | 'moderator'; user: { 
 }
 
 async function getGroupById(admin: SupabaseClient, id: number): Promise<DbGroupWithOwnerRow | null> {
-  const { data, error } = await admin.from('groups').select('id, name, created_by').eq('id', id).maybeSingle();
+  const { data, error } = await admin.from('groups').select('id, name, created_by, deleted_at').eq('id', id).is('deleted_at', null).maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) return null;
   return {
@@ -81,7 +83,7 @@ async function getGroupById(admin: SupabaseClient, id: number): Promise<DbGroupW
 async function getGroupByName(admin: SupabaseClient, name: string): Promise<DbGroupWithOwnerRow | null> {
   const n = String(name ?? '').trim();
   if (!n) return null;
-  const { data, error } = await admin.from('groups').select('id, name, created_by').eq('name', n).maybeSingle();
+  const { data, error } = await admin.from('groups').select('id, name, created_by, deleted_at').eq('name', n).is('deleted_at', null).maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) return null;
   return {
@@ -190,8 +192,12 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
+  try {
+    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireModeratorHasAssignedStates(auth);
+  } catch (e) {
+    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -206,7 +212,9 @@ export async function GET(request: NextRequest) {
       const grp = await resolveGroup(admin, tag);
       if (!grp) return NextResponse.json({ error: 'Invalid group id/name' }, { status: 400 });
       if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
-        if (String(grp.created_by ?? '').trim() !== auth.user.id) {
+        try {
+          requireOwnership(grp.created_by, auth.user.id);
+        } catch {
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
       }
@@ -259,7 +267,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Prefer authoritative group list from `groups` table; join with counts from profiles.
-    const groupQuery = admin.from('groups').select('id, name, created_by').order('id', { ascending: true });
+    const groupQuery = admin.from('groups').select('id, name, created_by').is('deleted_at', null).order('id', { ascending: true });
     const { data: groupRows, error: gErr } =
       auth.role === 'moderator' || auth.role === 'campaign_manager'
         ? await groupQuery.eq('created_by', auth.user.id)
@@ -309,8 +317,12 @@ export async function DELETE(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
+  try {
+    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireModeratorHasAssignedStates(auth);
+  } catch (e) {
+    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -323,7 +335,9 @@ export async function DELETE(request: NextRequest) {
   const grp = await resolveGroup(admin, tag);
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
   if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
-    if (String(grp.created_by ?? '').trim() !== auth.user.id) {
+    try {
+      requireOwnership(grp.created_by, auth.user.id);
+    } catch {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
   }
@@ -342,14 +356,39 @@ export async function DELETE(request: NextRequest) {
     }
   }
 
+  const { data: members, error: memErr } = await admin.from('profiles').select('id').eq('group_id', grp.id);
+  if (memErr) return NextResponse.json({ error: memErr.message }, { status: 500 });
+  const memberIds = (members ?? []).map((m: any) => String(m.id ?? '')).filter(Boolean);
+
   const { error: upErr } = await admin.from('profiles').update({ group_id: null }).eq('group_id', grp.id);
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
 
-  // Best-effort: remove group row itself.
-  const { error: delErr } = await admin.from('groups').delete().eq('id', grp.id);
+  const { data: before, error: beforeErr } = await admin.from('groups').select('*').eq('id', grp.id).maybeSingle();
+  if (beforeErr) return NextResponse.json({ error: beforeErr.message }, { status: 500 });
+
+  // Soft delete group row (core entity) instead of hard delete.
+  const delPatch = { deleted_at: new Date().toISOString(), deleted_by: auth.user.id };
+  const { data: after, error: delErr } = await admin.from('groups').update(delPatch).eq('id', grp.id).select('*').single();
   if (delErr) {
     return NextResponse.json({ ok: true, group_id: grp.id, warning: delErr.message }, { headers: { 'Cache-Control': 'no-store' } });
   }
+
+  void logAdminAction({
+    actor_user_id: auth.user.id,
+    actor_role: auth.role,
+    action_type: 'groups.delete',
+    resource_type: 'groups',
+    resource_id: String(grp.id),
+    resource_name: grp.name,
+    previous_data: before,
+    new_data: after,
+    metadata: { member_ids: memberIds },
+    affected_users_count: memberIds.length,
+    severity: 'warning',
+    undoable: true,
+    scope_group_ids: [String(grp.id)],
+    scope_user_ids: memberIds,
+  });
 
   return NextResponse.json({ ok: true, group_id: grp.id }, { headers: { 'Cache-Control': 'no-store' } });
 }
@@ -364,8 +403,12 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
+  try {
+    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireModeratorHasAssignedStates(auth);
+  } catch (e) {
+    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -393,7 +436,9 @@ export async function POST(request: NextRequest) {
 
   if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
     // Ownership-based access control: moderators can only use groups created by themselves.
-    if (String(grp.created_by ?? '').trim() !== auth.user.id) {
+    try {
+      requireOwnership(grp.created_by, auth.user.id);
+    } catch {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
   }
@@ -431,8 +476,12 @@ export async function PATCH(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
+  try {
+    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireModeratorHasAssignedStates(auth);
+  } catch (e) {
+    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -473,7 +522,9 @@ export async function PATCH(request: NextRequest) {
     const grp = await getGroupById(admin, gid);
     if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
     if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
-      if (String(grp.created_by ?? '').trim() !== auth.user.id) {
+      try {
+        requireOwnership(grp.created_by, auth.user.id);
+      } catch {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     }
@@ -487,7 +538,9 @@ export async function PATCH(request: NextRequest) {
     if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
       const grp = await getGroupById(admin, current);
       if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
-      if (String(grp.created_by ?? '').trim() !== auth.user.id) {
+      try {
+        requireOwnership(grp.created_by, auth.user.id);
+      } catch {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     }
