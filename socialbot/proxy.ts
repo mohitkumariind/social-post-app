@@ -131,6 +131,7 @@ export async function proxy(request: NextRequest) {
     if (isCampaignManager) {
       const allowed =
         pathname === '/admin' ||
+        pathname.startsWith('/admin/users') ||
         pathname.startsWith('/admin/events') ||
         pathname.startsWith('/admin/notifications') ||
         pathname.startsWith('/admin/groups');
