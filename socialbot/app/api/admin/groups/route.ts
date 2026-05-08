@@ -54,6 +54,38 @@ type DbGroupRow = { id: number; name: string };
 
 type DbGroupWithOwnerRow = { id: number; name: string; created_by: string | null };
 
+function isMissingColumnErr(err: { message?: string } | null | undefined, columnName: string) {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column'));
+}
+
+async function selectGroupMaybeDeletedById(admin: SupabaseClient, id: number) {
+  const res = await admin.from('groups').select('id, name, created_by, deleted_at').eq('id', id).maybeSingle();
+  if (res.error && isMissingColumnErr(res.error, 'deleted_at')) {
+    const res2 = await admin.from('groups').select('id, name, created_by').eq('id', id).maybeSingle();
+    return { data: res2.data, error: res2.error, hasDeletedAt: false };
+  }
+  return { data: res.data, error: res.error, hasDeletedAt: true };
+}
+
+async function selectGroupMaybeDeletedByName(admin: SupabaseClient, name: string) {
+  const res = await admin.from('groups').select('id, name, created_by, deleted_at').eq('name', name).maybeSingle();
+  if (res.error && isMissingColumnErr(res.error, 'deleted_at')) {
+    const res2 = await admin.from('groups').select('id, name, created_by').eq('name', name).maybeSingle();
+    return { data: res2.data, error: res2.error, hasDeletedAt: false };
+  }
+  return { data: res.data, error: res.error, hasDeletedAt: true };
+}
+
+async function selectGroupsListMaybeDeleted(admin: SupabaseClient) {
+  const res = await admin.from('groups').select('id, name, created_by, deleted_at').order('id', { ascending: true });
+  if (res.error && isMissingColumnErr(res.error, 'deleted_at')) {
+    const res2 = await admin.from('groups').select('id, name, created_by').order('id', { ascending: true });
+    return { data: res2.data, error: res2.error, hasDeletedAt: false };
+  }
+  return { data: res.data, error: res.error, hasDeletedAt: true };
+}
+
 function overlapsAssignedStates(profileAssigned: unknown, viewerAssigned: number[]): boolean {
   const idsArr = Array.isArray(profileAssigned) ? profileAssigned : [];
   const viewer = viewerAssigned.map(Number);
@@ -70,9 +102,10 @@ function requireModeratorOwnership(auth: { role: 'admin' | 'moderator'; user: { 
 }
 
 async function getGroupById(admin: SupabaseClient, id: number): Promise<DbGroupWithOwnerRow | null> {
-  const { data, error } = await admin.from('groups').select('id, name, created_by, deleted_at').eq('id', id).is('deleted_at', null).maybeSingle();
+  const { data, error, hasDeletedAt } = await selectGroupMaybeDeletedById(admin, id);
   if (error) throw new Error(error.message);
   if (!data) return null;
+  if (hasDeletedAt && (data as any).deleted_at != null) return null;
   return {
     id: Number((data as any).id),
     name: String((data as any).name ?? ''),
@@ -83,9 +116,10 @@ async function getGroupById(admin: SupabaseClient, id: number): Promise<DbGroupW
 async function getGroupByName(admin: SupabaseClient, name: string): Promise<DbGroupWithOwnerRow | null> {
   const n = String(name ?? '').trim();
   if (!n) return null;
-  const { data, error } = await admin.from('groups').select('id, name, created_by, deleted_at').eq('name', n).is('deleted_at', null).maybeSingle();
+  const { data, error, hasDeletedAt } = await selectGroupMaybeDeletedByName(admin, n);
   if (error) throw new Error(error.message);
   if (!data) return null;
+  if (hasDeletedAt && (data as any).deleted_at != null) return null;
   return {
     id: Number((data as any).id),
     name: String((data as any).name ?? ''),
@@ -266,13 +300,14 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ tag: String(grp.id), name: grp.name, members }, { headers: { 'Cache-Control': 'no-store' } });
     }
 
-    // Prefer authoritative group list from `groups` table; join with counts from profiles.
-    const groupQuery = admin.from('groups').select('id, name, created_by').is('deleted_at', null).order('id', { ascending: true });
-    const { data: groupRows, error: gErr } =
+    // Prefer authoritative group list from `groups` table; if deleted_at is missing in DB, fall back gracefully.
+    const baseRes = await selectGroupsListMaybeDeleted(admin);
+    if (baseRes.error) throw new Error(baseRes.error.message);
+    const groupRowsAll = ((baseRes.data ?? []) as any[]).filter((g) => (baseRes.hasDeletedAt ? (g as any).deleted_at == null : true));
+    const groupRows =
       auth.role === 'moderator' || auth.role === 'campaign_manager'
-        ? await groupQuery.eq('created_by', auth.user.id)
-        : await groupQuery;
-    if (gErr) throw new Error(gErr.message);
+        ? groupRowsAll.filter((g) => String((g as any).created_by ?? '').trim() === auth.user.id)
+        : groupRowsAll;
 
     const countsRowsAll = await fetchAllProfileIdAndGroupId(admin);
     const countsRows =

@@ -58,13 +58,21 @@ export const POST = withAudit(
         filters: { group_ids: [] } as any,
       };
 
-      const { data: groups, error: gErr } = await admin
-        .from('groups')
-        .select('id')
-        .eq('created_by', auth.user.id)
-        .is('deleted_at', null);
+      let groups: any[] | null = null;
+      let gErr: any = null;
+      {
+        const r = await admin.from('groups').select('id, deleted_at').eq('created_by', auth.user.id);
+        groups = (r as any).data ?? null;
+        gErr = (r as any).error ?? null;
+        if (gErr && String(gErr.message ?? '').toLowerCase().includes('deleted_at') && String(gErr.message ?? '').toLowerCase().includes('does not exist')) {
+          const r2 = await admin.from('groups').select('id').eq('created_by', auth.user.id);
+          groups = (r2 as any).data ?? null;
+          gErr = (r2 as any).error ?? null;
+        }
+      }
       if (gErr) return json({ error: gErr.message }, 500);
-      const groupIds = (groups ?? []).map((g: any) => Number(g.id)).filter((n: number) => Number.isFinite(n));
+      const groupsFiltered = (groups ?? []).filter((g: any) => (g?.deleted_at == null ? true : false));
+      const groupIds = groupsFiltered.map((g: any) => Number(g.id)).filter((n: number) => Number.isFinite(n));
       if (groupIds.length === 0) return json({ error: 'Forbidden: no owned groups to target' }, 403);
       (payload.filters as any).group_ids = groupIds;
     }
