@@ -31,6 +31,7 @@ export default function ActivityCenterPage() {
   const [logs, setLogs] = useState<AdminLogRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [schemaMissing, setSchemaMissing] = useState(false);
   const [cursor, setCursor] = useState<string>('');
   const [q, setQ] = useState('');
   const [undoModal, setUndoModal] = useState<{ open: boolean; row: AdminLogRow | null; busy: boolean; err: string | null }>({
@@ -45,6 +46,7 @@ export default function ActivityCenterPage() {
   async function load(firstPage: boolean) {
     setLoading(true);
     setError(null);
+    setSchemaMissing(false);
     try {
       const sp = new URLSearchParams();
       sp.set('limit', '50');
@@ -56,7 +58,11 @@ export default function ActivityCenterPage() {
       const d = (await res.json().catch(() => ({}))) as any;
       if (!res.ok) throw new Error(d?.error || 'Failed to load activity');
       if (d?.schemaMissing) {
-        setError('Activity Center is unavailable right now.');
+        // `admin_logs` table not deployed yet. Keep UI quiet (no error banner).
+        setSchemaMissing(true);
+        setCursor('');
+        setLogs([]);
+        return;
       }
       const next = Array.isArray(d.logs) ? (d.logs as AdminLogRow[]) : [];
       const nextCursor = typeof d.next_cursor_created_at === 'string' ? d.next_cursor_created_at : '';
@@ -72,6 +78,7 @@ export default function ActivityCenterPage() {
   useEffect(() => {
     setCursor('');
     setLogs([]);
+    setSchemaMissing(false);
     void load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
@@ -160,7 +167,11 @@ export default function ActivityCenterPage() {
                 </div>
               </div>
             ))}
-            {logs.length === 0 && !loading ? <div className="px-4 py-10 text-center text-sm text-zinc-500">No activity found.</div> : null}
+            {logs.length === 0 && !loading ? (
+              <div className="px-4 py-10 text-center text-sm text-zinc-500">
+                {schemaMissing ? 'No activity found.' : 'No activity found.'}
+              </div>
+            ) : null}
           </div>
         </div>
 
