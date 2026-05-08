@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireGroupAssignment, requireModeratorHasAssignedStates, requireOwnership, requireRole } from '@/lib/rbac/require';
 
 const NO_SERVICE_ROLE =
@@ -363,20 +364,20 @@ export async function GET(request: NextRequest) {
     if (tag) {
       const grp = await resolveGroup(admin, tag);
       if (!grp) return NextResponse.json({ error: 'Invalid group id/name' }, { status: 400 });
-      if (auth.role === 'moderator') {
-        try {
-          requireOwnership(grp.created_by, auth.user.id);
-        } catch {
-          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-        }
-      }
-      if (auth.role === 'campaign_manager') {
-        try {
-          requireGroupAssignment(auth, String(grp.id));
-        } catch (e) {
-          if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
-          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-        }
+      try {
+        const ok = canAccessResource(
+          {
+            id: auth.user.id,
+            role: auth.role,
+            assigned_state_ids: auth.assigned_state_ids,
+            assigned_group_ids: auth.assigned_group_ids,
+          },
+          { created_by: grp.created_by, group_id: String(grp.id) }
+        );
+        if (!ok) throw new RbacError('Forbidden', 403);
+      } catch (e) {
+        if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
       let rows: any[] = [];
       if (hasMemberships) {
@@ -546,16 +547,15 @@ export async function DELETE(request: NextRequest) {
   const grp = await resolveGroup(admin, tag);
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
   const hasMemberships = await hasGroupMembershipsTable(admin);
+  // canAccessResource intentionally NOT used here for moderators because delete has extra safeguards (state isolation) below.
+
+  // For moderators, ensure the group doesn't contain out-of-scope members before deleting the group row.
   if (auth.role === 'moderator') {
     try {
       requireOwnership(grp.created_by, auth.user.id);
     } catch {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
-  }
-
-  // For moderators, ensure the group doesn't contain out-of-scope members before deleting the group row.
-  if (auth.role === 'moderator') {
     const viewerStates = auth.assigned_state_ids.map(Number);
     const { data: memberRows, error: memErr } = await admin
       .from('profiles')

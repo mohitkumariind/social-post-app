@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import type { BroadcastPayload } from '@/lib/broadcast-send';
-import { RbacError, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { RbacError, requireModeratorHasAssignedStates, requireRole, toNumArray } from '@/lib/rbac/require';
 import { withAudit } from '@/lib/audit/withAudit';
 
 function json(body: unknown, status = 200) {
@@ -57,23 +58,13 @@ export const POST = withAudit(
         all_workers: false,
         filters: { group_ids: [] } as any,
       };
-
-      let groups: any[] | null = null;
-      let gErr: any = null;
-      {
-        const r = await admin.from('groups').select('id, deleted_at').eq('created_by', auth.user.id);
-        groups = (r as any).data ?? null;
-        gErr = (r as any).error ?? null;
-        if (gErr && String(gErr.message ?? '').toLowerCase().includes('deleted_at') && String(gErr.message ?? '').toLowerCase().includes('does not exist')) {
-          const r2 = await admin.from('groups').select('id').eq('created_by', auth.user.id);
-          groups = (r2 as any).data ?? null;
-          gErr = (r2 as any).error ?? null;
-        }
-      }
-      if (gErr) return json({ error: gErr.message }, 500);
-      const groupsFiltered = (groups ?? []).filter((g: any) => (g?.deleted_at == null ? true : false));
-      const groupIds = groupsFiltered.map((g: any) => Number(g.id)).filter((n: number) => Number.isFinite(n));
-      if (groupIds.length === 0) return json({ error: 'Forbidden: no owned groups to target' }, 403);
+      const groupIds = toNumArray(auth.assigned_group_ids);
+      if (groupIds.length === 0) return json({ error: 'Forbidden: no assigned groups to target' }, 403);
+      const ok = canAccessResource(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
+        { group_ids: groupIds.map(String) }
+      );
+      if (!ok) return json({ error: 'Forbidden' }, 403);
       (payload.filters as any).group_ids = groupIds;
     }
 

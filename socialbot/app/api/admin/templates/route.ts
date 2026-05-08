@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { RbacError, requireOwnership, requireRole } from '@/lib/rbac/require';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { RbacError, requireRole } from '@/lib/rbac/require';
 import { withAudit } from '@/lib/audit/withAudit';
 
 function json(body: unknown, status = 200) {
@@ -93,9 +94,13 @@ export const PATCH = withAudit(
 
     const before = previous_data as any;
     if (!before || before.deleted_at != null) return json({ error: 'Not found' }, 404);
-    try {
-      if (auth.role !== 'admin') requireOwnership(before.created_by, auth.user.id);
-    } catch {
+    if (
+      auth.role !== 'admin' &&
+      !canAccessResource(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
+        { created_by: before.created_by }
+      )
+    ) {
       return json({ error: 'Forbidden' }, 403);
     }
 
@@ -143,9 +148,13 @@ export const DELETE = withAudit(
 
     const before = previous_data as any;
     if (!before || before.deleted_at != null) return json({ ok: true, alreadyDeleted: true });
-    try {
-      if (auth.role !== 'admin') requireOwnership(before.created_by, auth.user.id);
-    } catch {
+    if (
+      auth.role !== 'admin' &&
+      !canAccessResource(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
+        { created_by: before.created_by }
+      )
+    ) {
       return json({ error: 'Forbidden' }, 403);
     }
 

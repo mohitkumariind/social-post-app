@@ -3,7 +3,8 @@ import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate'
 import { runBroadcast, type BroadcastPayload } from '@/lib/broadcast-send';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
-import { RbacError, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { RbacError, requireModeratorHasAssignedStates, requireRole, toNumArray } from '@/lib/rbac/require';
 
 export const runtime = 'nodejs';
 
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
     }
 
     if (auth.role === 'campaign_manager') {
-      // Campaign manager: groups-only targeting (owned groups).
+      // Campaign manager: groups-only targeting (assigned groups).
       payload = {
         ...payload,
         all_workers: false,
@@ -72,12 +73,14 @@ export async function POST(request: Request) {
           group_ids: [],
         } as any,
       };
-
-      const { data: groups, error: gErr } = await admin.from('groups').select('id').eq('created_by', auth.user.id);
-      if (gErr) return json({ error: gErr.message }, 500);
-      const groupIds = (groups ?? []).map((g: any) => Number(g.id)).filter((n) => Number.isFinite(n));
-      if (groupIds.length === 0) return json({ error: 'Forbidden: no owned groups to target' }, 403);
-
+      const groupIds = toNumArray(auth.assigned_group_ids);
+      if (groupIds.length === 0) return json({ error: 'Forbidden: no assigned groups to target' }, 403);
+      // Defensive: ensure campaign manager cannot target outside assignment even if client sends filters.
+      const ok = canAccessResource(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
+        { group_ids: groupIds.map(String) }
+      );
+      if (!ok) return json({ error: 'Forbidden' }, 403);
       (payload.filters as any).group_ids = groupIds;
     }
 

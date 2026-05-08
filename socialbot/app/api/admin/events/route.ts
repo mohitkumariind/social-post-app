@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import {
   RbacError,
   requireModeratorHasAssignedStates,
@@ -53,13 +54,20 @@ export async function GET(request: NextRequest) {
     if (!data) return json({ error: 'Not found' }, 404);
 
     try {
-      if (auth.role === 'moderator') {
-        requireOwnership((data as any).created_by, auth.user.id);
-        requireScopeState((data as any).state_id, auth.assigned_state_ids, 'subset');
-      }
-      if (auth.role === 'campaign_manager') {
-        requireOwnership((data as any).created_by, auth.user.id);
-      }
+      const ok = canAccessResource(
+        {
+          id: auth.user.id,
+          role: auth.role,
+          assigned_state_ids: auth.assigned_state_ids,
+          assigned_group_ids: auth.assigned_group_ids,
+        },
+        {
+          created_by: (data as any).created_by,
+          state_ids: (data as any).state_id,
+          group_ids: (data as any).target_groups,
+        }
+      );
+      if (!ok) throw new RbacError('Forbidden', 403);
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
@@ -76,12 +84,27 @@ export async function GET(request: NextRequest) {
     q = q.eq('created_by', auth.user.id).overlaps('state_id', auth.assigned_state_ids);
   }
   if (auth.role === 'campaign_manager') {
-    // Campaign managers only see their own events.
-    q = q.eq('created_by', auth.user.id);
+    // Campaign managers: only events within assigned groups.
+    // (We keep service-role query broad, then filter server-side to avoid schema-specific query shapes.)
   }
   const { data, error } = await q;
   if (error) return json({ error: error.message }, 500);
-  return json({ events: data ?? [], usedServiceRole: !!admin });
+  const rows = Array.isArray(data) ? (data as any[]) : [];
+  const filtered =
+    auth.role === 'campaign_manager'
+      ? rows.filter((r) =>
+          canAccessResource(
+            {
+              id: auth.user.id,
+              role: auth.role,
+              assigned_state_ids: auth.assigned_state_ids,
+              assigned_group_ids: auth.assigned_group_ids,
+            },
+            { created_by: r.created_by, state_ids: r.state_id, group_ids: r.target_groups }
+          )
+        )
+      : rows;
+  return json({ events: filtered, usedServiceRole: !!admin });
 }
 
 export async function POST(request: NextRequest) {
