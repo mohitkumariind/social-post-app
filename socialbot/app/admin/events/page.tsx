@@ -24,6 +24,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { isPartyOtherId, LANGUAGE_OPTIONS, LANGUAGE_TO_STATES, PARTIES_DATA } from '@/lib/constants';
+import { getStateVisibility } from '@/lib/admin/state-filter';
 import { captionsJsonForPostColumn, isLikelyEventUuid, normalizeCaptionsFromDb } from '@/lib/captions';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
@@ -261,9 +262,7 @@ export default function App() {
   const skipLoksabhaResetCountRef = useRef(0);
 
   const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_ids: number[] } | null>(null);
-  const isModerator = viewer?.role === 'moderator';
-  const assignedStateIds = (viewer?.assigned_state_ids ?? []).map(String);
-  const moderatorHasSingleState = isModerator && assignedStateIds.length === 1;
+  const [viewerLoading, setViewerLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -280,6 +279,8 @@ export default function App() {
         if (role) setViewer({ role, assigned_state_ids: ids });
       } catch {
         // ignore
+      } finally {
+        if (!cancelled) setViewerLoading(false);
       }
     })();
     return () => {
@@ -287,11 +288,15 @@ export default function App() {
     };
   }, []);
 
-  const visibleStates = useMemo(() => {
-    if (!isModerator) return availableStates;
-    const allowed = new Set(assignedStateIds);
-    return availableStates.filter((s) => allowed.has(String(s.id)));
-  }, [isModerator, assignedStateIds, availableStates]);
+  const { visibleStates, viewerReady, isModerator, hasSingleAssignedState, singleAssignedStateId } = useMemo(
+    () =>
+      getStateVisibility({
+        viewer: viewer ? { role: viewer.role, assigned_state_ids: viewer.assigned_state_ids } : null,
+        viewerLoading,
+        allStates: availableStates,
+      }),
+    [viewer, viewerLoading, availableStates]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -393,111 +398,157 @@ export default function App() {
     }
   }, [newLanguage, visibleStates]);
 
-  /** When newState changes, reset newLoksabha and newAssembly. Skip when restoring from edit. */
+  // Moderator UX: lock state selection to assigned states (and avoid out-of-scope selections).
   useEffect(() => {
-    if (skipLoksabhaResetCountRef.current > 0) {
-      skipLoksabhaResetCountRef.current -= 1;
-      return;
-    }
-    setNewLoksabha([]);
-    setNewAssembly([]);
-  }, [newState]);
+    if (!viewerReady || !isModerator) return;
+    const allowedIds = visibleStates.map((s) => String(s.id));
+    if (allowedIds.length === 0) return;
 
-  /** When newLoksabha changes, reset newAssembly. Skip when restoring from edit. */
-  useEffect(() => {
-    if (skipLoksabhaResetCountRef.current > 0) {
-      skipLoksabhaResetCountRef.current -= 1;
-      return;
-    }
-    setNewAssembly([]);
-  }, [newLoksabha]);
-
-  // Moderator UX: lock state selection to assigned states.
-  useEffect(() => {
-    if (!isModerator) return;
-    if (assignedStateIds.length === 0) return;
-    if (moderatorHasSingleState) {
-      const only = assignedStateIds[0];
-      if (newState.length !== 1 || newState[0] !== only) {
-        setNewState([only]);
-      }
+    if (hasSingleAssignedState && singleAssignedStateId) {
+      const only = singleAssignedStateId;
+      if (newState.length !== 1 || newState[0] !== only) setNewState([only]);
       if (filterState !== 'ALL' && filterState !== only) setFilterState(only);
-    } else {
-      // Remove any states not in assigned list (and prevent ALL selection).
-      const allowed = new Set(assignedStateIds);
-      const cleaned = newState.filter((id) => id !== 'ALL' && allowed.has(String(id)));
-      if (cleaned.length !== newState.length) setNewState(cleaned);
-      if (filterState !== 'ALL' && !allowed.has(filterState)) setFilterState('ALL');
+      return;
     }
-  }, [isModerator, moderatorHasSingleState, assignedStateIds, newState, filterState]);
+
+    const allowed = new Set(allowedIds);
+    const cleaned = newState.filter((id) => id !== 'ALL' && allowed.has(String(id)));
+    if (cleaned.length !== newState.length) setNewState(cleaned);
+    if (filterState !== 'ALL' && !allowed.has(filterState)) setFilterState('ALL');
+  }, [viewerReady, isModerator, hasSingleAssignedState, singleAssignedStateId, visibleStates, newState, filterState]);
+
+  const selectedStateKey = useMemo(() => {
+    const ids = newState.includes('ALL') ? visibleStates.map((s) => String(s.id)) : newState.filter((v) => v !== 'ALL');
+    const uniq = Array.from(new Set(ids.map(String).filter(Boolean)));
+    uniq.sort();
+    return uniq.join(',');
+  }, [newState, visibleStates]);
+
+  const loksabhaReqIdRef = useRef(0);
 
   /** Fetch Lok Sabha when state selection changes. Uses integer IDs for Supabase query. */
   useEffect(() => {
-    const selectedStateIds = newState.includes('ALL') ? availableStates.map((s) => s.id) : newState.filter((v) => v !== 'ALL');
-    if (selectedStateIds.length === 0) {
+    const ids = selectedStateKey ? selectedStateKey.split(',').filter(Boolean) : [];
+    if (ids.length === 0) {
       setAvailableLoksabhas([]);
+      setNewLoksabha([]);
+      setAvailableAssemblies([]);
+      setNewAssembly([]);
       setLoksabhasLoading(false);
       return;
     }
-    const fetchLoksabhas = async () => {
-      setLoksabhasLoading(true);
-      const idsAsNumbers = selectedStateIds.map((id) => Number(id)).filter((n) => !Number.isNaN(n));
+
+    const reqId = ++loksabhaReqIdRef.current;
+    setLoksabhasLoading(true);
+    (async () => {
+      const idsAsNumbers = ids.map((id) => Number(id)).filter((n) => Number.isFinite(n));
       if (idsAsNumbers.length === 0) {
-        setAvailableLoksabhas([]);
-        setLoksabhasLoading(false);
+        if (reqId === loksabhaReqIdRef.current) {
+          setAvailableLoksabhas([]);
+          setNewLoksabha([]);
+          setAvailableAssemblies([]);
+          setNewAssembly([]);
+          setLoksabhasLoading(false);
+        }
         return;
       }
+
       const { data, error } = await supabase.from('loksabha').select('*').in('state_id', idsAsNumbers);
+      if (reqId !== loksabhaReqIdRef.current) return;
+
       if (error) {
         if (__DEV__) console.error('fetchLoksabhas error:', error.message);
         setAvailableLoksabhas([]);
-      } else {
-        const raw = data ?? [];
-        const mapped = raw.map((r: Record<string, unknown>) => ({
+        setNewLoksabha([]);
+        setAvailableAssemblies([]);
+        setNewAssembly([]);
+        setLoksabhasLoading(false);
+        return;
+      }
+
+      const raw = data ?? [];
+      const mapped = raw
+        .map((r: Record<string, unknown>) => ({
           id: String(r.id ?? ''),
           name: String(r.name ?? r.loksabha_name ?? ''),
           state_id: String(r.state_id ?? r.state ?? ''),
-        })).filter((l) => l.id && l.name);
-        setAvailableLoksabhas(mapped);
-      }
+        }))
+        .filter((l) => l.id && l.name);
+      setAvailableLoksabhas(mapped);
       setLoksabhasLoading(false);
-    };
-    fetchLoksabhas();
-  }, [newState, availableStates]);
+    })();
+  }, [selectedStateKey]);
+
+  // Prune selected LS to only those still available (preserve when possible).
+  useEffect(() => {
+    if (availableLoksabhas.length === 0) return;
+    const allowed = new Set(availableLoksabhas.map((l) => String(l.id)));
+    const cleaned = newLoksabha.filter((id) => id !== 'ALL' && allowed.has(String(id)));
+    if (cleaned.length !== newLoksabha.length) setNewLoksabha(cleaned);
+  }, [availableLoksabhas, newLoksabha]);
+
+  const selectedLoksabhaKey = useMemo(() => {
+    const ids = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => String(l.id)) : newLoksabha.filter((v) => v !== 'ALL');
+    const uniq = Array.from(new Set(ids.map(String).filter(Boolean)));
+    uniq.sort();
+    return uniq.join(',');
+  }, [newLoksabha, availableLoksabhas]);
+
+  const assemblyReqIdRef = useRef(0);
 
   /** Fetch Assembly when Lok Sabha selection changes. Uses integer IDs for Supabase query. */
   useEffect(() => {
-    const selectedLoksabhaIds = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => l.id) : newLoksabha.filter((v) => v !== 'ALL');
-    if (selectedLoksabhaIds.length === 0) {
+    const ids = selectedLoksabhaKey ? selectedLoksabhaKey.split(',').filter(Boolean) : [];
+    if (ids.length === 0) {
       setAvailableAssemblies([]);
+      setNewAssembly([]);
       setAssembliesLoading(false);
       return;
     }
-    const fetchAssemblies = async () => {
-      setAssembliesLoading(true);
-      const idsAsNumbers = selectedLoksabhaIds.map((id) => Number(id)).filter((n) => !Number.isNaN(n));
+
+    const reqId = ++assemblyReqIdRef.current;
+    setAssembliesLoading(true);
+    (async () => {
+      const idsAsNumbers = ids.map((id) => Number(id)).filter((n) => Number.isFinite(n));
       if (idsAsNumbers.length === 0) {
-        setAvailableAssemblies([]);
-        setAssembliesLoading(false);
+        if (reqId === assemblyReqIdRef.current) {
+          setAvailableAssemblies([]);
+          setNewAssembly([]);
+          setAssembliesLoading(false);
+        }
         return;
       }
       const { data, error } = await supabase.from('assembly').select('*').in('loksabha_id', idsAsNumbers);
+      if (reqId !== assemblyReqIdRef.current) return;
+
       if (error) {
         if (__DEV__) console.error('fetchAssemblies error:', error.message);
         setAvailableAssemblies([]);
-      } else {
-        const raw = data ?? [];
-        const mapped = raw.map((r: Record<string, unknown>) => ({
+        setNewAssembly([]);
+        setAssembliesLoading(false);
+        return;
+      }
+
+      const raw = data ?? [];
+      const mapped = raw
+        .map((r: Record<string, unknown>) => ({
           id: String(r.id ?? ''),
           name: String(r.name ?? r.assembly_name ?? ''),
           loksabha_id: String(r.loksabha_id ?? r.loksabhaId ?? r.loksabha ?? ''),
-        })).filter((a) => a.id && a.name);
-        setAvailableAssemblies(mapped);
-      }
+        }))
+        .filter((a) => a.id && a.name);
+      setAvailableAssemblies(mapped);
       setAssembliesLoading(false);
-    };
-    fetchAssemblies();
-  }, [newLoksabha, availableLoksabhas]);
+    })();
+  }, [selectedLoksabhaKey]);
+
+  // Prune selected assemblies to only those still available (preserve when possible).
+  useEffect(() => {
+    if (availableAssemblies.length === 0) return;
+    const allowed = new Set(availableAssemblies.map((a) => String(a.id)));
+    const cleaned = newAssembly.filter((id) => id !== 'ALL' && allowed.has(String(id)));
+    if (cleaned.length !== newAssembly.length) setNewAssembly(cleaned);
+  }, [availableAssemblies, newAssembly]);
 
   const getStatus = (sDate: string, eDate: string) => {
     const now = currentTime.getTime();
@@ -1136,17 +1187,26 @@ export default function App() {
                   </div>
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-1">
                     <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                      <MultiSelectDropdown
-                        label="State"
-                        options={availableStates}
-                        selected={newState}
-                        onSelect={setNewState}
-                        getValue={(s) => s.id}
-                        getLabel={(s) => s.name}
-                        allLabel="All States"
-                        loading={statesLoading}
-                        searchable
-                      />
+                      {hasSingleAssignedState && singleAssignedStateId ? (
+                        <div>
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">State</span>
+                          <div className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
+                            {visibleStates[0]?.name ?? '—'}
+                          </div>
+                        </div>
+                      ) : (
+                        <MultiSelectDropdown
+                          label="State"
+                          options={viewerReady ? visibleStates : []}
+                          selected={newState}
+                          onSelect={setNewState}
+                          getValue={(s) => s.id}
+                          getLabel={(s) => s.name}
+                          allLabel="All States"
+                          loading={statesLoading || !viewerReady}
+                          searchable
+                        />
+                      )}
                     </div>
                     <div className="rounded-2xl border border-slate-200 bg-white p-3">
                       <MultiSelectDropdown
@@ -1262,14 +1322,14 @@ export default function App() {
             <option value="ALL">All Parties</option>
             {PARTIES_DATA.map(p => <option key={p.id} value={p.id}>{p.shortName}</option>)}
           </select>
-          {moderatorHasSingleState ? (
+          {hasSingleAssignedState && singleAssignedStateId ? (
             <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
               {visibleStates[0]?.name ?? '—'}
             </div>
           ) : (
             <select value={filterState} onChange={e => setFilterState(e.target.value)} className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm">
               <option value="ALL">All States</option>
-              {(isModerator ? visibleStates : availableStates).map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+              {(viewerReady ? visibleStates : []).map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
             </select>
           )}
         </div>
@@ -1289,7 +1349,7 @@ export default function App() {
               </select>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              {moderatorHasSingleState ? (
+              {hasSingleAssignedState && singleAssignedStateId ? (
                 <div>
                   <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">State</span>
                   <div className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
@@ -1299,13 +1359,13 @@ export default function App() {
               ) : (
                 <MultiSelectDropdown
                   label="State"
-                  options={isModerator ? visibleStates : availableStates}
+                  options={viewerReady ? visibleStates : []}
                   selected={newState}
                   onSelect={setNewState}
                   getValue={(s) => s.id}
                   getLabel={(s) => s.name}
                   allLabel="All States"
-                  loading={statesLoading}
+                  loading={statesLoading || !viewerReady}
                   searchable
                 />
               )}

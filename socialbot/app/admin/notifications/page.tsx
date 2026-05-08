@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
+import { getStateVisibility } from '@/lib/admin/state-filter';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
 
@@ -63,6 +64,7 @@ export default function NotificationBroadcastCenterPage() {
 
   const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator'; assigned_state_ids: number[] } | null>(null);
   const isModerator = viewer?.role === 'moderator';
+  const [viewerLoading, setViewerLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,6 +81,8 @@ export default function NotificationBroadcastCenterPage() {
         if (role) setViewer({ role, assigned_state_ids: ids });
       } catch {
         /* ignore */
+      } finally {
+        if (!cancelled) setViewerLoading(false);
       }
     })();
     return () => {
@@ -116,18 +120,17 @@ export default function NotificationBroadcastCenterPage() {
 
   const [toast, setToast] = useState<string | null>(null);
 
-  const visibleStates = useMemo(() => {
-    if (!isModerator) return states;
-    const allowed = new Set((viewer?.assigned_state_ids ?? []).map(String));
-    return states.filter((s) => allowed.has(String(s.id)));
-  }, [isModerator, viewer?.assigned_state_ids, states]);
-
-  const moderatorHasSingleState = isModerator && (viewer?.assigned_state_ids?.length ?? 0) === 1;
-
-  const selectedState = useMemo(
-    () => visibleStates.find((s) => String(s.id) === String(stateId)) ?? states.find((s) => String(s.id) === String(stateId)),
-    [visibleStates, states, stateId]
+  const { visibleStates, viewerReady, hasSingleAssignedState: moderatorHasSingleState, singleAssignedStateId } = useMemo(
+    () =>
+      getStateVisibility({
+        viewer: viewer ? { role: viewer.role, assigned_state_ids: viewer.assigned_state_ids } : null,
+        viewerLoading,
+        allStates: states,
+      }),
+    [viewer, viewerLoading, states]
   );
+
+  const selectedState = useMemo(() => visibleStates.find((s) => String(s.id) === String(stateId)), [visibleStates, stateId]);
   const selectedLoksabha = useMemo(
     () => loksabhas.find((l) => String(l.id) === String(loksabhaId)),
     [loksabhas, loksabhaId]
@@ -149,6 +152,12 @@ export default function NotificationBroadcastCenterPage() {
     if (stateId !== next) setStateId(next);
     if (allWorkers) setAllWorkers(false);
   }, [isModerator, viewer?.assigned_state_ids, stateId, allWorkers]);
+
+  // Safe-by-default: until viewer is resolved, don't show "all states" list.
+  useEffect(() => {
+    if (viewerReady) return;
+    if (stateId) setStateId('');
+  }, [viewerReady, stateId]);
 
   useEffect(() => {
     setImagePreviewBroken(false);
@@ -481,7 +490,7 @@ export default function NotificationBroadcastCenterPage() {
           </div>
           <div>
             <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">State</span>
-            {moderatorHasSingleState ? (
+            {moderatorHasSingleState && singleAssignedStateId ? (
               <div className={`${selectClass} flex items-center`}>
                 {selectedState?.name ?? '—'}
               </div>
@@ -490,7 +499,7 @@ export default function NotificationBroadcastCenterPage() {
                 className={selectClass}
                 value={stateId}
                 onChange={(e) => setStateId(e.target.value)}
-              disabled={allWorkers || geoLoading}
+                disabled={allWorkers || geoLoading || !viewerReady}
               >
                 <option value="">Any state</option>
                 {visibleStates.map((s) => (
