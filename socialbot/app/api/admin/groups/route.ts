@@ -494,7 +494,7 @@ export async function POST(request: NextRequest) {
   const grp = await resolveGroup(admin, tag, { createIfMissing: true, createdBy: auth.user.id });
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
 
-  if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
+  if (auth.role === 'moderator') {
     // Ownership-based access control: moderators can only use groups created by themselves.
     try {
       requireOwnership(grp.created_by, auth.user.id);
@@ -584,7 +584,7 @@ export async function PATCH(request: NextRequest) {
     if (!Number.isFinite(gid)) return NextResponse.json({ error: 'Invalid group id in add[]' }, { status: 400 });
     const grp = await getGroupById(admin, gid);
     if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
-    if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
+    if (auth.role === 'moderator') {
       try {
         requireOwnership(grp.created_by, auth.user.id);
       } catch {
@@ -598,7 +598,7 @@ export async function PATCH(request: NextRequest) {
     }
     next = gid;
   } else if (remove.length > 0 && current != null) {
-    if (auth.role === 'moderator' || auth.role === 'campaign_manager') {
+    if (auth.role === 'moderator') {
       const grp = await getGroupById(admin, current);
       if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
       try {
