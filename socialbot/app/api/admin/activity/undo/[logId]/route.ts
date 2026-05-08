@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { resolveScope } from '@/lib/rbac/unified-scope-engine';
 import { toNumArray, toStrArray } from '@/lib/rbac/require';
+import { trackRbacEvent } from '@/lib/rbac/rbac-observability-engine';
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -79,6 +80,20 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ logId: st
       }
     }
   }
+
+  void trackRbacEvent({
+    user_id: auth.user.id,
+    role: auth.role,
+    event_type: 'undo',
+    action: 'activity.undo',
+    resource_type: 'admin_logs',
+    resource_id: logId,
+    result: 'allowed',
+    scope_state_ids: Array.isArray((logRow as any).scope_state_ids) ? (logRow as any).scope_state_ids : [],
+    scope_group_ids: Array.isArray((logRow as any).scope_group_ids) ? (logRow as any).scope_group_ids : [],
+    severity: 'info',
+    metadata: { resource_type: String((logRow as any).resource_type ?? ''), action_type: String((logRow as any).action_type ?? '') },
+  });
 
   const resourceType = String((logRow as any).resource_type ?? '').trim();
   const actionType = String((logRow as any).action_type ?? '').trim();

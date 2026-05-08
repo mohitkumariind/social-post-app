@@ -1,5 +1,7 @@
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource, resolveScope, type UnifiedResource, type UnifiedUser } from '@/lib/rbac/unified-scope-engine';
+import { evaluateAnomaliesForUser, trackRbacEvent } from '@/lib/rbac/rbac-observability-engine';
+import { emitRbacAlerts } from '@/lib/rbac/rbac-alert-engine';
 import { toNumArray, toStrArray } from '@/lib/rbac/require';
 
 export type MutationAction =
@@ -34,6 +36,40 @@ function auditDenied(args: {
   details?: Record<string, unknown>;
 }) {
   const scope = resolveScope(args.user);
+  void trackRbacEvent({
+    user_id: args.user.id,
+    role: args.user.role,
+    event_type: 'mutation',
+    action: args.action,
+    resource_type: args.resourceType,
+    resource_id: args.resourceId ?? null,
+    result: 'denied',
+    scope_state_ids: scope.type === 'STATE' ? scope.states : [],
+    scope_group_ids: scope.type === 'GROUP' ? scope.groups : [],
+    severity: 'warning',
+    metadata: { denied: true, reason: args.reason, ...(args.details ?? {}) },
+  });
+  void (async () => {
+    const signals = await evaluateAnomaliesForUser({ user_id: args.user.id, role: args.user.role });
+    if (signals.length > 0) {
+      for (const s of signals) {
+        void trackRbacEvent({
+          user_id: args.user.id,
+          role: args.user.role,
+          event_type: s.event_type,
+          action: s.action,
+          resource_type: args.resourceType,
+          resource_id: args.resourceId ?? null,
+          result: 'denied',
+          severity: s.severity,
+          scope_state_ids: scope.type === 'STATE' ? scope.states : [],
+          scope_group_ids: scope.type === 'GROUP' ? scope.groups : [],
+          metadata: s.metadata,
+        });
+      }
+      await emitRbacAlerts({ user_id: args.user.id, role: args.user.role, signals });
+    }
+  })();
   void logAdminAction({
     actor_user_id: args.user.id,
     actor_role: args.user.role,

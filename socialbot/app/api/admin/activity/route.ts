@@ -3,6 +3,7 @@ import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate'
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
 import { RbacError, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
+import { trackRbacEvent } from '@/lib/rbac/rbac-observability-engine';
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -87,6 +88,20 @@ export async function GET(request: NextRequest) {
   }
   const rows = (data ?? []) as any[];
   const nextCursorCreatedAt = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
+
+  void trackRbacEvent({
+    user_id: auth.user.id,
+    role: auth.role,
+    event_type: 'read',
+    action: 'activity.read',
+    resource_type: 'admin_logs',
+    resource_id: null,
+    result: 'allowed',
+    scope_state_ids: auth.role === 'moderator' ? auth.assigned_state_ids : [],
+    scope_group_ids: auth.role === 'campaign_manager' ? (auth.assigned_group_ids ?? []) : [],
+    severity: 'info',
+    metadata: { limit, cursorCreatedAt: cursorCreatedAt || null },
+  });
 
   return json({ logs: rows, next_cursor_created_at: nextCursorCreatedAt, schemaMissing: false });
 }
