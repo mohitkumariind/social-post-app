@@ -660,9 +660,10 @@ export default function DashboardScreen() {
       const runNumeric = async () =>
         await supabase
           .from('events')
-          .select('name,start,end,status,deleted_at,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids')
-          .in('status', ['published', 'scheduled_publish'])
+          .select('name,start,end,status,deleted_at,scheduled_at,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids')
+          .eq('status', 'published')
           .is('deleted_at', null)
+          .or(`scheduled_at.is.null,scheduled_at.lte.${new Date().toISOString()}`)
           .order('end', { ascending: true })
           .limit(500);
 

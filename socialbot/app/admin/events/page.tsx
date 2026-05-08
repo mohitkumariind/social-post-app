@@ -54,6 +54,7 @@ interface CampaignEvent {
   name: string;
   start: string;
   end: string;
+  scheduled_at?: string | null;
   party?: string[];
   state?: string[];
   loksabha?: string[];
@@ -239,6 +240,7 @@ export default function App() {
   const [newName, setNewName] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [scheduledAt, setScheduledAt] = useState<string>(''); // datetime-local
   const [newParty, setNewParty] = useState<string[]>([]);
   const [newState, setNewState] = useState<string[]>([]);
   const [newLoksabha, setNewLoksabha] = useState<string[]>([]);
@@ -613,6 +615,14 @@ export default function App() {
     const startVal = `${startDate}T00:00:00Z`;
     const endVal = `${endDate}T23:59:59Z`;
     const payload: Record<string, unknown> = { name: newName, start: startVal, end: endVal, captions: [] };
+    if (scheduledAt) {
+      const iso = new Date(scheduledAt).toISOString();
+      if (iso <= new Date().toISOString()) {
+        alert('scheduled_at must be a future date/time');
+        return;
+      }
+      payload.scheduled_at = iso;
+    }
     const partyArr = newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
     const stateArr = newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
     const loksabhaArr = newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
@@ -693,6 +703,7 @@ export default function App() {
     setNewName('');
     setStartDate('');
     setEndDate('');
+    setScheduledAt('');
     setNewParty([]);
     setNewState([]);
     setNewLoksabha([]);
@@ -994,6 +1005,14 @@ export default function App() {
       end: `${endDate}T23:59:59Z`,
       captions: editingEvent.captions,
     };
+    if (scheduledAt) {
+      const iso = new Date(scheduledAt).toISOString();
+      if (iso <= new Date().toISOString()) {
+        alert('scheduled_at must be a future date/time');
+        return;
+      }
+      updatePayload.scheduled_at = iso;
+    }
     const partyArr = newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
     const stateArr = newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
     const loksabhaArr = newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
@@ -1292,11 +1311,32 @@ export default function App() {
                       <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30" />
                     </div>
                   </div>
+                  <div className="flex gap-3 mt-4">
+                    <div className="flex flex-col flex-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Schedule publish</label>
+                      <input
+                        type="datetime-local"
+                        value={scheduledAt}
+                        onChange={(e) => setScheduledAt(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30"
+                      />
+                      <p className="mt-1 text-[10px] font-bold text-slate-400">Leave empty to publish instantly.</p>
+                    </div>
+                    <div className="flex flex-col justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setScheduledAt('')}
+                        className="h-[46px] px-4 rounded-2xl bg-slate-100 text-slate-700 font-bold text-xs hover:bg-slate-200"
+                      >
+                        Publish now
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
               <div className="shrink-0 px-4 sm:px-5 py-4 border-t border-slate-100 bg-white">
                 <div className="flex gap-4">
-                  <button onClick={() => { setEditingEvent(null); setNewName(''); setStartDate(''); setEndDate(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
+                  <button onClick={() => { setEditingEvent(null); setNewName(''); setStartDate(''); setEndDate(''); setScheduledAt(''); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
                   <button onClick={handleSaveEvent} disabled={!newName.trim() || !startDate || !endDate} className="flex-1 py-3 sm:py-4 bg-blue-600 text-white rounded-2xl font-bold disabled:opacity-30">Save</button>
                 </div>
               </div>
@@ -1424,6 +1464,15 @@ export default function App() {
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-[9px] font-black text-rose-400 uppercase tracking-widest mb-1">Expiry</span>
               <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Schedule publish</span>
+              <input type="datetime-local" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
+              <div className="mt-2 flex justify-end">
+                <button type="button" onClick={() => setScheduledAt('')} className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-700">
+                  Publish now
+                </button>
+              </div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
               <MultiSelectDropdown

@@ -15,6 +15,14 @@ function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
+function parseFutureScheduledAt(input: unknown): { scheduled_at: string | null; shouldSchedule: boolean } | { error: string } {
+  if (input == null || String(input).trim() === '') return { scheduled_at: null, shouldSchedule: false };
+  const iso = new Date(String(input)).toISOString();
+  const nowIso = new Date().toISOString();
+  if (iso <= nowIso) return { error: 'scheduled_at must be in the future' };
+  return { scheduled_at: iso, shouldSchedule: true };
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
@@ -126,6 +134,20 @@ export async function POST(request: NextRequest) {
   // Always set owner on creation (admin + moderator).
   payload.created_by = auth.user.id;
 
+  // Scheduled publishing: store scheduled_at, set status.
+  const schedParsed = parseFutureScheduledAt((payload as any).scheduled_at);
+  if ('error' in schedParsed) return json({ error: schedParsed.error }, 400);
+  (payload as any).scheduled_at = schedParsed.scheduled_at;
+  if (schedParsed.shouldSchedule) {
+    (payload as any).status = 'scheduled_publish';
+    (payload as any).published_at = null;
+    (payload as any).published_by = null;
+  } else {
+    (payload as any).status = 'published';
+    (payload as any).published_at = new Date().toISOString();
+    (payload as any).published_by = auth.user.id;
+  }
+
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
@@ -135,7 +157,7 @@ export async function POST(request: NextRequest) {
   void logAdminAction({
     actor_user_id: auth.user.id,
     actor_role: auth.role,
-    action_type: 'events.create',
+    action_type: 'event.created',
     resource_type: 'events',
     resource_id: String((data as any)?.id ?? ''),
     resource_name: String((data as any)?.name ?? ''),
@@ -144,6 +166,7 @@ export async function POST(request: NextRequest) {
     severity: 'info',
     undoable: true,
     scope_state_ids: toNumArray((data as any)?.state_id),
+    metadata: (data as any)?.scheduled_at ? { scheduled_at: (data as any).scheduled_at } : {},
   });
 
   return json({ event: data });
@@ -233,6 +256,25 @@ export async function PATCH(request: NextRequest) {
   if (!before) return json({ error: 'Not found' }, 404);
   if ((before as any).deleted_at != null) return json({ error: 'Not found' }, 404);
 
+  // Scheduled publishing input: if scheduled_at is explicitly provided, apply schedule rules.
+  if (Object.prototype.hasOwnProperty.call(patch, 'scheduled_at')) {
+    const v = (patch as any).scheduled_at;
+    if (v == null || String(v).trim() === '') {
+      // Publish now: clear schedule and publish immediately.
+      (patch as any).scheduled_at = null;
+      (patch as any).status = 'published';
+      (patch as any).published_at = new Date().toISOString();
+      (patch as any).published_by = auth.user.id;
+    } else {
+      const parsed = parseFutureScheduledAt(v);
+      if ('error' in parsed) return json({ error: parsed.error }, 400);
+      (patch as any).scheduled_at = parsed.scheduled_at;
+      (patch as any).status = 'scheduled_publish';
+      (patch as any).published_at = null;
+      (patch as any).published_by = null;
+    }
+  }
+
   // Workflow guards + server-stamped timestamps (publish/archive/unpublish)
   const requestedStatus = patch.status != null ? String(patch.status).trim() : '';
   if (requestedStatus) {
@@ -270,12 +312,14 @@ export async function PATCH(request: NextRequest) {
   const afterStatus = String((data as any).status ?? '').trim();
   const actionType =
     beforeStatus !== afterStatus && afterStatus === 'published'
-      ? 'events.publish'
+      ? 'event.published'
       : beforeStatus !== afterStatus && afterStatus === 'archived'
-        ? 'events.archive'
+        ? 'event.archived'
         : beforeStatus !== afterStatus && afterStatus === 'draft'
-          ? 'events.unpublish'
-          : 'events.update';
+          ? 'event.unpublished'
+          : beforeStatus !== afterStatus && afterStatus === 'scheduled_publish'
+            ? 'event.scheduled_publish'
+            : 'event.updated';
 
   void logAdminAction({
     actor_user_id: auth.user.id,
@@ -289,6 +333,7 @@ export async function PATCH(request: NextRequest) {
     severity: 'info',
     undoable: true,
     scope_state_ids: toNumArray((data as any)?.state_id ?? (before as any)?.state_id),
+    metadata: (data as any)?.scheduled_at ? { scheduled_at: (data as any).scheduled_at } : {},
   });
 
   return json({ event: data });
