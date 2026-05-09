@@ -43,6 +43,13 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
+  if (auth.role === 'admin' && !admin) {
+    // Fail closed for admin list APIs: without service-role, RLS can degrade to own-row-only.
+    return NextResponse.json(
+      { error: 'Admin list access requires SUPABASE_SERVICE_ROLE_KEY' },
+      { status: 503 }
+    );
+  }
   const db = admin ?? supabase;
 
   const sp = request.nextUrl.searchParams;

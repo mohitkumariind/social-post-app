@@ -29,6 +29,12 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
+  if (auth.role === 'admin' && !admin) {
+    return NextResponse.json(
+      { error: 'Admin frame access requires SUPABASE_SERVICE_ROLE_KEY' },
+      { status: 503 }
+    );
+  }
   const db = admin ?? supabase;
 
   // Enforce scope BEFORE querying frames.

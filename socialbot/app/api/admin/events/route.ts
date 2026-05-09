@@ -42,6 +42,9 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
+  if (auth.role === 'admin' && !admin) {
+    return json({ error: 'Admin event access requires SUPABASE_SERVICE_ROLE_KEY' }, 503);
+  }
   const db = admin ?? supabase;
 
   const id = (request.nextUrl.searchParams.get('id') ?? '').trim();

@@ -27,81 +27,92 @@ export async function GET() {
   }
 
   const admin = createServiceRoleClient();
+  if (auth.role === 'admin' && !admin) {
+    // Fail closed for admin analytics: falling back to user client can become own-row-only under RLS.
+    return NextResponse.json(
+      { error: 'Admin analytics access requires SUPABASE_SERVICE_ROLE_KEY' },
+      { status: 503 }
+    );
+  }
   const db = admin ?? supabase;
 
+  const isAdmin = auth.role === 'admin';
   const scopedUser = {
     id: auth.user.id,
     role: auth.role,
     assigned_state_ids: auth.assigned_state_ids,
     assigned_group_ids: auth.assigned_group_ids,
   } as any;
-
   const allowed_profile_ids =
     auth.role === 'campaign_manager'
       ? await resolveAllowedProfileIdsForCampaignManager(db as any, auth.assigned_group_ids)
       : null;
 
-  const [
-    usersCountRes,
-    postsCountRes,
-    eventsCountRes,
-    newUsersRes,
-    recentPostsRes,
-    upcomingEventsRes,
-  ] = await Promise.all([
-    buildScopedAnalyticsQuery(
-      scopedUser,
-      db.from('profiles').select('id', { count: 'exact', head: true }),
-      'profiles',
-      { allowed_profile_ids: allowed_profile_ids ?? undefined }
-    ),
-    // Posts count (best-effort): exclude deleted/scheduled-not-due when columns exist.
-    (async () => {
-      const nowIso = new Date().toISOString();
-      const base = db
-        .from('posts')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'published')
-        .is('deleted_at', null)
-        .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`);
-      const r = await buildScopedAnalyticsQuery(scopedUser, base as any, 'posts');
-      if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
-        const fallback = db.from('posts').select('id', { count: 'exact', head: true });
-        return await buildScopedAnalyticsQuery(scopedUser, fallback as any, 'posts');
-      }
-      return r as any;
-    })(),
-    buildScopedAnalyticsQuery(scopedUser, db.from('events').select('id', { count: 'exact', head: true }) as any, 'events'),
-    buildScopedAnalyticsQuery(
-      scopedUser,
-      db.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', startOfTodayIso()),
-      'profiles',
-      { allowed_profile_ids: allowed_profile_ids ?? undefined }
-    ),
-    // Recent posts: admin-only (hide for moderator + campaign_manager)
-    auth.role === 'admin'
-      ? (async () => {
-          const nowIso = new Date().toISOString();
-          const r = await db
-            .from('posts')
-            .select('id,title,created_at')
-            .eq('status', 'published')
-            .is('deleted_at', null)
-            .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`)
-            .order('created_at', { ascending: false })
-            .limit(5);
-          if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
-            return await db.from('posts').select('id,title,created_at').order('created_at', { ascending: false }).limit(5);
-          }
-          return r as any;
-        })()
-      : ({ data: [], error: null } as any),
-    buildScopedAnalyticsQuery(
-      scopedUser,
-      db.from('events').select('id,name,end').order('end', { ascending: true }).limit(3) as any,
-      'events'
-    ),
-  ]);
+  const runProfilesCount = (createdTodayOnly: boolean) => {
+    let q = db.from('profiles').select('id', { count: 'exact', head: true });
+    if (createdTodayOnly) q = q.gte('created_at', startOfTodayIso());
+    if (isAdmin) return q as any;
+    return buildScopedAnalyticsQuery(scopedUser, q as any, 'profiles', {
+      allowed_profile_ids: allowed_profile_ids ?? undefined,
+    }) as any;
+  };
+
+  const runPostsCount = async () => {
+    const nowIso = new Date().toISOString();
+    const base = db
+      .from('posts')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'published')
+      .is('deleted_at', null)
+      .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`);
+    const r = isAdmin
+      ? (base as any)
+      : ((await buildScopedAnalyticsQuery(scopedUser, base as any, 'posts')) as any);
+    if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
+      const fallback = db.from('posts').select('id', { count: 'exact', head: true });
+      return isAdmin
+        ? (fallback as any)
+        : ((await buildScopedAnalyticsQuery(scopedUser, fallback as any, 'posts')) as any);
+    }
+    return r as any;
+  };
+
+  const runEventsCount = () => {
+    const q = db.from('events').select('id', { count: 'exact', head: true });
+    return isAdmin ? (q as any) : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events') as any);
+  };
+
+  const runUpcomingEvents = () => {
+    const q = db.from('events').select('id,name,end').order('end', { ascending: true }).limit(3);
+    return isAdmin ? (q as any) : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events') as any);
+  };
+
+  const runRecentPosts = async () => {
+    if (!isAdmin) return { data: [], error: null } as any;
+    const nowIso = new Date().toISOString();
+    const r = await db
+      .from('posts')
+      .select('id,title,created_at')
+      .eq('status', 'published')
+      .is('deleted_at', null)
+      .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
+      return (await db.from('posts').select('id,title,created_at').order('created_at', { ascending: false }).limit(5)) as any;
+    }
+    return r as any;
+  };
+
+  const [usersCountRes, postsCountRes, eventsCountRes, newUsersRes, recentPostsRes, upcomingEventsRes] =
+    await Promise.all([
+      runProfilesCount(false),
+      runPostsCount(),
+      runEventsCount(),
+      runProfilesCount(true),
+      runRecentPosts(),
+      runUpcomingEvents(),
+    ]);
 
   return NextResponse.json({
     totalUsers: typeof usersCountRes.count === 'number' ? usersCountRes.count : null,

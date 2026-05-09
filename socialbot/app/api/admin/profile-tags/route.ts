@@ -19,6 +19,12 @@ export async function GET() {
   }
 
   const admin = createServiceRoleClient();
+  if (auth.role === 'admin' && !admin) {
+    return NextResponse.json(
+      { error: 'Admin tag access requires SUPABASE_SERVICE_ROLE_KEY' },
+      { status: 503 }
+    );
+  }
   const db = admin ?? supabase;
 
   const scopedUser = {
