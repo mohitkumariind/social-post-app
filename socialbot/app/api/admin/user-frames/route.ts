@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { assertAdminRole, createServiceRoleClient, isAdmin, isCampaignManager, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
@@ -36,9 +36,8 @@ export async function GET(request: NextRequest) {
     );
   }
   const db = admin;
-  const isAdmin = auth.role === 'admin';
-  console.log('ROLE:', auth.role);
-  console.log('USING ADMIN RAW QUERY:', isAdmin);
+  const adminRole = isAdmin(auth);
+  if (adminRole) assertAdminRole(auth);
 
   // Enforce scope BEFORE querying frames.
   const scopedUser = {
@@ -49,12 +48,12 @@ export async function GET(request: NextRequest) {
   } as any;
 
   const allowed_profile_ids =
-    auth.role === 'campaign_manager' && admin
+    isCampaignManager(auth) && admin
       ? await resolveAllowedProfileIdsForCampaignManager(admin as any, auth.assigned_group_ids)
       : null;
 
   {
-    if (isAdmin) {
+    if (adminRole) {
       const { data: prof, error: profErr } = await db.from('profiles').select('id').eq('id', userId).maybeSingle();
       if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
       if (!prof) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { assertAdminRole, createServiceRoleClient, isAdmin, isCampaignManager, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireRole } from '@/lib/rbac/require';
@@ -26,9 +26,8 @@ export async function GET() {
     );
   }
   const db = admin;
-  const isAdmin = auth.role === 'admin';
-  console.log('ROLE:', auth.role);
-  console.log('USING ADMIN RAW QUERY:', isAdmin);
+  const adminRole = isAdmin(auth);
+  if (adminRole) assertAdminRole(auth);
 
   const scopedUser = {
     id: auth.user.id,
@@ -38,7 +37,7 @@ export async function GET() {
   } as any;
 
   const allowed_profile_ids =
-    auth.role === 'campaign_manager' && admin
+    isCampaignManager(auth) && admin
       ? await resolveAllowedProfileIdsForCampaignManager(admin as any, auth.assigned_group_ids)
       : null;
 
@@ -49,7 +48,7 @@ export async function GET() {
   let from = 0;
   for (;;) {
     let q: any = db.from('profiles').select('group_tags').order('id', { ascending: true }).range(from, from + pageSize - 1);
-    if (!isAdmin) {
+    if (!adminRole) {
       q = buildScopedQuery(scopedUser, q, 'profiles', {
         allowed_profile_ids: Array.isArray(allowed_profile_ids) ? allowed_profile_ids : undefined,
       });

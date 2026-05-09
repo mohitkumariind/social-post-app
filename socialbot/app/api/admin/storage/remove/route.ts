@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, isCampaignManager, isModerator, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import {
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
   if (!ALLOWED_BUCKETS.has(bucket)) {
     return NextResponse.json({ error: 'Invalid bucket' }, { status: 400 });
   }
-  if (auth.role === 'moderator') {
+  if (isModerator(auth)) {
     if (auth.assigned_state_ids.length === 0) {
       return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
     }
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Moderators can only remove user frames' }, { status: 403 });
     }
   }
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     if (bucket !== 'post-images') {
       return NextResponse.json({ error: 'campaign_manager can only remove post images' }, { status: 403 });
     }
@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Too many paths. Max ${SECURITY_LIMITS.storageRemovePaths}` }, { status: 400 });
   }
 
-  if (auth.role === 'moderator') {
+  if (isModerator(auth)) {
     // All paths must be under public/<userId>/ and user must belong to assigned state.
     const userIds = new Set<string>();
     for (const p of paths) {
@@ -124,7 +124,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     // All paths must be under public/events/<eventId>/ and event must be owned by campaign_manager.
     const eventIds = new Set<string>();
     for (const p of paths) {

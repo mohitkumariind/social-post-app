@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, isCampaignManager, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
@@ -69,9 +69,9 @@ export async function POST(request: NextRequest) {
   } as any;
 
   const allowed_profile_ids =
-    auth.role === 'campaign_manager' ? await resolveAllowedProfileIdsForCampaignManager(admin as any, auth.assigned_group_ids) : null;
+    isCampaignManager(auth) ? await resolveAllowedProfileIdsForCampaignManager(admin as any, auth.assigned_group_ids) : null;
 
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     // Strict: ALL requested ids must be within assigned groups (deny partial writes).
     const q = buildScopedQuery(
       scopedUser,
@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
     affected_users_count: ids.length,
     severity: 'info',
     undoable: false,
-    scope_group_ids: auth.role === 'campaign_manager' ? (auth.assigned_group_ids ?? []) : [],
+    scope_group_ids: isCampaignManager(auth) ? (auth.assigned_group_ids ?? []) : [],
     scope_user_ids: ids,
   });
 

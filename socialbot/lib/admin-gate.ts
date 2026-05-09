@@ -37,9 +37,6 @@ export async function validateAdminSession(
     error,
   } = await supabase.auth.getUser();
   if (error || !user) return { ok: false, status: 401 };
-  if (isAdminEmailBypass(user.email)) {
-    return { ok: true, user, role: 'admin', assigned_state_ids: [], assigned_group_ids: [] };
-  }
   const { role, assigned_state_ids, assigned_group_ids } = await fetchProfileAccessForMiddleware(user.id, supabase);
   if (isAdminRole(role)) return { ok: true, user, role: 'admin', assigned_state_ids, assigned_group_ids };
   if (isModeratorRole(role)) return { ok: true, user, role: 'moderator', assigned_state_ids, assigned_group_ids: [] };
@@ -56,4 +53,29 @@ export function createServiceRoleClient(): SupabaseClient | null {
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+}
+
+export type VerifiedAdminAuth = {
+  role: AdminRole;
+  user: { id: string };
+  assigned_state_ids: number[];
+  assigned_group_ids: string[];
+};
+
+export function isAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
+  return auth.role === 'admin';
+}
+
+export function isModerator(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
+  return auth.role === 'moderator';
+}
+
+export function isCampaignManager(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
+  return auth.role === 'campaign_manager';
+}
+
+export function assertAdminRole(auth: Pick<VerifiedAdminAuth, 'role'>): void {
+  if (!isAdmin(auth)) {
+    throw new Error('RBAC assertion failed: expected admin role');
+  }
 }

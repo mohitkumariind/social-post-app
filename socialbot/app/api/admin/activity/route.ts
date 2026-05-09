@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import {
+  assertAdminRole,
+  createServiceRoleClient,
+  isAdmin,
+  isCampaignManager,
+  isModerator,
+  validateAdminSession,
+} from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
@@ -38,9 +45,8 @@ export async function GET(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
-  const isAdmin = auth.role === 'admin';
-  console.log('ROLE:', auth.role);
-  console.log('USING ADMIN RAW QUERY:', isAdmin);
+  const adminRole = isAdmin(auth);
+  if (adminRole) assertAdminRole(auth);
 
   const sp = request.nextUrl.searchParams;
   const limit = toInt(sp.get('limit'), 50);
@@ -72,7 +78,7 @@ export async function GET(request: NextRequest) {
     query = query.or(`resource_name.ilike.%${q}%,actor_user_id.eq.${q}`);
   }
 
-  if (!isAdmin) {
+  if (!adminRole) {
     query = buildScopedQuery(
       {
         id: auth.user.id,
@@ -103,8 +109,8 @@ export async function GET(request: NextRequest) {
     resource_type: 'admin_logs',
     resource_id: null,
     result: 'allowed',
-    scope_state_ids: auth.role === 'moderator' ? auth.assigned_state_ids : [],
-    scope_group_ids: auth.role === 'campaign_manager' ? (auth.assigned_group_ids ?? []) : [],
+    scope_state_ids: isModerator(auth) ? auth.assigned_state_ids : [],
+    scope_group_ids: isCampaignManager(auth) ? (auth.assigned_group_ids ?? []) : [],
     severity: 'info',
     metadata: { limit, cursorCreatedAt: cursorCreatedAt || null },
   });

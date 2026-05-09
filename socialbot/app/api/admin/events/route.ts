@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import {
+  assertAdminRole,
+  createServiceRoleClient,
+  isAdmin,
+  isCampaignManager,
+  isModerator,
+  validateAdminSession,
+} from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
@@ -46,9 +53,8 @@ export async function GET(request: NextRequest) {
     return json({ error: 'Admin event access requires SUPABASE_SERVICE_ROLE_KEY' }, 503);
   }
   const db = admin;
-  const isAdmin = auth.role === 'admin';
-  console.log('ROLE:', auth.role);
-  console.log('USING ADMIN RAW QUERY:', isAdmin);
+  const adminRole = isAdmin(auth);
+  if (adminRole) assertAdminRole(auth);
 
   const id = (request.nextUrl.searchParams.get('id') ?? '').trim();
   const name = (request.nextUrl.searchParams.get('name') ?? '').trim();
@@ -102,7 +108,7 @@ export async function GET(request: NextRequest) {
   let q = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit) as any;
   if (!includeDeleted) q = q.is('deleted_at', null);
   if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
-  if (!isAdmin) {
+  if (!adminRole) {
     q = buildScopedQuery(
       { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
       q,
@@ -147,7 +153,7 @@ export async function POST(request: NextRequest) {
     if (!decision.ok) return json({ error: decision.reason }, 403);
   }
 
-  if (auth.role === 'moderator') {
+  if (isModerator(auth)) {
     const stateIds = toNumArray(payload.state_id);
     if (stateIds.length === 0) {
       return json({ error: 'Forbidden: moderator event must target at least one state' }, 403);
@@ -163,7 +169,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     const tg = Array.isArray(payload.target_groups) ? payload.target_groups : [];
     if (tg.length === 0) return json({ error: 'Forbidden: campaign_manager must target_groups' }, 403);
     // No global/state-wide targeting for campaign_manager.
@@ -264,7 +270,7 @@ export async function PATCH(request: NextRequest) {
     if (!decision.ok) return json({ error: decision.reason }, 403);
   }
 
-  if (auth.role === 'moderator') {
+  if (isModerator(auth)) {
     const { data: ev, error: evErr } = await admin
       .from('events')
       .select('id,state_id,target_groups,created_by')
@@ -292,7 +298,7 @@ export async function PATCH(request: NextRequest) {
     if (patch.created_by != null) return json({ error: 'Forbidden' }, 403);
   }
 
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     const { data: ev, error: evErr } = await admin.from('events').select('id,created_by').eq('id', id).maybeSingle();
     if (evErr) return json({ error: evErr.message }, 500);
     try {
@@ -446,7 +452,7 @@ export async function DELETE(request: NextRequest) {
     if (!decision.ok) return json({ error: decision.reason }, 403);
   }
 
-  if (auth.role === 'moderator') {
+  if (isModerator(auth)) {
     const { data: ev, error: evErr } = await admin.from('events').select('id,state_id,created_by').eq('id', id).maybeSingle();
     if (evErr) return json({ error: evErr.message }, 500);
     try {
@@ -458,7 +464,7 @@ export async function DELETE(request: NextRequest) {
     }
   }
 
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     const { data: ev, error: evErr } = await admin.from('events').select('id,created_by').eq('id', id).maybeSingle();
     if (evErr) return json({ error: evErr.message }, 500);
     try {

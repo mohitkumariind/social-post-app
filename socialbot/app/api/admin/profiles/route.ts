@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import {
+  assertAdminRole,
+  createServiceRoleClient,
+  isAdmin,
+  isCampaignManager,
+  isModerator,
+  validateAdminSession,
+} from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
@@ -32,7 +39,7 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
+  if (isModerator(auth) && auth.assigned_state_ids.length === 0) {
     return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
   try {
@@ -51,9 +58,8 @@ export async function GET(request: NextRequest) {
     );
   }
   const db = admin;
-  const isAdmin = auth.role === 'admin';
-  console.log('ROLE:', auth.role);
-  console.log('USING ADMIN RAW QUERY:', isAdmin);
+  const adminRole = isAdmin(auth);
+  if (adminRole) assertAdminRole(auth);
 
   const sp = request.nextUrl.searchParams;
   const party = (sp.get('party') ?? '').trim();
@@ -61,7 +67,8 @@ export async function GET(request: NextRequest) {
   const loksabhaIdRaw = (sp.get('loksabha_id') ?? '').trim();
   const assemblyIdRaw = (sp.get('assembly_id') ?? '').trim();
   const searchQueryRaw = (sp.get('search_query') ?? '').trim();
-  const limit = clampLimit(sp.get('limit'), API_DEFAULT_LIMIT, API_MAX_LIMIT);
+  const requestedLimit = clampLimit(sp.get('limit'), API_DEFAULT_LIMIT, API_MAX_LIMIT);
+  const limit = adminRole ? API_MAX_LIMIT : requestedLimit;
   const cursorCreatedAt = (sp.get('cursor_created_at') ?? '').trim();
   const cursorId = (sp.get('cursor_id') ?? '').trim();
 
@@ -71,12 +78,12 @@ export async function GET(request: NextRequest) {
   const buildQuery = (orderBy: 'created_at' | 'id') => {
     // Moderators must not receive personal info from this endpoint.
     const selectCols =
-      auth.role === 'moderator' || auth.role === 'campaign_manager'
+      isModerator(auth) || isCampaignManager(auth)
         ? 'id,name,avatar_url,assigned_state_ids'
         : '*';
     let q = db.from('profiles').select(selectCols);
 
-    if (!isAdmin && auth.role === 'moderator') {
+    if (!adminRole && isModerator(auth)) {
       q = buildScopedQuery(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
         q,
@@ -104,7 +111,7 @@ export async function GET(request: NextRequest) {
   let error: { message?: string } | null = null;
 
   let cmAllowedProfileIds: string[] | null = null;
-  if (auth.role === 'campaign_manager' && admin) {
+  if (isCampaignManager(auth) && admin) {
     // Prefer membership-based IDs; if table missing, fall back inside buildScopedQuery.
     const hasM = await hasGroupMembershipsTable(db);
     if (hasM) cmAllowedProfileIds = await resolveAllowedProfileIdsForCampaignManager(admin, auth.assigned_group_ids);
@@ -112,7 +119,7 @@ export async function GET(request: NextRequest) {
 
   {
     let q = buildQuery('created_at') as any;
-    if (!isAdmin && auth.role === 'campaign_manager') {
+    if (!adminRole && isCampaignManager(auth)) {
       q = buildScopedQuery(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
         q,
@@ -133,7 +140,7 @@ export async function GET(request: NextRequest) {
       msg.toLowerCase().includes('does not exist');
     if (looksLikeMissingCreatedAt) {
       let q2 = buildQuery('id') as any;
-      if (!isAdmin && auth.role === 'campaign_manager') {
+      if (!adminRole && isCampaignManager(auth)) {
         q2 = buildScopedQuery(
           { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
           q2,
@@ -193,7 +200,7 @@ export async function DELETE(request: NextRequest) {
     assigned_group_ids: auth.assigned_group_ids,
   } as any;
 
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     const cmAllowedProfileIds = admin ? await resolveAllowedProfileIdsForCampaignManager(admin, auth.assigned_group_ids) : null;
     // Enforce membership-based scope when possible; fall back to legacy `profiles.group_id` scoping in buildScopedQuery.
     const { data: rows, error: readErr } = await buildScopedQuery(

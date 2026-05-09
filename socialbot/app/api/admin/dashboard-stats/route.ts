@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { assertAdminRole, createServiceRoleClient, isAdmin, isCampaignManager, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
   buildScopedAnalyticsQuery,
@@ -36,9 +36,8 @@ export async function GET() {
   }
   const db = admin;
 
-  const isAdmin = auth.role === 'admin';
-  console.log('ROLE:', auth.role);
-  console.log('USING ADMIN RAW QUERY:', isAdmin);
+  const adminRole = isAdmin(auth);
+  if (adminRole) assertAdminRole(auth);
   const scopedUser = {
     id: auth.user.id,
     role: auth.role,
@@ -46,14 +45,14 @@ export async function GET() {
     assigned_group_ids: auth.assigned_group_ids,
   } as any;
   const allowed_profile_ids =
-    auth.role === 'campaign_manager'
+    isCampaignManager(auth)
       ? await resolveAllowedProfileIdsForCampaignManager(db as any, auth.assigned_group_ids)
       : null;
 
   const runProfilesCount = (createdTodayOnly: boolean) => {
     let q = db.from('profiles').select('id', { count: 'exact', head: true });
     if (createdTodayOnly) q = q.gte('created_at', startOfTodayIso());
-    if (isAdmin) return q as any;
+    if (adminRole) return q as any;
     return buildScopedAnalyticsQuery(scopedUser, q as any, 'profiles', {
       allowed_profile_ids: allowed_profile_ids ?? undefined,
     }) as any;
@@ -67,12 +66,12 @@ export async function GET() {
       .eq('status', 'published')
       .is('deleted_at', null)
       .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`);
-    const r = isAdmin
+    const r = adminRole
       ? (base as any)
       : ((await buildScopedAnalyticsQuery(scopedUser, base as any, 'posts')) as any);
     if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
       const fallback = db.from('posts').select('id', { count: 'exact', head: true });
-      return isAdmin
+      return adminRole
         ? (fallback as any)
         : ((await buildScopedAnalyticsQuery(scopedUser, fallback as any, 'posts')) as any);
     }
@@ -81,16 +80,16 @@ export async function GET() {
 
   const runEventsCount = () => {
     const q = db.from('events').select('id', { count: 'exact', head: true });
-    return isAdmin ? (q as any) : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events') as any);
+    return adminRole ? (q as any) : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events') as any);
   };
 
   const runUpcomingEvents = () => {
     const q = db.from('events').select('id,name,end').order('end', { ascending: true }).limit(3);
-    return isAdmin ? (q as any) : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events') as any);
+    return adminRole ? (q as any) : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events') as any);
   };
 
   const runRecentPosts = async () => {
-    if (!isAdmin) return { data: [], error: null } as any;
+    if (!adminRole) return { data: [], error: null } as any;
     const nowIso = new Date().toISOString();
     const r = await db
       .from('posts')

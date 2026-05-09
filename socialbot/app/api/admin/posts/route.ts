@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import {
+  assertAdminRole,
+  createServiceRoleClient,
+  isAdmin,
+  isCampaignManager,
+  isModerator,
+  validateAdminSession,
+} from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
@@ -44,18 +51,18 @@ function validateScopePayloadShape(
   auth: { role: 'admin' | 'moderator' | 'campaign_manager' },
   input: Record<string, unknown>
 ) {
-  if (auth.role === 'admin') return;
+  if (isAdmin(auth as any)) return;
 
   const hasStateField = Object.prototype.hasOwnProperty.call(input, 'state_id') || Object.prototype.hasOwnProperty.call(input, 'assigned_state_ids');
   const hasGroupField = Object.prototype.hasOwnProperty.call(input, 'group_id');
   const hasGroupArrayField = Object.prototype.hasOwnProperty.call(input, 'target_groups') || Object.prototype.hasOwnProperty.call(input, 'group_ids');
 
-  if (auth.role === 'moderator') {
+  if (isModerator(auth as any)) {
     if (hasGroupField || hasGroupArrayField) {
       throw new RbacError('Forbidden: moderator payload cannot contain group scope fields', 403);
     }
   }
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth as any)) {
     if (hasStateField) {
       throw new RbacError('Forbidden: campaign_manager payload cannot contain state scope fields', 403);
     }
@@ -86,9 +93,9 @@ function requireNonEmptyScopeForPosts(
   auth: { role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[]; assigned_group_ids?: string[] },
   scope: ScopeParse
 ) {
-  if (auth.role === 'admin') return;
+  if (isAdmin(auth as any)) return;
   if (scope.malformed) throw new RbacError('Forbidden: malformed scope identifiers', 403);
-  if (auth.role === 'moderator') {
+  if (isModerator(auth as any)) {
     if (scope.state_ids.length === 0) throw new RbacError('Forbidden: missing state scope', 403);
     requireScopeState(scope.state_ids, auth.assigned_state_ids, 'subset');
     return;
@@ -121,9 +128,8 @@ export async function GET(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
-  const isAdmin = auth.role === 'admin';
-  console.log('ROLE:', auth.role);
-  console.log('USING ADMIN RAW QUERY:', isAdmin);
+  const adminRole = isAdmin(auth);
+  if (adminRole) assertAdminRole(auth);
 
   const scopedUser = {
     id: auth.user.id,
@@ -138,11 +144,11 @@ export async function GET(request: NextRequest) {
     .select('id,title,image_url,category,created_at,scheduled_at,status,deleted_at,created_by,state_id,group_id')
     .order('created_at', { ascending: false })
     .limit(200) as any;
-  const q = isAdmin ? base : buildScopedQuery(scopedUser, base, 'posts');
+  const q = adminRole ? base : buildScopedQuery(scopedUser, base, 'posts');
   let res: any = await q;
   if (res.error && isMissingColumnErr(res.error, 'scheduled_at')) {
     const fallback = admin.from('posts').select('id,title,image_url,category,created_at,state_id,group_id').order('created_at', { ascending: false }).limit(200) as any;
-    res = isAdmin ? await fallback : await buildScopedQuery(scopedUser, fallback, 'posts');
+    res = adminRole ? await fallback : await buildScopedQuery(scopedUser, fallback, 'posts');
   }
   if (res.error) return json({ error: res.error.message }, 500);
   return json({ posts: res.data ?? [], usedServiceRole: true });

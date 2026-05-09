@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, isCampaignManager, isModerator, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import type { BroadcastPayload } from '@/lib/broadcast-send';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
@@ -79,8 +79,8 @@ export const POST = withAudit(
       const scheduled = response_json?.scheduled ?? null;
       const payload = scheduled?.payload ?? null;
       const scope_group_ids =
-        auth.role === 'campaign_manager' ? (((payload?.filters as any)?.group_ids ?? []) as any[]).map((x) => String(x)) : [];
-      const scope_state_ids = auth.role === 'moderator' ? auth.assigned_state_ids : [];
+        isCampaignManager(auth) ? (((payload?.filters as any)?.group_ids ?? []) as any[]).map((x) => String(x)) : [];
+      const scope_state_ids = isModerator(auth) ? auth.assigned_state_ids : [];
       return {
         resource_id: String(scheduled?.id ?? ''),
         resource_name: String(payload?.title ?? ''),

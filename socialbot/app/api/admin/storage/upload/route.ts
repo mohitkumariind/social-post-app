@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, isCampaignManager, isModerator, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import {
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
   if (!ALLOWED_BUCKETS.has(bucket)) {
     return NextResponse.json({ error: 'Invalid bucket' }, { status: 400 });
   }
-  if (auth.role === 'moderator') {
+  if (isModerator(auth)) {
     if (auth.assigned_state_ids.length === 0) {
       return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
     }
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Moderators can only upload user frames' }, { status: 403 });
     }
   }
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     if (bucket !== 'post-images') {
       return NextResponse.json({ error: 'campaign_manager can only upload post images' }, { status: 403 });
     }
@@ -90,7 +90,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `File too large. Max ${maxUploadBytes} bytes` }, { status: 400 });
   }
 
-  if (auth.role === 'moderator') {
+  if (isModerator(auth)) {
     // Enforce: public/<userId>/... and userId must belong to the moderator's assigned state.
     const parts = path.split('/').filter(Boolean); // e.g. ["public","<userId>",...]
     const userId = parts.length >= 2 && parts[0] === 'public' ? parts[1] : '';
@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     // Enforce: public/events/<eventId>/... and event must belong to campaign_manager.
     const parts = path.split('/').filter(Boolean); // e.g. ["public","events","<eventId>",...]
     const eventId = parts.length >= 3 && parts[0] === 'public' && parts[1] === 'events' ? parts[2] : '';

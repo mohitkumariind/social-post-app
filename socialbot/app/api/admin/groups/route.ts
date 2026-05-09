@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import {
+  assertAdminRole,
+  createServiceRoleClient,
+  isAdmin,
+  isCampaignManager,
+  isModerator,
+  validateAdminSession,
+} from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
@@ -384,9 +391,8 @@ export async function GET(request: NextRequest) {
   if (!admin) {
     return NextResponse.json({ error: NO_SERVICE_ROLE }, { status: 503 });
   }
-  const isAdmin = auth.role === 'admin';
-  console.log('ROLE:', auth.role);
-  console.log('USING ADMIN RAW QUERY:', isAdmin);
+  const adminRole = isAdmin(auth);
+  if (adminRole) assertAdminRole(auth);
 
   const tag = (request.nextUrl.searchParams.get('tag') ?? '').trim();
 
@@ -443,13 +449,13 @@ export async function GET(request: NextRequest) {
       }
 
       // Apply RBAC scoping (moderator state scope, campaign_manager group/membership scope).
-      if (!isAdmin) {
+      if (!adminRole) {
         profQ = buildScopedQuery(scopedUser, profQ, 'profiles');
       }
       const { data: profRows, error: profErr } = await profQ;
       if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
 
-      const redactPhone = auth.role === 'moderator' || auth.role === 'campaign_manager';
+      const redactPhone = isModerator(auth) || isCampaignManager(auth);
       const members = ((profRows ?? []) as any[]).map((r) => ({
         id: String(r.id ?? ''),
         name: String(r.name ?? ''),
@@ -464,7 +470,7 @@ export async function GET(request: NextRequest) {
     // Prefer authoritative group list from `groups` table; if deleted_at is missing in DB, fall back gracefully.
     // Build a scoped query instead of fetching all groups then filtering in JS.
     let q = admin.from('groups').select('id, name, created_by, deleted_at').order('id', { ascending: true }) as any;
-    if (!isAdmin) {
+    if (!adminRole) {
       q = buildScopedQuery(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
         q,
@@ -478,7 +484,7 @@ export async function GET(request: NextRequest) {
     if (baseErr && isMissingColumnErr(baseErr, 'deleted_at')) {
       hasDeletedAt = false;
       let q2 = admin.from('groups').select('id, name, created_by').order('id', { ascending: true }) as any;
-      if (!isAdmin) {
+      if (!adminRole) {
         q2 = buildScopedQuery(
           { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
           q2,
@@ -539,7 +545,7 @@ export async function GET(request: NextRequest) {
             .in('group_id', visibleGroupIds)
             .order('id', { ascending: true })
             .range(from, from + pageSize - 1);
-          if (!isAdmin) {
+          if (!adminRole) {
             pq = buildScopedQuery(scopedUser, pq, 'profiles');
           }
           const { data: pRows, error: pErr } = await pq;
@@ -578,7 +584,7 @@ export async function DELETE(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     return NextResponse.json({ error: 'Campaign managers cannot modify groups' }, { status: 403 });
   }
   try {
@@ -624,7 +630,7 @@ export async function DELETE(request: NextRequest) {
   // canAccessResource intentionally NOT used here for moderators because delete has extra safeguards (state isolation) below.
 
   // For moderators, ensure the group doesn't contain out-of-scope members before deleting the group row.
-  if (auth.role === 'moderator') {
+  if (isModerator(auth)) {
     try {
       requireOwnership(grp.created_by, auth.user.id);
     } catch {
@@ -727,7 +733,7 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     return NextResponse.json({ error: 'Campaign managers cannot modify groups' }, { status: 403 });
   }
   try {
@@ -776,7 +782,7 @@ export async function POST(request: NextRequest) {
     if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
   }
 
-  if (auth.role === 'moderator') {
+  if (isModerator(auth)) {
     // Ownership-based access control: moderators can only use groups created by themselves.
     try {
       requireOwnership(grp.created_by, auth.user.id);
@@ -785,7 +791,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (auth.role === 'moderator') {
+  if (isModerator(auth)) {
     /**
      * Fail-closed DB-scoped guard:
      * do not fetch candidates and filter in JS. Count scoped IDs in SQL and require
@@ -821,7 +827,7 @@ export async function PATCH(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'campaign_manager') {
+  if (isCampaignManager(auth)) {
     return NextResponse.json({ error: 'Campaign managers cannot modify groups' }, { status: 403 });
   }
   try {
@@ -884,14 +890,14 @@ export async function PATCH(request: NextRequest) {
       );
       if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
     }
-    if (auth.role === 'moderator') {
+    if (isModerator(auth)) {
       try {
         requireOwnership(grp.created_by, auth.user.id);
       } catch {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     }
-    if (auth.role === 'moderator') {
+    if (isModerator(auth)) {
       const scopedCount = await countScopedProfilesByIds(admin, toScopedViewer(auth as any), [userId]);
       if (scopedCount !== 1) {
         return NextResponse.json({ error: 'Forbidden: user outside assigned_state_ids' }, { status: 403 });
@@ -910,7 +916,7 @@ export async function PATCH(request: NextRequest) {
       next = gid;
     }
   } else if (remove.length > 0 && current != null) {
-    if (auth.role === 'moderator') {
+    if (isModerator(auth)) {
       const grp = await getGroupById(admin, current);
       if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
       try {
@@ -919,7 +925,7 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     }
-    if (auth.role === 'moderator') {
+    if (isModerator(auth)) {
       const scopedCount = await countScopedProfilesByIds(admin, toScopedViewer(auth as any), [userId]);
       if (scopedCount !== 1) {
         return NextResponse.json({ error: 'Forbidden: user outside assigned_state_ids' }, { status: 403 });
