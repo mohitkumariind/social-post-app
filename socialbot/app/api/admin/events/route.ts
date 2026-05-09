@@ -70,10 +70,16 @@ export async function GET(request: NextRequest) {
 
   // Detail fetch (used by admin UI for secure reads).
   if (id || name) {
-    let q = db.from('events').select('*').limit(1) as any;
+    let q: any = db.from('events').select('*').limit(1);
     q = id ? q.eq('id', id) : q.eq('name', name);
     if (!includeDeleted) q = q.is('deleted_at', null);
-    const { data, error } = await q.maybeSingle();
+    let { data, error } = await q.maybeSingle();
+    if (error && isMissingColumnErr(error, 'deleted_at')) {
+      // Backward compatible: older schema may not have soft-delete columns yet.
+      let q2: any = db.from('events').select('*').limit(1);
+      q2 = id ? q2.eq('id', id) : q2.eq('name', name);
+      ({ data, error } = await q2.maybeSingle());
+    }
     if (error) return json({ error: error.message }, 500);
     if (!data) return json({ error: 'Not found' }, 404);
 
@@ -110,20 +116,46 @@ export async function GET(request: NextRequest) {
   }
 
   // Listing
-  let q = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit) as any;
+  const applyScope = (qIn: any) =>
+    adminRole
+      ? qIn
+      : buildScopedQuery(
+          { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+          qIn,
+          'events'
+        );
+
+  // Primary: created_at cursor pagination (preferred).
+  let q: any = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit);
   if (!includeDeleted) q = q.is('deleted_at', null);
   if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
-  if (!adminRole) {
-    q = buildScopedQuery(
-      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
-      q,
-      'events'
-    );
+  q = applyScope(q);
+
+  let { data, error } = await q;
+
+  // Backward compatible fallbacks: missing created_at / deleted_at columns.
+  if (error && isMissingColumnErr(error, 'deleted_at')) {
+    let q2: any = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit);
+    if (cursorCreatedAt) q2 = q2.lt('created_at', cursorCreatedAt);
+    q2 = applyScope(q2);
+    ({ data, error } = await q2);
   }
-  const { data, error } = await q;
+  if (error && isMissingColumnErr(error, 'created_at')) {
+    let q3: any = db.from('events').select('*').order('id', { ascending: false }).limit(limit);
+    // cursor_created_at is ignored in this compatibility mode.
+    if (!includeDeleted) q3 = q3.is('deleted_at', null);
+    q3 = applyScope(q3);
+    ({ data, error } = await q3);
+    if (error && isMissingColumnErr(error, 'deleted_at')) {
+      let q4: any = db.from('events').select('*').order('id', { ascending: false }).limit(limit);
+      q4 = applyScope(q4);
+      ({ data, error } = await q4);
+    }
+  }
+
   if (error) return json({ error: error.message }, 500);
   const rows = (data ?? []) as any[];
-  const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
+  const next_cursor_created_at = rows.length > 0 ? String((rows[rows.length - 1] as any)?.created_at ?? '') : '';
   return json({ events: rows, usedServiceRole: !!admin, next_cursor_created_at, limit });
 }
 
