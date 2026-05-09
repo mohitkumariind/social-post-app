@@ -32,6 +32,18 @@ export type BroadcastPayload = {
   filter_labels?: BroadcastFilterLabels;
 };
 
+export type BroadcastRunOptions = {
+  /**
+   * Reuse an existing broadcast row (worker retry idempotency).
+   * When set, runBroadcast will not create/delete notification_broadcasts rows.
+   */
+  existing_broadcast_id?: string | null;
+  /**
+   * Skip notifications_history inserts (used when history already exists for a reused broadcast).
+   */
+  skip_history_insert?: boolean;
+};
+
 export async function fetchFilteredProfileIds(
   admin: SupabaseClient,
   allWorkers: boolean,
@@ -51,7 +63,8 @@ export async function fetchFilteredProfileIds(
   if (party) q = q.eq('party', party);
   if (state) q = q.eq('state', state);
   if (Array.isArray(f.assigned_state_ids) && f.assigned_state_ids.length > 0) {
-    q = q.overlaps('assigned_state_ids', f.assigned_state_ids);
+    // Canonical subset semantics: profile states must be contained in the allowed state set.
+    q = q.not('assigned_state_ids', 'is', null).neq('assigned_state_ids', '{}').containedBy('assigned_state_ids', f.assigned_state_ids);
   }
   if (Array.isArray(f.group_ids) && f.group_ids.length > 0) {
     q = q.in('group_id', f.group_ids.map((x) => Number(x)).filter((n) => Number.isFinite(n)));
@@ -121,7 +134,8 @@ export type BroadcastResult =
 export async function runBroadcast(
   admin: SupabaseClient,
   expo: Expo,
-  payload: BroadcastPayload
+  payload: BroadcastPayload,
+  options: BroadcastRunOptions = {}
 ): Promise<BroadcastResult> {
   const allWorkers = payload.all_workers !== false;
   const filters: BroadcastFilters = {
@@ -194,34 +208,37 @@ export async function runBroadcast(
     labels: payload.filter_labels ?? {},
   };
 
-  const { data: bcIns, error: bcErr } = await admin
-    .from('notification_broadcasts')
-    .insert({
-      title,
-      body,
-      image_url: imageUrl,
-      filters: filtersStored,
-      target_user_count: profileIds.length,
-      sent_count: 0,
-      delivered_count: 0,
-      failed_count: 0,
-      opened_count: 0,
-    })
-    .select('id')
-    .single();
+  const existingBroadcastId = String(options.existing_broadcast_id ?? '').trim();
+  let broadcastId = existingBroadcastId;
+  if (!broadcastId) {
+    const { data: bcIns, error: bcErr } = await admin
+      .from('notification_broadcasts')
+      .insert({
+        title,
+        body,
+        image_url: imageUrl,
+        filters: filtersStored,
+        target_user_count: profileIds.length,
+        sent_count: 0,
+        delivered_count: 0,
+        failed_count: 0,
+        opened_count: 0,
+      })
+      .select('id')
+      .single();
 
-  if (bcErr || !bcIns?.id) {
-    return {
-      ok: false,
-      error:
-        bcErr?.message ??
-        'Failed to create notification_broadcasts row (run migration 20260405140000_notification_broadcast_center.sql?)',
-    };
+    if (bcErr || !bcIns?.id) {
+      return {
+        ok: false,
+        error:
+          bcErr?.message ??
+          'Failed to create notification_broadcasts row (run migration 20260405140000_notification_broadcast_center.sql?)',
+      };
+    }
+    broadcastId = String(bcIns.id);
   }
 
-  const broadcastId = String(bcIns.id);
-
-  if (profileIds.length > 0) {
+  if (!options.skip_history_insert && profileIds.length > 0) {
     const historyRows = profileIds.map((user_id) => ({
       user_id,
       title,
@@ -235,8 +252,10 @@ export async function runBroadcast(
       const chunk = historyRows.slice(i, i + HISTORY_INSERT_CHUNK);
       const { error: histErr } = await admin.from('notifications_history').insert(chunk);
       if (histErr) {
-        await admin.from('notification_broadcasts').delete().eq('id', broadcastId);
-        return { ok: false, error: `notifications_history: ${histErr.message}` };
+        if (!existingBroadcastId) {
+          await admin.from('notification_broadcasts').delete().eq('id', broadcastId);
+        }
+        return { ok: false, error: `notifications_history: ${histErr.message}`, broadcast_id: broadcastId };
       }
     }
   }

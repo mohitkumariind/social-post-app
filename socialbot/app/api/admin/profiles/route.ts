@@ -4,7 +4,8 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
-import { RbacError, requireRole } from '@/lib/rbac/require';
+import { RbacError, requireCampaignManagerHasAssignedGroups, requireRole } from '@/lib/rbac/require';
+import { API_DEFAULT_LIMIT, API_MAX_LIMIT, clampLimit } from '@/lib/perf-defaults';
 
 function toNumArr(v: unknown): number[] {
   if (v == null) return [];
@@ -34,6 +35,12 @@ export async function GET(request: NextRequest) {
   if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
     return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
+  try {
+    requireCampaignManagerHasAssignedGroups(auth);
+  } catch (e) {
+    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
   const admin = createServiceRoleClient();
   const db = admin ?? supabase;
@@ -44,6 +51,9 @@ export async function GET(request: NextRequest) {
   const loksabhaIdRaw = (sp.get('loksabha_id') ?? '').trim();
   const assemblyIdRaw = (sp.get('assembly_id') ?? '').trim();
   const searchQueryRaw = (sp.get('search_query') ?? '').trim();
+  const limit = clampLimit(sp.get('limit'), API_DEFAULT_LIMIT, API_MAX_LIMIT);
+  const cursorCreatedAt = (sp.get('cursor_created_at') ?? '').trim();
+  const cursorId = (sp.get('cursor_id') ?? '').trim();
 
   const loksabha_id = loksabhaIdRaw ? Number(loksabhaIdRaw) : null;
   const assembly_id = assemblyIdRaw ? Number(assemblyIdRaw) : null;
@@ -73,7 +83,10 @@ export async function GET(request: NextRequest) {
       q = q.or(`name.ilike.%${s}%,phone.ilike.%${s}%`);
     }
 
-    return q.order(orderBy, { ascending: false });
+    q = q.order(orderBy, { ascending: false }).limit(limit);
+    if (orderBy === 'created_at' && cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
+    if (orderBy === 'id' && cursorId) q = q.lt('id', cursorId);
+    return q;
   };
 
   // Prefer created_at desc. If schema lacks created_at, fall back to id desc.
@@ -126,8 +139,11 @@ export async function GET(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  const rows = (data ?? []) as any[];
+  const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
+  const next_cursor_id = rows.length > 0 ? String(rows[rows.length - 1]?.id ?? '') : '';
   return NextResponse.json(
-    { profiles: data ?? [], usedServiceRole: !!admin },
+    { profiles: rows, usedServiceRole: !!admin, limit, next_cursor_created_at, next_cursor_id },
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }
@@ -140,6 +156,7 @@ export async function DELETE(request: NextRequest) {
   }
   try {
     requireRole(auth, ['admin', 'campaign_manager']);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -181,7 +198,14 @@ export async function DELETE(request: NextRequest) {
       );
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
-    const ok = canAccessResource(scopedUser, { group_id: String((rows as any).group_id ?? '').trim() } as any);
+    const ok = canAccessResource(
+      scopedUser,
+      { group_id: String((rows as any).group_id ?? '').trim() } as any,
+      {
+        resourceType: 'profiles',
+        audit: { resourceType: 'profiles', action: 'profiles.read', resourceId: id },
+      }
+    );
     if (!ok) {
       canPerformMutation(
         scopedUser,

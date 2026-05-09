@@ -3,7 +3,17 @@ import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate'
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
-import { RbacError, requireGroupAssignment, requireModeratorHasAssignedStates, requireRole, requireScopeState, toNumArray, toStrArray } from '@/lib/rbac/require';
+import {
+  normalizeGroupId,
+  parseGroupIds,
+  parseStateIds,
+  requireCampaignManagerHasAssignedGroups,
+  RbacError,
+  requireGroupAssignment,
+  requireModeratorHasAssignedStates,
+  requireRole,
+  requireScopeState,
+} from '@/lib/rbac/require';
 import { withAudit } from '@/lib/audit/withAudit';
 
 function json(body: unknown, status = 200) {
@@ -15,13 +25,18 @@ function isMissingColumnErr(err: { message?: string } | null | undefined, column
   return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column'));
 }
 
-type ScopeParse = { state_ids: number[]; group_id: string; group_ids: string[] };
+type ScopeParse = { state_ids: number[]; group_id: string; group_ids: string[]; malformed: boolean };
 
 function parseScopeFromInput(input: Record<string, unknown>): ScopeParse {
+  const states = parseStateIds((input as any).state_id ?? (input as any).assigned_state_ids);
+  const gid = normalizeGroupId((input as any).group_id) ?? '';
+  const gids = parseGroupIds((input as any).target_groups ?? (input as any).group_ids);
+  const rawGidProvided = (input as any).group_id != null;
   return {
-    state_ids: toNumArray((input as any).state_id ?? (input as any).assigned_state_ids),
-    group_id: String((input as any).group_id ?? '').trim(),
-    group_ids: toStrArray((input as any).target_groups ?? (input as any).group_ids),
+    state_ids: states.ids,
+    group_id: gid,
+    group_ids: gids.ids,
+    malformed: states.malformed || gids.malformed || (rawGidProvided && !gid),
   };
 }
 
@@ -48,30 +63,31 @@ function validateScopePayloadShape(
 
   if (hasStateField) {
     const raw = (input as any).state_id ?? (input as any).assigned_state_ids;
-    const parsed = toNumArray(raw);
-    if (raw != null && parsed.length === 0) throw new RbacError('Forbidden: malformed state scope payload', 403);
+    const parsed = parseStateIds(raw);
+    if (raw != null && (parsed.malformed || parsed.ids.length === 0)) throw new RbacError('Forbidden: malformed state scope payload', 403);
   }
 
   if (hasGroupField) {
     const raw = (input as any).group_id;
-    if (raw != null && !String(raw).trim()) throw new RbacError('Forbidden: malformed group_id payload', 403);
+    if (raw != null && !normalizeGroupId(raw)) throw new RbacError('Forbidden: malformed group_id payload', 403);
   }
 
   if (hasGroupArrayField) {
     const raw = (input as any).target_groups ?? (input as any).group_ids;
     if (raw != null && !Array.isArray(raw)) throw new RbacError('Forbidden: malformed target_groups payload', 403);
     if (Array.isArray(raw)) {
-      const parsed = toStrArray(raw);
-      if (raw.length > 0 && parsed.length === 0) throw new RbacError('Forbidden: malformed target_groups payload', 403);
+      const parsed = parseGroupIds(raw);
+      if (raw.length > 0 && (parsed.malformed || parsed.ids.length === 0)) throw new RbacError('Forbidden: malformed target_groups payload', 403);
     }
   }
 }
 
 function requireNonEmptyScopeForPosts(
   auth: { role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[]; assigned_group_ids?: string[] },
-  scope: { state_ids: number[]; group_id: string; group_ids: string[] }
+  scope: ScopeParse
 ) {
   if (auth.role === 'admin') return;
+  if (scope.malformed) throw new RbacError('Forbidden: malformed scope identifiers', 403);
   if (auth.role === 'moderator') {
     if (scope.state_ids.length === 0) throw new RbacError('Forbidden: missing state scope', 403);
     requireScopeState(scope.state_ids, auth.assigned_state_ids, 'subset');
@@ -79,11 +95,13 @@ function requireNonEmptyScopeForPosts(
   }
   // campaign_manager
   if (!scope.group_id && scope.group_ids.length === 0) throw new RbacError('Forbidden: missing group scope', 403);
-  const gids = new Set(toStrArray(auth.assigned_group_ids));
+  const assigned = parseGroupIds(auth.assigned_group_ids);
+  if (assigned.malformed) throw new RbacError('Forbidden: malformed assigned_group_ids', 403);
+  const gids = new Set(assigned.ids);
   if (gids.size === 0) throw new RbacError('Forbidden: missing assigned_group_ids', 403);
   if (scope.group_id) requireGroupAssignment(auth as any, scope.group_id);
   if (scope.group_ids.length > 0) {
-    const ok = scope.group_ids.every((g) => gids.has(String(g).trim()));
+    const ok = scope.group_ids.every((g) => gids.has(g));
     if (!ok) throw new RbacError('Forbidden: outside assigned_group_ids', 403);
   }
 }
@@ -95,6 +113,7 @@ export async function GET(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -131,6 +150,7 @@ export const POST = withAudit(
     try {
       requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
       requireModeratorHasAssignedStates(auth);
+      requireCampaignManagerHasAssignedGroups(auth);
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
@@ -231,6 +251,7 @@ export const PATCH = withAudit(
     try {
       requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
       requireModeratorHasAssignedStates(auth);
+      requireCampaignManagerHasAssignedGroups(auth);
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);

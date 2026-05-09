@@ -4,7 +4,8 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
-import { RbacError, requireRole } from '@/lib/rbac/require';
+import { RbacError, requireCampaignManagerHasAssignedGroups, requireRole } from '@/lib/rbac/require';
+import { SECURITY_LIMITS } from '@/lib/security-limits';
 
 type Body = { ids?: string[]; group_tags?: string[]; /** Only if you intentionally want to clear tags for all selected users. */ allowClear?: boolean };
 
@@ -19,6 +20,7 @@ export async function POST(request: NextRequest) {
   }
   try {
     requireRole(auth, ['admin', 'campaign_manager']);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -37,6 +39,12 @@ export async function POST(request: NextRequest) {
     : [];
 
   if (ids.length === 0) return NextResponse.json({ error: 'Missing ids' }, { status: 400 });
+  if (ids.length > SECURITY_LIMITS.bulkProfileIds) {
+    return NextResponse.json({ error: `Too many ids. Max ${SECURITY_LIMITS.bulkProfileIds}` }, { status: 400 });
+  }
+  if (group_tags.length > SECURITY_LIMITS.bulkGroupTags) {
+    return NextResponse.json({ error: `Too many group_tags. Max ${SECURITY_LIMITS.bulkGroupTags}` }, { status: 400 });
+  }
 
   if (group_tags.length === 0 && !body.allowClear) {
     return NextResponse.json(

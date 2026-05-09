@@ -5,6 +5,7 @@ import {
   buildScopedAnalyticsQuery,
   resolveAllowedProfileIdsForCampaignManager,
 } from '@/lib/rbac/scoped-query-builder';
+import { RbacError, requireStandardRbacContext } from '@/lib/rbac/require';
 
 function startOfTodayIso(): string {
   const now = new Date();
@@ -18,8 +19,11 @@ export async function GET() {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
+  try {
+    requireStandardRbacContext(auth, ['admin', 'moderator', 'campaign_manager']);
+  } catch (e) {
+    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();

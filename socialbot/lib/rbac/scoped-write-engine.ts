@@ -2,7 +2,12 @@ import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource, resolveScope, type UnifiedResource, type UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import { evaluateAnomaliesForUser, trackRbacEvent } from '@/lib/rbac/rbac-observability-engine';
 import { emitRbacAlerts } from '@/lib/rbac/rbac-alert-engine';
-import { toNumArray, toStrArray } from '@/lib/rbac/require';
+import { normalizeGroupId, parseGroupIds, parseStateIds } from '@/lib/rbac/require';
+import {
+  auditUnsupportedResourceUsage,
+  canUseOwnershipFallback,
+  validateRegisteredResourceForLayer,
+} from '@/lib/rbac/resource-classification';
 
 export type MutationAction =
   | 'events.create'
@@ -102,50 +107,109 @@ export function canPerformMutation(
   payload: Record<string, unknown> | null = null,
   audit?: { resourceType: string; resourceId?: string | null; resourceName?: string | null }
 ): MutationDecision {
+  const resourceType = String(audit?.resourceType ?? '').trim();
+  const resourceValidation = validateRegisteredResourceForLayer(resourceType, 'mutation');
+  if (!resourceValidation.ok) {
+    auditUnsupportedResourceUsage({
+      user,
+      resourceType,
+      layer: 'mutation',
+      reason: resourceValidation.reason,
+      action,
+      resourceId: audit?.resourceId ?? null,
+      resourceName: audit?.resourceName ?? null,
+      details: { mutation_action: action },
+    });
+    const denied = { ok: false as const, reason: resourceValidation.reason };
+    if (audit) {
+      auditDenied({
+        user,
+        action,
+        resourceType: audit.resourceType,
+        resourceId: audit.resourceId,
+        resourceName: audit.resourceName,
+        reason: denied.reason,
+      });
+    }
+    return denied;
+  }
+
   if (user.role === 'admin') return { ok: true };
 
+  const payloadFilters = ((payload as any)?.filters ?? null) as Record<string, unknown> | null;
   // Build effective resource scope from resource+payload (payload for creates).
   const effective: UnifiedResource = {
     created_by: (resource as any)?.created_by ?? (payload as any)?.created_by,
-    state_ids: (resource as any)?.state_ids ?? (payload as any)?.state_id ?? (payload as any)?.assigned_state_ids,
+    state_ids:
+      (resource as any)?.state_ids ??
+      (payload as any)?.state_id ??
+      (payload as any)?.assigned_state_ids ??
+      (payloadFilters as any)?.assigned_state_ids,
     group_id: (resource as any)?.group_id ?? (payload as any)?.group_id,
-    group_ids: (resource as any)?.group_ids ?? (payload as any)?.target_groups ?? (payload as any)?.group_ids,
+    group_ids:
+      (resource as any)?.group_ids ??
+      (payload as any)?.target_groups ??
+      (payload as any)?.group_ids ??
+      (payloadFilters as any)?.group_ids,
   };
 
-  // Moderator rules: state-scoped or ownership fallback.
+  const allowOwnershipFallback = canUseOwnershipFallback(resourceType);
+
+  // Moderator rules: state-scoped first; owner fallback only for approved resource types.
   if (user.role === 'moderator') {
-    const rStates = toNumArray(effective.state_ids);
-    const assigned = toNumArray(user.assigned_state_ids);
+    const rStatesParsed = parseStateIds(effective.state_ids);
+    const assignedParsed = parseStateIds(user.assigned_state_ids);
+    if (rStatesParsed.malformed || assignedParsed.malformed) {
+      const denied = { ok: false as const, reason: 'Forbidden: malformed state scope', details: { state_ids: effective.state_ids, assigned_state_ids: user.assigned_state_ids } };
+      if (audit) auditDenied({ user, action, resourceType: audit.resourceType, resourceId: audit.resourceId, resourceName: audit.resourceName, reason: denied.reason, details: denied.details });
+      return denied;
+    }
+    const rStates = rStatesParsed.ids;
+    const assigned = assignedParsed.ids;
     if (rStates.length > 0) {
       // Conservative: require subset to avoid weakening existing restrictions.
-      const set = new Set(assigned.map(Number));
-      const ok = rStates.every((n) => set.has(Number(n)));
+      const set = new Set(assigned);
+      const ok = rStates.every((n) => set.has(n));
       if (ok) return { ok: true };
       const denied = { ok: false as const, reason: 'Forbidden: outside assigned_state_ids', details: { rStates, assigned } };
       if (audit) auditDenied({ user, action, resourceType: audit.resourceType, resourceId: audit.resourceId, resourceName: audit.resourceName, reason: denied.reason, details: denied.details });
       return denied;
     }
-    // Ownership fallback when no scope fields exist.
-    if (canAccessResource(user, { created_by: effective.created_by })) return { ok: true };
-    const denied = { ok: false as const, reason: 'Forbidden: not owner', details: { created_by: effective.created_by } };
+    if (allowOwnershipFallback && canAccessResource(user, { created_by: effective.created_by }, { resourceType, allowOwnershipFallback: true })) {
+      return { ok: true };
+    }
+    const denied = { ok: false as const, reason: 'Forbidden: missing state scope', details: { state_ids: effective.state_ids } };
     if (audit) auditDenied({ user, action, resourceType: audit.resourceType, resourceId: audit.resourceId, resourceName: audit.resourceName, reason: denied.reason, details: denied.details });
     return denied;
   }
 
-  // Campaign manager rules: group-scoped or ownership fallback.
+  // Campaign manager rules: group-scoped first; owner fallback only for approved resource types.
   if (user.role === 'campaign_manager') {
-    const gid = String(effective.group_id ?? '').trim();
-    const gids = toStrArray(effective.group_ids);
-    const assigned = toStrArray(user.assigned_group_ids);
+    const gid = normalizeGroupId(effective.group_id) ?? '';
+    const gidsParsed = parseGroupIds(effective.group_ids);
+    const assignedParsed = parseGroupIds(user.assigned_group_ids);
+    if (gidsParsed.malformed || assignedParsed.malformed || (effective.group_id != null && !gid)) {
+      const denied = {
+        ok: false as const,
+        reason: 'Forbidden: malformed group scope',
+        details: { group_id: effective.group_id, group_ids: effective.group_ids, assigned_group_ids: user.assigned_group_ids },
+      };
+      if (audit) auditDenied({ user, action, resourceType: audit.resourceType, resourceId: audit.resourceId, resourceName: audit.resourceName, reason: denied.reason, details: denied.details });
+      return denied;
+    }
+    const gids = gidsParsed.ids;
+    const assigned = assignedParsed.ids;
     if (gid || gids.length > 0) {
-      const ok = canAccessResource(user, { group_id: gid || undefined, group_ids: gids.length > 0 ? gids : undefined });
+      const ok = canAccessResource(user, { group_id: gid || undefined, group_ids: gids.length > 0 ? gids : undefined }, { resourceType });
       if (ok) return { ok: true };
       const denied = { ok: false as const, reason: 'Forbidden: outside assigned_group_ids', details: { gid, gids, assigned } };
       if (audit) auditDenied({ user, action, resourceType: audit.resourceType, resourceId: audit.resourceId, resourceName: audit.resourceName, reason: denied.reason, details: denied.details });
       return denied;
     }
-    if (canAccessResource(user, { created_by: effective.created_by })) return { ok: true };
-    const denied = { ok: false as const, reason: 'Forbidden: not owner', details: { created_by: effective.created_by } };
+    if (allowOwnershipFallback && canAccessResource(user, { created_by: effective.created_by }, { resourceType, allowOwnershipFallback: true })) {
+      return { ok: true };
+    }
+    const denied = { ok: false as const, reason: 'Forbidden: missing group scope', details: { group_id: effective.group_id, group_ids: effective.group_ids } };
     if (audit) auditDenied({ user, action, resourceType: audit.resourceType, resourceId: audit.resourceId, resourceName: audit.resourceName, reason: denied.reason, details: denied.details });
     return denied;
   }

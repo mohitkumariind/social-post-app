@@ -1,7 +1,14 @@
 import { createServiceRoleClient } from '@/lib/admin-gate';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
+import { validateCronRequest } from '@/lib/cron-auth';
+import { computeExponentialBackoffMs, nowIso, resolveWorkerRuntime, staleIso } from '@/lib/workers/runtime';
 
 export const runtime = 'nodejs';
+const WORKER = resolveWorkerRuntime('api/jobs/process-scheduled-events', {
+  leaseMs: 10 * 60 * 1000,
+  maxAttempts: 5,
+  batchSize: 50,
+});
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -16,84 +23,239 @@ function isMissingColumnErr(err: { message?: string } | null | undefined, column
 }
 
 export async function POST(request: Request) {
-  const secret = process.env.CRON_SECRET?.trim();
-  if (secret) {
-    const got = request.headers.get('x-cron-secret')?.trim();
-    if (!got || got !== secret) return json({ error: 'Unauthorized' }, 401);
-  }
+  const cronAuth = validateCronRequest(request);
+  if (!cronAuth.ok) return json({ error: cronAuth.error }, cronAuth.status);
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
-  const nowIso = new Date().toISOString();
+  const startedAt = Date.now();
+  const dueNowIso = nowIso();
+  const staleLeaseIso = staleIso(WORKER.leaseMs);
 
-  // Fetch due scheduled events
-  const r = await admin
-    .from('events')
-    .select('id,name,status,scheduled_at,deleted_at,created_by,published_at')
-    .eq('status', 'scheduled_publish')
-    .is('deleted_at', null)
-    .lte('scheduled_at', nowIso)
-    .order('scheduled_at', { ascending: true })
-    .limit(50);
+  /**
+   * Lease model mirrors scheduled posts:
+   * - due scan includes stale processing leases,
+   * - each row is atomically claimed,
+   * - publish transition is conditional on current lease ownership.
+   */
+  let due: any[] = [];
+  {
+    const r = await admin
+      .from('events')
+      .select('id,name,status,scheduled_at,deleted_at,created_by,published_at,attempt_count,locked_at,locked_by')
+      .is('deleted_at', null)
+      .or(`and(status.eq.scheduled_publish,scheduled_at.lte.${dueNowIso},attempt_count.lt.${WORKER.maxAttempts}),and(status.eq.processing_publish,scheduled_at.lte.${dueNowIso},locked_at.lt.${staleLeaseIso},attempt_count.lt.${WORKER.maxAttempts})`)
+      .order('scheduled_at', { ascending: true })
+      .limit(WORKER.batchSize);
 
-  if (r.error) {
-    // If scheduled_at column isn't deployed yet, this worker should no-op safely.
-    if (isMissingColumnErr(r.error, 'scheduled_at') || isMissingColumnErr(r.error, 'status')) {
-      return json({ ok: true, processed: 0, skipped: true, reason: 'schema not deployed' });
+    if (
+      r.error &&
+      (isMissingColumnErr(r.error, 'attempt_count') || isMissingColumnErr(r.error, 'locked_at') || isMissingColumnErr(r.error, 'locked_by'))
+    ) {
+      const r2 = await admin
+        .from('events')
+        .select('id,name,status,scheduled_at,deleted_at,created_by,published_at')
+        .eq('status', 'scheduled_publish')
+        .is('deleted_at', null)
+        .lte('scheduled_at', dueNowIso)
+        .order('scheduled_at', { ascending: true })
+        .limit(WORKER.batchSize);
+      if (r2.error) {
+        if (isMissingColumnErr(r2.error, 'scheduled_at') || isMissingColumnErr(r2.error, 'status')) {
+          return json({ ok: true, processed: 0, skipped: true, reason: 'schema not deployed' });
+        }
+        return json({ error: r2.error.message }, 500);
+      }
+      due = (r2.data ?? []) as any[];
+    } else if (r.error) {
+      if (isMissingColumnErr(r.error, 'scheduled_at') || isMissingColumnErr(r.error, 'status')) {
+        return json({ ok: true, processed: 0, skipped: true, reason: 'schema not deployed' });
+      }
+      return json({ error: r.error.message }, 500);
+    } else {
+      due = (r.data ?? []) as any[];
     }
-    return json({ error: r.error.message }, 500);
   }
 
-  const due = (r.data ?? []) as any[];
   const results: any[] = [];
+  let claimedCount = 0;
+  let reclaimedCount = 0;
+  let successCount = 0;
+  let failedCount = 0;
+  let skippedCount = 0;
 
   for (const ev of due) {
     const id = String(ev?.id ?? '').trim();
     if (!id) continue;
-
-    // Idempotency: only update rows that are still scheduled_publish and due.
-    const patch = {
-      status: 'published',
-      published_at: nowIso,
-    };
-
-    const up = await admin
+    // 1) Claim row with lease ownership.
+    const claimRes = await admin
       .from('events')
-      .update(patch)
+      .update({
+        status: 'processing_publish',
+        locked_at: dueNowIso,
+        locked_by: WORKER.workerId,
+        last_error: null,
+      })
       .eq('id', id)
-      .eq('status', 'scheduled_publish')
       .is('deleted_at', null)
-      .lte('scheduled_at', nowIso)
+      .lte('scheduled_at', dueNowIso)
+      .lt('attempt_count', WORKER.maxAttempts)
+      .or(`status.eq.scheduled_publish,and(status.eq.processing_publish,locked_at.lt.${staleLeaseIso})`)
+      .select('id,name,status,scheduled_at,created_by,published_at,attempt_count,locked_at,locked_by')
+      .maybeSingle();
+
+    if (claimRes.error) {
+      // Backward-compatible fallback for older schemas.
+      if (
+        isMissingColumnErr(claimRes.error, 'attempt_count') ||
+        isMissingColumnErr(claimRes.error, 'locked_at') ||
+        isMissingColumnErr(claimRes.error, 'locked_by') ||
+        isMissingColumnErr(claimRes.error, 'last_error')
+      ) {
+        const legacy = await admin
+          .from('events')
+          .update({ status: 'published', published_at: dueNowIso })
+          .eq('id', id)
+          .eq('status', 'scheduled_publish')
+          .is('deleted_at', null)
+          .lte('scheduled_at', dueNowIso)
+          .select('id,name,status,scheduled_at,created_by,published_at')
+          .maybeSingle();
+        if (legacy.error) {
+          failedCount++;
+          results.push({ id, ok: false, error: legacy.error.message });
+          continue;
+        }
+        if (!legacy.data) {
+          skippedCount++;
+          results.push({ id, ok: true, skipped: true });
+          continue;
+        }
+        void logAdminAction({
+          actor_user_id: (legacy.data as any)?.created_by ? String((legacy.data as any).created_by) : null,
+          actor_role: 'system',
+          action_type: 'event.published_scheduled',
+          resource_type: 'events',
+          resource_id: String((legacy.data as any)?.id ?? id),
+          resource_name: (legacy.data as any)?.name != null ? String((legacy.data as any).name) : null,
+          previous_data: ev,
+          new_data: legacy.data,
+          severity: 'info',
+          undoable: false,
+          metadata: (legacy.data as any)?.scheduled_at
+            ? { scheduled_at: (legacy.data as any).scheduled_at, legacy_fallback: true }
+            : { legacy_fallback: true },
+        });
+        successCount++;
+        results.push({ id, ok: true, legacy_fallback: true });
+        continue;
+      }
+      failedCount++;
+      results.push({ id, ok: false, error: claimRes.error.message });
+      continue;
+    }
+    if (!claimRes.data) {
+      skippedCount++;
+      results.push({ id, ok: true, skipped: true });
+      continue;
+    }
+    claimedCount++;
+    if (String((ev as any)?.status ?? '') === 'processing_publish') reclaimedCount++;
+
+    const claimed = claimRes.data as any;
+    const attempt = Number(claimed?.attempt_count ?? 0) + 1;
+
+    // 2) Publish only when the lease is still ours.
+    const publishRes = await admin
+      .from('events')
+      .update({
+        status: 'published',
+        published_at: dueNowIso,
+        attempt_count: attempt,
+        locked_at: null,
+        locked_by: null,
+        last_error: null,
+      })
+      .eq('id', id)
+      .eq('status', 'processing_publish')
+      .eq('locked_by', WORKER.workerId)
+      .eq('locked_at', dueNowIso)
+      .is('deleted_at', null)
+      .lte('scheduled_at', dueNowIso)
       .select('id,name,status,scheduled_at,created_by,published_at')
       .maybeSingle();
 
-    if (up.error) {
-      results.push({ id, ok: false, error: up.error.message });
+    if (publishRes.error) {
+      const retryAt = new Date(Date.now() + computeExponentialBackoffMs(attempt)).toISOString();
+      const retryPatch =
+        attempt >= WORKER.maxAttempts
+          ? {
+              status: 'scheduled_publish_failed',
+              attempt_count: attempt,
+              last_error: publishRes.error.message,
+              locked_at: null,
+              locked_by: null,
+            }
+          : {
+              status: 'scheduled_publish',
+              attempt_count: attempt,
+              last_error: publishRes.error.message,
+              locked_at: null,
+              locked_by: null,
+              scheduled_at: retryAt,
+            };
+      await admin
+        .from('events')
+        .update(retryPatch)
+        .eq('id', id)
+        .eq('status', 'processing_publish')
+        .eq('locked_by', WORKER.workerId)
+        .eq('locked_at', dueNowIso);
+      failedCount++;
+      results.push({ id, ok: false, error: publishRes.error.message, attempt });
       continue;
     }
-    if (!up.data) {
-      results.push({ id, ok: true, skipped: true });
+    if (!publishRes.data) {
+      skippedCount++;
+      results.push({ id, ok: true, skipped: true, reason: 'lease-lost-or-already-processed' });
       continue;
     }
 
     void logAdminAction({
-      actor_user_id: (up.data as any)?.created_by ? String((up.data as any).created_by) : null,
+      actor_user_id: (publishRes.data as any)?.created_by ? String((publishRes.data as any).created_by) : null,
       actor_role: 'system',
       action_type: 'event.published_scheduled',
       resource_type: 'events',
-      resource_id: String((up.data as any)?.id ?? id),
-      resource_name: (up.data as any)?.name != null ? String((up.data as any).name) : null,
-      previous_data: ev,
-      new_data: up.data,
+      resource_id: String((publishRes.data as any)?.id ?? id),
+      resource_name: (publishRes.data as any)?.name != null ? String((publishRes.data as any).name) : null,
+      previous_data: claimed,
+      new_data: publishRes.data,
       severity: 'info',
       undoable: false,
-      metadata: (up.data as any)?.scheduled_at ? { scheduled_at: (up.data as any).scheduled_at } : {},
+      metadata: (publishRes.data as any)?.scheduled_at ? { scheduled_at: (publishRes.data as any).scheduled_at, attempt } : { attempt },
     });
 
-    results.push({ id, ok: true });
+    successCount++;
+    results.push({ id, ok: true, attempt });
   }
 
-  return json({ ok: true, processed: results.length, results });
+  return json({
+    ok: true,
+    processed: results.length,
+    worker: WORKER.workerId,
+    duration_ms: Date.now() - startedAt,
+    metrics: {
+      claimed: claimedCount,
+      reclaimed_stale: reclaimedCount,
+      succeeded: successCount,
+      failed: failedCount,
+      skipped: skippedCount,
+      batch_size: WORKER.batchSize,
+      max_attempts: WORKER.maxAttempts,
+      lease_ms: WORKER.leaseMs,
+    },
+    results,
+  });
 }
 

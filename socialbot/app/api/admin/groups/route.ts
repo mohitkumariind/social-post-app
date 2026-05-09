@@ -4,9 +4,17 @@ import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate'
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
-import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
+import { buildScopedCountQuery, buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
-import { RbacError, requireGroupAssignment, requireModeratorHasAssignedStates, requireOwnership, requireRole } from '@/lib/rbac/require';
+import {
+  RbacError,
+  requireCampaignManagerHasAssignedGroups,
+  requireGroupAssignment,
+  requireModeratorHasAssignedStates,
+  requireOwnership,
+  requireRole,
+} from '@/lib/rbac/require';
+import { SECURITY_LIMITS } from '@/lib/security-limits';
 
 const NO_SERVICE_ROLE =
   'Group Management requires SUPABASE_SERVICE_ROLE_KEY on the server (Vercel env). Without it, only your own profile is visible under RLS, so group counts stay empty.';
@@ -112,6 +120,31 @@ async function listMemberIdsForGroup(admin: SupabaseClient, groupId: number): Pr
   return out.filter(Boolean);
 }
 
+async function listLegacyProfileIdsForGroup(admin: SupabaseClient, groupId: number): Promise<string[]> {
+  const pageSize = 1000;
+  const out: string[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await admin
+      .from('profiles')
+      .select('id')
+      .eq('group_id', groupId)
+      .order('id', { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as any[];
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const id = String(row.id ?? '').trim();
+      if (id) out.push(id);
+    }
+    if (rows.length < pageSize) break;
+    from += pageSize;
+    if (from > 500000) break;
+  }
+  return out;
+}
+
 async function fetchMembersForGroupIdViaMemberships(admin: SupabaseClient, groupId: number) {
   const memberIds = await listMemberIdsForGroup(admin, groupId);
   if (memberIds.length === 0) return [];
@@ -178,10 +211,54 @@ async function selectGroupsListMaybeDeleted(admin: SupabaseClient) {
   return { data: res.data, error: res.error, hasDeletedAt: true };
 }
 
-function overlapsAssignedStates(profileAssigned: unknown, viewerAssigned: number[]): boolean {
-  const idsArr = Array.isArray(profileAssigned) ? profileAssigned : [];
-  const viewer = viewerAssigned.map(Number);
-  return idsArr.some((x: any) => viewer.includes(Number(x)));
+type ScopedViewer = {
+  id: string;
+  role: 'admin' | 'moderator' | 'campaign_manager';
+  assigned_state_ids: number[];
+  assigned_group_ids: string[];
+};
+
+function toScopedViewer(auth: {
+  user: { id: string };
+  role: 'admin' | 'moderator' | 'campaign_manager';
+  assigned_state_ids: number[];
+  assigned_group_ids: string[];
+}): ScopedViewer {
+  return {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+  };
+}
+
+async function countScopedProfilesByIds(admin: SupabaseClient, viewer: ScopedViewer, userIds: string[]): Promise<number> {
+  if (userIds.length === 0) return 0;
+  const batch = 500;
+  let total = 0;
+  for (let i = 0; i < userIds.length; i += batch) {
+    const slice = userIds.slice(i, i + batch);
+    let q: any = admin.from('profiles').select('id', { count: 'exact', head: true }).in('id', slice);
+    q = buildScopedCountQuery(viewer as any, q, 'profiles');
+    const { count, error } = await q;
+    if (error) throw new Error(error.message);
+    total += Number(count ?? 0);
+  }
+  return total;
+}
+
+async function countProfilesInGroup(admin: SupabaseClient, groupId: number): Promise<number> {
+  const { count, error } = await admin.from('profiles').select('id', { count: 'exact', head: true }).eq('group_id', groupId);
+  if (error) throw new Error(error.message);
+  return Number(count ?? 0);
+}
+
+async function countScopedProfilesInGroup(admin: SupabaseClient, viewer: ScopedViewer, groupId: number): Promise<number> {
+  let q: any = admin.from('profiles').select('id', { count: 'exact', head: true }).eq('group_id', groupId);
+  q = buildScopedCountQuery(viewer as any, q, 'profiles');
+  const { count, error } = await q;
+  if (error) throw new Error(error.message);
+  return Number(count ?? 0);
 }
 
 function requireModeratorOwnership(auth: { role: 'admin' | 'moderator'; user: { id: string } }, grp: DbGroupWithOwnerRow | null) {
@@ -297,6 +374,7 @@ export async function GET(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -322,7 +400,16 @@ export async function GET(request: NextRequest) {
             assigned_state_ids: auth.assigned_state_ids,
             assigned_group_ids: auth.assigned_group_ids,
           },
-          { created_by: grp.created_by, group_id: String(grp.id) }
+          { created_by: grp.created_by, group_id: String(grp.id) },
+          {
+            resourceType: 'groups',
+            audit: {
+              resourceType: 'groups',
+              action: 'groups.read',
+              resourceId: String(grp.id),
+              resourceName: grp.name,
+            },
+          }
         );
         if (!ok) throw new RbacError('Forbidden', 403);
       } catch (e) {
@@ -513,6 +600,16 @@ export async function DELETE(request: NextRequest) {
   }
 
   const hasMemberships = await hasGroupMembershipsTable(admin);
+  const scopedViewer = toScopedViewer(auth as any);
+  let memberIds: string[] = [];
+  if (hasMemberships) {
+    try {
+      memberIds = await listMemberIdsForGroup(admin, grp.id);
+    } catch (e) {
+      if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') return groupMembershipsMissingResponse();
+      throw e;
+    }
+  }
   // canAccessResource intentionally NOT used here for moderators because delete has extra safeguards (state isolation) below.
 
   // For moderators, ensure the group doesn't contain out-of-scope members before deleting the group row.
@@ -522,25 +619,17 @@ export async function DELETE(request: NextRequest) {
     } catch {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
-    const viewerStates = auth.assigned_state_ids.map(Number);
-    const { data: memberRows, error: memErr } = await admin
-      .from('profiles')
-      .select('id, assigned_state_ids')
-      .eq('group_id', grp.id);
-    if (memErr) return NextResponse.json({ error: memErr.message }, { status: 500 });
-    const outOfScope = (memberRows ?? []).some((r: any) => !overlapsAssignedStates(r.assigned_state_ids, viewerStates));
-    if (outOfScope) {
-      return NextResponse.json({ error: 'Forbidden: group contains users outside assigned_state_ids' }, { status: 403 });
+    let totalMembers = 0;
+    let scopedMembers = 0;
+    if (hasMemberships) {
+      totalMembers = memberIds.length;
+      scopedMembers = await countScopedProfilesByIds(admin, scopedViewer, memberIds);
+    } else {
+      totalMembers = await countProfilesInGroup(admin, grp.id);
+      scopedMembers = await countScopedProfilesInGroup(admin, scopedViewer, grp.id);
     }
-  }
-
-  let memberIds: string[] = [];
-  if (hasMemberships) {
-    try {
-      memberIds = await listMemberIdsForGroup(admin, grp.id);
-    } catch (e) {
-      if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') return groupMembershipsMissingResponse();
-      throw e;
+    if (scopedMembers !== totalMembers) {
+      return NextResponse.json({ error: 'Forbidden: group contains users outside assigned_state_ids' }, { status: 403 });
     }
   }
   if (hasMemberships) {
@@ -553,10 +642,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to remove members' }, { status: 500 });
     }
   } else {
-    const { data: members, error: memErr } = await admin.from('profiles').select('id').eq('group_id', grp.id);
-    if (memErr) return NextResponse.json({ error: memErr.message }, { status: 500 });
-    const ids = (members ?? []).map((m: any) => String(m.id ?? '')).filter(Boolean);
-    memberIds.push(...ids);
+    try {
+      memberIds = await listLegacyProfileIdsForGroup(admin, grp.id);
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to load group members' }, { status: 500 });
+    }
 
     const { error: upErr } = await admin.from('profiles').update({ group_id: null }).eq('group_id', grp.id);
     if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
@@ -654,6 +744,9 @@ export async function POST(request: NextRequest) {
 
   if (!tag) return NextResponse.json({ error: 'Missing group name/id' }, { status: 400 });
   if (userIds.length === 0) return NextResponse.json({ error: 'Select at least one user' }, { status: 400 });
+  if (userIds.length > SECURITY_LIMITS.groupAddMembers) {
+    return NextResponse.json({ error: `Too many users. Max ${SECURITY_LIMITS.groupAddMembers}` }, { status: 400 });
+  }
 
   // Foreign key constraint requires that `profiles.group_id` exists in `groups` table.
   // If tag is numeric, it must already exist. If tag is a name, create group row if missing.
@@ -682,19 +775,13 @@ export async function POST(request: NextRequest) {
   }
 
   if (auth.role === 'moderator') {
-    const { data: rows, error: stErr } = await admin
-      .from('profiles')
-      .select('id, assigned_state_ids')
-      .in('id', userIds);
-    if (stErr) return NextResponse.json({ error: stErr.message }, { status: 500 });
-    const viewerStates = auth.assigned_state_ids.map(Number);
-    const allowed = (rows ?? [])
-      .filter((r: any) => {
-        return overlapsAssignedStates(r.assigned_state_ids, viewerStates);
-      })
-      .map((r: any) => String(r.id))
-      .filter(Boolean);
-    if (allowed.length !== userIds.length) {
+    /**
+     * Fail-closed DB-scoped guard:
+     * do not fetch candidates and filter in JS. Count scoped IDs in SQL and require
+     * every requested profile id to be in moderator scope.
+     */
+    const scopedCount = await countScopedProfilesByIds(admin, toScopedViewer(auth as any), userIds);
+    if (scopedCount !== userIds.length) {
       return NextResponse.json({ error: 'Forbidden: includes users outside assigned state' }, { status: 403 });
     }
   }
@@ -755,10 +842,13 @@ export async function PATCH(request: NextRequest) {
   if (add.length === 0 && remove.length === 0) {
     return NextResponse.json({ error: 'Provide add and/or remove' }, { status: 400 });
   }
+  if (add.length > SECURITY_LIMITS.groupPatchOps || remove.length > SECURITY_LIMITS.groupPatchOps) {
+    return NextResponse.json({ error: `Too many group operations. Max ${SECURITY_LIMITS.groupPatchOps} per add/remove` }, { status: 400 });
+  }
 
   const { data: row, error: readErr } = await admin
     .from('profiles')
-    .select('group_id, assigned_state_ids')
+    .select('group_id')
     .eq('id', userId)
     .maybeSingle();
   if (readErr) return NextResponse.json({ error: readErr.message }, { status: 500 });
@@ -791,7 +881,8 @@ export async function PATCH(request: NextRequest) {
       }
     }
     if (auth.role === 'moderator') {
-      if (!overlapsAssignedStates((row as any).assigned_state_ids, auth.assigned_state_ids)) {
+      const scopedCount = await countScopedProfilesByIds(admin, toScopedViewer(auth as any), [userId]);
+      if (scopedCount !== 1) {
         return NextResponse.json({ error: 'Forbidden: user outside assigned_state_ids' }, { status: 403 });
       }
     }
@@ -818,7 +909,8 @@ export async function PATCH(request: NextRequest) {
       }
     }
     if (auth.role === 'moderator') {
-      if (!overlapsAssignedStates((row as any).assigned_state_ids, auth.assigned_state_ids)) {
+      const scopedCount = await countScopedProfilesByIds(admin, toScopedViewer(auth as any), [userId]);
+      if (scopedCount !== 1) {
         return NextResponse.json({ error: 'Forbidden: user outside assigned_state_ids' }, { status: 403 });
       }
     }

@@ -1,4 +1,5 @@
 import { createServiceRoleClient } from '@/lib/admin-gate';
+import { validateCronRequest } from '@/lib/cron-auth';
 
 export const runtime = 'nodejs';
 
@@ -16,12 +17,49 @@ function yyyyMmDd(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-export async function POST(request: Request) {
-  const secret = process.env.CRON_SECRET?.trim();
-  if (secret) {
-    const got = request.headers.get('x-cron-secret')?.trim();
-    if (!got || got !== secret) return json({ error: 'Unauthorized' }, 401);
+/**
+ * Aggregate notification counters in bounded pages so the worker does not
+ * materialize an unbounded day slice into memory.
+ */
+async function sumNotificationBroadcastCounters(
+  admin: any,
+  startIso: string,
+  endIso: string
+): Promise<{ sent: number; delivered: number; opened: number }> {
+  const pageSize = 1000;
+  let from = 0;
+  let sent = 0;
+  let delivered = 0;
+  let opened = 0;
+
+  for (;;) {
+    const { data, error } = await admin
+      .from('notification_broadcasts')
+      .select('sent_count,delivered_count,opened_count')
+      .gte('created_at', startIso)
+      .lte('created_at', endIso)
+      .order('created_at', { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as any[];
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      sent += Number(r.sent_count ?? 0);
+      delivered += Number(r.delivered_count ?? 0);
+      opened += Number(r.opened_count ?? 0);
+    }
+    if (rows.length < pageSize) break;
+    from += pageSize;
+    if (from > 5_000_000) break;
   }
+
+  return { sent, delivered, opened };
+}
+
+export async function POST(request: Request) {
+  const startedAt = Date.now();
+  const cronAuth = validateCronRequest(request);
+  if (!cronAuth.ok) return json({ error: cronAuth.error }, cronAuth.status);
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
@@ -39,51 +77,56 @@ export async function POST(request: Request) {
     const endIso = dayEnd.toISOString();
     const dayKey = yyyyMmDd(dayStart);
 
-    // Notifications: use notification_broadcasts table as source of truth.
-    const { data: nbRows, error: nbErr } = await admin
-      .from('notification_broadcasts')
-      .select('sent_count,delivered_count,opened_count')
-      .gte('created_at', startIso)
-      .lte('created_at', endIso);
-    if (nbErr) return json({ error: nbErr.message }, 500);
-    const sent = (nbRows ?? []).reduce((a: number, r: any) => a + Number(r.sent_count ?? 0), 0);
-    const delivered = (nbRows ?? []).reduce((a: number, r: any) => a + Number(r.delivered_count ?? 0), 0);
-    const opened = (nbRows ?? []).reduce((a: number, r: any) => a + Number(r.opened_count ?? 0), 0);
+    try {
+      // Notifications: source of truth with bounded memory scan.
+      const { sent, delivered, opened } = await sumNotificationBroadcastCounters(admin, startIso, endIso);
 
-    // Events lifecycle: use admin_logs transitions as the source (no heavy live aggregation).
-    const { data: evLogs, error: evErr } = await admin
-      .from('admin_logs')
-      .select('action_type')
-      .eq('resource_type', 'events')
-      .in('action_type', ['events.publish', 'events.archive', 'events.unpublish', 'events.delete'])
-      .gte('created_at', startIso)
-      .lte('created_at', endIso);
-    if (evErr) return json({ error: evErr.message }, 500);
-    const publishedCount = (evLogs ?? []).filter((r: any) => String(r.action_type) === 'events.publish').length;
+      // Events lifecycle: use admin_logs transition count directly (no full row materialization).
+      const { count: publishedCount, error: evErr } = await admin
+        .from('admin_logs')
+        .select('id', { count: 'exact', head: true })
+        .eq('resource_type', 'events')
+        .eq('action_type', 'events.publish')
+        .gte('created_at', startIso)
+        .lte('created_at', endIso);
+      if (evErr) return json({ error: evErr.message }, 500);
 
-    // Active published count: computed from events table with lightweight filtered query for the day snapshot.
-    // (Still not a dashboard live query — this is run in worker.)
-    const { data: activeRows, error: actErr } = await admin
-      .from('events')
-      .select('id')
-      .is('deleted_at', null)
-      .in('status', ['published', 'scheduled_publish'])
-      .lte('start', endIso)
-      .gte('end', startIso);
-    if (actErr) return json({ error: actErr.message }, 500);
-    const activePublishedCount = (activeRows ?? []).length;
+      // Active published count: overlap query as count-only.
+      const { count: activePublishedCount, error: actErr } = await admin
+        .from('events')
+        .select('id', { count: 'exact', head: true })
+        .is('deleted_at', null)
+        .in('status', ['published', 'scheduled_publish'])
+        .lte('start', endIso)
+        .gte('end', startIso);
+      if (actErr) return json({ error: actErr.message }, 500);
 
-    const nRow = { day: dayKey, sent_count: sent, delivered_count: delivered, opened_count: opened };
-    const eRow = { day: dayKey, active_published_count: activePublishedCount, published_count: publishedCount };
+      const nRow = { day: dayKey, sent_count: sent, delivered_count: delivered, opened_count: opened };
+      const eRow = {
+        day: dayKey,
+        active_published_count: typeof activePublishedCount === 'number' ? activePublishedCount : 0,
+        published_count: typeof publishedCount === 'number' ? publishedCount : 0,
+      };
 
-    const { error: upN } = await admin.from('analytics_daily_notifications').upsert(nRow as any);
-    if (upN) return json({ error: upN.message }, 500);
-    const { error: upE } = await admin.from('analytics_daily_events').upsert(eRow as any);
-    if (upE) return json({ error: upE.message }, 500);
+      const { error: upN } = await admin.from('analytics_daily_notifications').upsert(nRow as any);
+      if (upN) return json({ error: upN.message }, 500);
+      const { error: upE } = await admin.from('analytics_daily_events').upsert(eRow as any);
+      if (upE) return json({ error: upE.message }, 500);
 
-    out.push({ day: dayKey, notifications: nRow, events: eRow });
+      out.push({ day: dayKey, notifications: nRow, events: eRow });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return json({ error: msg }, 500);
+    }
   }
 
-  return json({ ok: true, days, rolled_up: out.length, rows: out });
+  return json({
+    ok: true,
+    worker: 'api/jobs/analytics-daily-rollup',
+    duration_ms: Date.now() - startedAt,
+    days,
+    rolled_up: out.length,
+    rows: out,
+  });
 }
 

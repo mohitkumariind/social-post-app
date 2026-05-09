@@ -3,9 +3,9 @@ import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate'
 import { runBroadcast, type BroadcastPayload } from '@/lib/broadcast-send';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
-import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
-import { RbacError, requireModeratorHasAssignedStates, requireRole, toNumArray } from '@/lib/rbac/require';
+import { RbacError, requireStandardRbacContext } from '@/lib/rbac/require';
+import { applyCanonicalNotificationTargeting } from '@/lib/rbac/notification-targeting';
 
 export const runtime = 'nodejs';
 
@@ -37,8 +37,7 @@ export async function POST(request: Request) {
     );
   }
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
-    requireModeratorHasAssignedStates(auth);
+    requireStandardRbacContext(auth, ['admin', 'moderator', 'campaign_manager']);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -53,37 +52,7 @@ export async function POST(request: Request) {
   const expo = new Expo(accessToken ? { accessToken } : undefined);
 
   try {
-    // Enforce moderator: only assigned state users, regardless of provided filters.
-    if (auth.role === 'moderator') {
-      payload = {
-        ...payload,
-        all_workers: false,
-        filters: {
-          ...(payload.filters ?? {}),
-          assigned_state_ids: auth.assigned_state_ids,
-        } as any,
-      };
-    }
-
-    if (auth.role === 'campaign_manager') {
-      // Campaign manager: groups-only targeting (assigned groups).
-      payload = {
-        ...payload,
-        all_workers: false,
-        filters: {
-          group_ids: [],
-        } as any,
-      };
-      const groupIds = toNumArray(auth.assigned_group_ids);
-      if (groupIds.length === 0) return json({ error: 'Forbidden: no assigned groups to target' }, 403);
-      // Defensive: ensure campaign manager cannot target outside assignment even if client sends filters.
-      const ok = canAccessResource(
-        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
-        { group_ids: groupIds.map(String) }
-      );
-      if (!ok) return json({ error: 'Forbidden' }, 403);
-      (payload.filters as any).group_ids = groupIds;
-    }
+    payload = applyCanonicalNotificationTargeting(auth as any, payload, 'notifications.scope.validate');
 
     {
       const decision = canPerformMutation(

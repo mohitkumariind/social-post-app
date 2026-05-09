@@ -5,12 +5,13 @@ import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireRole } from '@/lib/rbac/require';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { withAudit } from '@/lib/audit/withAudit';
+import { API_DEFAULT_LIMIT, API_MAX_LIMIT, clampLimit } from '@/lib/perf-defaults';
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
@@ -24,11 +25,23 @@ export async function GET() {
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
-  let q = admin.from('notification_templates').select('*').is('deleted_at', null).order('created_at', { ascending: false }) as any;
+  const sp = request.nextUrl.searchParams;
+  const limit = clampLimit(sp.get('limit'), API_DEFAULT_LIMIT, API_MAX_LIMIT);
+  const cursorCreatedAt = (sp.get('cursor_created_at') ?? '').trim();
+
+  let q = admin
+    .from('notification_templates')
+    .select('*')
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(limit) as any;
+  if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
   if (auth.role !== 'admin') q = q.eq('created_by', auth.user.id);
   const { data, error } = await q;
   if (error) return json({ error: error.message }, 500);
-  return json({ templates: data ?? [] });
+  const rows = (data ?? []) as any[];
+  const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
+  return json({ templates: rows, next_cursor_created_at, limit });
 }
 
 export const POST = withAudit(
@@ -108,7 +121,8 @@ export const PATCH = withAudit(
       auth.role !== 'admin' &&
       !canAccessResource(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
-        { created_by: before.created_by }
+        { created_by: before.created_by },
+        { resourceType: 'notification_templates', audit: { resourceType: 'notification_templates', action: 'templates.read', resourceId: id, resourceName: String(before?.title ?? '') } }
       )
     ) {
       return json({ error: 'Forbidden' }, 403);
@@ -171,7 +185,8 @@ export const DELETE = withAudit(
       auth.role !== 'admin' &&
       !canAccessResource(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
-        { created_by: before.created_by }
+        { created_by: before.created_by },
+        { resourceType: 'notification_templates', audit: { resourceType: 'notification_templates', action: 'templates.read', resourceId: id, resourceName: String(before?.title ?? '') } }
       )
     ) {
       return json({ error: 'Forbidden' }, 403);

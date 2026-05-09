@@ -6,6 +6,7 @@ import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import {
+  requireCampaignManagerHasAssignedGroups,
   RbacError,
   requireModeratorHasAssignedStates,
   requireOwnership,
@@ -13,6 +14,7 @@ import {
   requireScopeState,
   toNumArray,
 } from '@/lib/rbac/require';
+import { API_DEFAULT_LIMIT, API_MAX_LIMIT, clampLimit } from '@/lib/perf-defaults';
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -33,6 +35,7 @@ export async function GET(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -43,6 +46,8 @@ export async function GET(request: NextRequest) {
 
   const id = (request.nextUrl.searchParams.get('id') ?? '').trim();
   const name = (request.nextUrl.searchParams.get('name') ?? '').trim();
+  const limit = clampLimit(request.nextUrl.searchParams.get('limit'), API_DEFAULT_LIMIT, API_MAX_LIMIT);
+  const cursorCreatedAt = (request.nextUrl.searchParams.get('cursor_created_at') ?? '').trim();
 
   const includeDeleted = (request.nextUrl.searchParams.get('include_deleted') ?? '').trim() === '1';
 
@@ -67,6 +72,15 @@ export async function GET(request: NextRequest) {
           created_by: (data as any).created_by,
           state_ids: (data as any).state_id,
           group_ids: (data as any).target_groups,
+        },
+        {
+          resourceType: 'events',
+          audit: {
+            resourceType: 'events',
+            action: 'events.read',
+            resourceId: String((data as any).id ?? ''),
+            resourceName: String((data as any).name ?? ''),
+          },
         }
       );
       if (!ok) throw new RbacError('Forbidden', 403);
@@ -79,8 +93,9 @@ export async function GET(request: NextRequest) {
   }
 
   // Listing
-  let q = db.from('events').select('*').order('created_at', { ascending: false }) as any;
+  let q = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit) as any;
   if (!includeDeleted) q = q.is('deleted_at', null);
+  if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
   q = buildScopedQuery(
     { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
     q,
@@ -88,7 +103,9 @@ export async function GET(request: NextRequest) {
   );
   const { data, error } = await q;
   if (error) return json({ error: error.message }, 500);
-  return json({ events: data ?? [], usedServiceRole: !!admin });
+  const rows = (data ?? []) as any[];
+  const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
+  return json({ events: rows, usedServiceRole: !!admin, next_cursor_created_at, limit });
 }
 
 export async function POST(request: NextRequest) {
@@ -98,6 +115,7 @@ export async function POST(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -197,6 +215,7 @@ export async function PATCH(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -386,6 +405,7 @@ export async function DELETE(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);

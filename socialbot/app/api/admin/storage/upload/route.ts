@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import {
+  RbacError,
+  requireStandardRbacContext,
+} from '@/lib/rbac/require';
+import { SECURITY_LIMITS, envLimit } from '@/lib/security-limits';
 
 const ALLOWED_BUCKETS = new Set(['post-images', 'user-frames']);
 
@@ -23,6 +29,14 @@ export async function POST(request: NextRequest) {
       { error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' },
       { status: auth.status }
     );
+  }
+  try {
+    requireStandardRbacContext(auth, ['admin', 'moderator', 'campaign_manager']);
+  } catch (e) {
+    if (e instanceof RbacError) {
+      return NextResponse.json({ error: e.message }, { status: e.status });
+    }
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -71,6 +85,10 @@ export async function POST(request: NextRequest) {
   if (!(file instanceof Blob)) {
     return NextResponse.json({ error: 'Missing file' }, { status: 400 });
   }
+  const maxUploadBytes = envLimit('STORAGE_UPLOAD_MAX_BYTES', SECURITY_LIMITS.storageUploadMaxBytes, 1024, 50 * 1024 * 1024);
+  if (file.size > maxUploadBytes) {
+    return NextResponse.json({ error: `File too large. Max ${maxUploadBytes} bytes` }, { status: 400 });
+  }
 
   if (auth.role === 'moderator') {
     // Enforce: public/<userId>/... and userId must belong to the moderator's assigned state.
@@ -85,9 +103,16 @@ export async function POST(request: NextRequest) {
       .eq('id', userId)
       .maybeSingle();
     if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
-    const idsArr = Array.isArray((prof as any)?.assigned_state_ids) ? (prof as any).assigned_state_ids : [];
-    const viewerStates = auth.assigned_state_ids.map(Number);
-    const ok = idsArr.some((x: any) => viewerStates.includes(Number(x)));
+    const ok = canAccessResource(
+      {
+        id: auth.user.id,
+        role: auth.role,
+        assigned_state_ids: auth.assigned_state_ids,
+        assigned_group_ids: auth.assigned_group_ids,
+      },
+      { state_ids: (prof as any)?.assigned_state_ids },
+      { resourceType: 'profiles', audit: { resourceType: 'profiles', action: 'storage.upload.scope.validate' } }
+    );
     if (!ok) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }

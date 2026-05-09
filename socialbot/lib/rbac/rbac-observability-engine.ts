@@ -1,4 +1,5 @@
 import { createServiceRoleClient } from '@/lib/admin-gate';
+import { normalizeGroupIds, normalizeStateIds } from '@/lib/rbac/require';
 
 export type RbacObsSeverity = 'info' | 'warning' | 'critical';
 export type RbacObsResult = 'allowed' | 'denied';
@@ -18,13 +19,11 @@ export type TrackRbacEventInput = {
 };
 
 function toNumArr(v: unknown): number[] {
-  if (!Array.isArray(v)) return [];
-  return v.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+  return normalizeStateIds(v);
 }
 
 function toStrArr(v: unknown): string[] {
-  if (!Array.isArray(v)) return [];
-  return v.map((x) => String(x ?? '').trim()).filter(Boolean);
+  return normalizeGroupIds(v);
 }
 
 function isMissingTableErr(err: { message?: string } | null | undefined, tableName: string) {

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
-import { RbacError, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
+import { RbacError, requireCampaignManagerHasAssignedGroups, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
+import { API_DEFAULT_FRAMES_LIMIT, API_MAX_FRAMES_LIMIT, clampLimit } from '@/lib/perf-defaults';
 
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -13,6 +14,7 @@ export async function GET(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -20,6 +22,8 @@ export async function GET(request: NextRequest) {
 
   const userId = (request.nextUrl.searchParams.get('user_id') ?? '').trim();
   const searchQuery = (request.nextUrl.searchParams.get('search_query') ?? '').trim();
+  const limit = clampLimit(request.nextUrl.searchParams.get('limit'), API_DEFAULT_FRAMES_LIMIT, API_MAX_FRAMES_LIMIT);
+  const cursorCreatedAt = (request.nextUrl.searchParams.get('cursor_created_at') ?? '').trim();
   if (!userId) {
     return NextResponse.json({ error: 'Missing user_id' }, { status: 400 });
   }
@@ -59,14 +63,16 @@ export async function GET(request: NextRequest) {
       .select('id,url,created_at,file_name')
       .eq('user_id', userId)
       .order('file_name', { ascending: true })
-      .order('created_at', { ascending: false }) as any;
+      .order('created_at', { ascending: false })
+      .limit(limit) as any;
 
   const baseWithoutFileName = () =>
     db
       .from('user_frames')
       .select('id,url,created_at')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false }) as any;
+      .order('created_at', { ascending: false })
+      .limit(limit) as any;
 
   const isMissingColumnErr = (err: { message?: string } | null | undefined, columnName: string) => {
     const msg = String(err?.message ?? '').toLowerCase();
@@ -75,27 +81,46 @@ export async function GET(request: NextRequest) {
 
   // If file_name column doesn't exist in this project, fall back to URL search.
   if (!searchQuery) {
-    let { data, error } = await base();
+    let q = base();
+    if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
+    let { data, error } = await q;
     if (error && isMissingColumnErr(error, 'file_name')) {
-      ({ data, error } = await baseWithoutFileName());
+      let q2 = baseWithoutFileName();
+      if (cursorCreatedAt) q2 = q2.lt('created_at', cursorCreatedAt);
+      ({ data, error } = await q2);
     }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ frames: data ?? [], usedServiceRole: !!admin }, { headers: { 'Cache-Control': 'no-store' } });
+    const rows = (data ?? []) as any[];
+    const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
+    return NextResponse.json(
+      { frames: rows, usedServiceRole: !!admin, next_cursor_created_at, limit },
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
   }
 
-  let res: any = await base().ilike('file_name', `%${searchQuery}%`);
+  let qSearch: any = base().ilike('file_name', `%${searchQuery}%`);
+  if (cursorCreatedAt) qSearch = qSearch.lt('created_at', cursorCreatedAt);
+  let res: any = await qSearch;
   if (res.error) {
     if (isMissingColumnErr(res.error, 'file_name')) {
-      res = (await db
+      let qFallback: any = db
         .from('user_frames')
         .select('id,url,created_at')
         .eq('user_id', userId)
         .ilike('url', `%${searchQuery}%`)
-        .order('created_at', { ascending: false })) as any;
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (cursorCreatedAt) qFallback = qFallback.lt('created_at', cursorCreatedAt);
+      res = (await qFallback) as any;
     }
   }
 
   if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
-  return NextResponse.json({ frames: res.data ?? [], usedServiceRole: !!admin }, { headers: { 'Cache-Control': 'no-store' } });
+  const rows = (res.data ?? []) as any[];
+  const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
+  return NextResponse.json(
+    { frames: rows, usedServiceRole: !!admin, next_cursor_created_at, limit },
+    { headers: { 'Cache-Control': 'no-store' }
+  });
 }
 

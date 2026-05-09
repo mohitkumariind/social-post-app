@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import {
+  RbacError,
+  requireStandardRbacContext,
+} from '@/lib/rbac/require';
+import { SECURITY_LIMITS } from '@/lib/security-limits';
 
 const ALLOWED_BUCKETS = new Set(['post-images', 'user-frames']);
 
@@ -23,6 +29,14 @@ export async function POST(request: NextRequest) {
       { error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' },
       { status: auth.status }
     );
+  }
+  try {
+    requireStandardRbacContext(auth, ['admin', 'moderator', 'campaign_manager']);
+  } catch (e) {
+    if (e instanceof RbacError) {
+      return NextResponse.json({ error: e.message }, { status: e.status });
+    }
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const admin = createServiceRoleClient();
@@ -73,6 +87,9 @@ export async function POST(request: NextRequest) {
   if (paths.length === 0) {
     return NextResponse.json({ ok: true, removed: 0 });
   }
+  if (paths.length > SECURITY_LIMITS.storageRemovePaths) {
+    return NextResponse.json({ error: `Too many paths. Max ${SECURITY_LIMITS.storageRemovePaths}` }, { status: 400 });
+  }
 
   if (auth.role === 'moderator') {
     // All paths must be under public/<userId>/ and user must belong to assigned state.
@@ -91,9 +108,16 @@ export async function POST(request: NextRequest) {
         .eq('id', uid)
         .maybeSingle();
       if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
-      const idsArr = Array.isArray((prof as any)?.assigned_state_ids) ? (prof as any).assigned_state_ids : [];
-      const viewerStates = auth.assigned_state_ids.map(Number);
-      const ok = idsArr.some((x: any) => viewerStates.includes(Number(x)));
+      const ok = canAccessResource(
+        {
+          id: auth.user.id,
+          role: auth.role,
+          assigned_state_ids: auth.assigned_state_ids,
+          assigned_group_ids: auth.assigned_group_ids,
+        },
+        { state_ids: (prof as any)?.assigned_state_ids },
+        { resourceType: 'profiles', audit: { resourceType: 'profiles', action: 'storage.remove.scope.validate' } }
+      );
       if (!ok) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }

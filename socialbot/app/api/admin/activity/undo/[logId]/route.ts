@@ -27,18 +27,18 @@ function pickPatchFromRow(row: Record<string, unknown>): Record<string, unknown>
   return patch;
 }
 
-function intersectsNums(a: unknown, b: number[]): boolean {
+function subsetNums(a: unknown, b: number[]): boolean {
   const aa = toNumArray(a);
   if (aa.length === 0 || b.length === 0) return false;
   const set = new Set(b.map(Number));
-  return aa.some((n) => set.has(Number(n)));
+  return aa.every((n) => set.has(Number(n)));
 }
 
-function intersectsStr(a: unknown, b: string[]): boolean {
+function subsetStr(a: unknown, b: string[]): boolean {
   const aa = toStrArray(a);
   if (aa.length === 0 || b.length === 0) return false;
   const set = new Set(b.map((x) => String(x).trim()).filter(Boolean));
-  return aa.some((s) => set.has(String(s).trim()));
+  return aa.every((s) => set.has(String(s).trim()));
 }
 
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ logId: string }> }) {
@@ -64,20 +64,17 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ logId: st
 
   // RBAC: must be able to *view* the log in Activity Center to undo it.
   if (auth.role !== 'admin') {
-    const isOwn = String((logRow as any).actor_user_id ?? '').trim() === auth.user.id;
-    if (!isOwn) {
-      const scope = resolveScope({
-        role: auth.role,
-        assigned_state_ids: auth.assigned_state_ids,
-        assigned_group_ids: auth.assigned_group_ids,
-      });
-      if (scope.type === 'STATE') {
-        if (!intersectsNums((logRow as any).scope_state_ids, scope.states)) return json({ error: 'Forbidden' }, 403);
-      } else if (scope.type === 'GROUP') {
-        if (!intersectsStr((logRow as any).scope_group_ids, scope.groups)) return json({ error: 'Forbidden' }, 403);
-      } else {
-        return json({ error: 'Forbidden' }, 403);
-      }
+    const scope = resolveScope({
+      role: auth.role,
+      assigned_state_ids: auth.assigned_state_ids,
+      assigned_group_ids: auth.assigned_group_ids,
+    });
+    if (scope.type === 'STATE') {
+      if (!subsetNums((logRow as any).scope_state_ids, scope.states)) return json({ error: 'Forbidden' }, 403);
+    } else if (scope.type === 'GROUP') {
+      if (!subsetStr((logRow as any).scope_group_ids, scope.groups)) return json({ error: 'Forbidden' }, 403);
+    } else {
+      return json({ error: 'Forbidden' }, 403);
     }
   }
 
