@@ -1,5 +1,6 @@
 "use client";
 import { BarChart3, Calendar, ChevronRight, Users } from 'lucide-react';
+import Image from 'next/image';
 import React, { useEffect, useMemo, useState } from 'react';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
@@ -109,9 +110,19 @@ export default function Dashboard() {
     <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in duration-500 pb-20 text-slate-200">
 
       <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-black text-white tracking-tight">SocialBot Dashboard</h1>
-          <p className="text-sm font-bold text-zinc-400 uppercase tracking-widest mt-3 leading-none">Live Performance Metrics</p>
+        <div className="flex items-center gap-4">
+          <Image
+            src="/social-post-icon.png"
+            alt="Social Post"
+            width={48}
+            height={48}
+            className="rounded-2xl shrink-0"
+            priority
+          />
+          <div>
+            <h1 className="text-3xl font-black text-white tracking-tight">Social Post</h1>
+            <p className="text-sm font-bold text-zinc-400 uppercase tracking-widest mt-3 leading-none">Live Performance Metrics</p>
+          </div>
         </div>
         <div className="hidden md:flex bg-white px-6 py-3 rounded-2xl border border-slate-100 shadow-sm items-center gap-3">
           <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />

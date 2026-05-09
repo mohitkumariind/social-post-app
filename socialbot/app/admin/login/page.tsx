@@ -39,7 +39,7 @@ function AdminLoginInner() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-950 px-4">
       <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/80 p-8 shadow-xl">
-        <h1 className="text-center text-2xl font-black tracking-tight text-white">SocialBot Admin</h1>
+        <h1 className="text-center text-2xl font-black tracking-tight text-white">Social Post Admin</h1>
         <p className="mt-2 text-center text-sm font-medium text-zinc-400">Sign in to access the dashboard</p>
 
         {errorMessage ? (

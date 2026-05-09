@@ -6,6 +6,7 @@ export type ScopedResourceType =
   | 'events'
   | 'groups'
   | 'profiles'
+  | 'posts'
   | 'notification_templates'
   | 'admin_logs';
 
@@ -70,6 +71,16 @@ export function buildScopedQuery(
     return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
   }
 
+  if (resourceType === 'posts') {
+    if (role === 'moderator') {
+      // Best-effort state scoping: posts.state_id overlaps assigned_state_ids (array).
+      return baseQuery.overlaps('state_id', user.assigned_state_ids);
+    }
+    // campaign_manager: group-only scoping (indexed). If no groups are assigned, return empty.
+    const gids = toNumArray(user.assigned_group_ids);
+    return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
+  }
+
   if (resourceType === 'admin_logs') {
     if (role === 'campaign_manager') {
       const gids = toStrArray(user.assigned_group_ids);
@@ -86,6 +97,40 @@ export function buildScopedQuery(
 
   // Safe fallback: ownership only
   return baseQuery.eq('created_by', user.id);
+}
+
+/**
+ * Analytics scoping is intentionally less restrictive than `buildScopedQuery` for some resources:
+ * it scopes by assignment (state/group) and avoids ownership-only constraints so dashboards
+ * don't leak global counts while still reflecting within-scope totals.
+ */
+export function buildScopedAnalyticsQuery(
+  user: UnifiedUser,
+  baseQuery: AnyQuery,
+  resourceType: Extract<ScopedResourceType, 'events' | 'profiles' | 'posts'>,
+  ctx: ScopedQueryContext = {}
+): AnyQuery {
+  const role = user.role;
+  if (role === 'admin') return baseQuery;
+
+  if (resourceType === 'profiles') {
+    if (role === 'moderator') return baseQuery.overlaps('assigned_state_ids', user.assigned_state_ids);
+    const allowed = Array.isArray(ctx.allowed_profile_ids) ? ctx.allowed_profile_ids.map((x) => String(x).trim()).filter(Boolean) : [];
+    if (allowed.length > 0) return baseQuery.in('id', allowed);
+    const gids = toNumArray(user.assigned_group_ids);
+    return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
+  }
+
+  if (resourceType === 'events') {
+    if (role === 'moderator') return baseQuery.overlaps('state_id', user.assigned_state_ids);
+    const gidsStr = toStrArray(user.assigned_group_ids);
+    return gidsStr.length > 0 ? baseQuery.overlaps('target_groups', gidsStr) : baseQuery.eq('id', '__none__');
+  }
+
+  // posts
+  if (role === 'moderator') return baseQuery.overlaps('state_id', user.assigned_state_ids);
+  const gids = toNumArray(user.assigned_group_ids);
+  return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
 }
 
 /**

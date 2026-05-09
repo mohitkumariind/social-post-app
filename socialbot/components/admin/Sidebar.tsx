@@ -10,6 +10,7 @@ import {
   ListOrdered,
   ShieldAlert,
 } from 'lucide-react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -71,9 +72,16 @@ export default function Sidebar() {
 
   return (
     <aside className="fixed left-0 top-0 z-40 h-screen w-64 border-r border-zinc-800 bg-zinc-950">
-      <div className="flex h-16 items-center border-b border-zinc-800 px-6">
+      <div className="flex h-16 items-center gap-3 border-b border-zinc-800 px-6">
+        <Image
+          src="/social-post-icon.png"
+          alt="Social Post"
+          width={36}
+          height={36}
+          className="rounded-lg shrink-0"
+        />
         <span className="text-xl font-bold tracking-tight text-white">
-          SocialBot
+          Social Post
         </span>
       </div>
       <nav className="flex flex-col gap-1 p-4">

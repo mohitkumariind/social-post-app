@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SocialBot Admin",
+  title: "Social Post Admin",
   description: "Social Post admin dashboard",
 };
 
