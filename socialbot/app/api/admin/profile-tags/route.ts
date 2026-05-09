@@ -19,13 +19,16 @@ export async function GET() {
   }
 
   const admin = createServiceRoleClient();
-  if (auth.role === 'admin' && !admin) {
+  if (!admin) {
     return NextResponse.json(
       { error: 'Admin tag access requires SUPABASE_SERVICE_ROLE_KEY' },
       { status: 503 }
     );
   }
-  const db = admin ?? supabase;
+  const db = admin;
+  const isAdmin = auth.role === 'admin';
+  console.log('ROLE:', auth.role);
+  console.log('USING ADMIN RAW QUERY:', isAdmin);
 
   const scopedUser = {
     id: auth.user.id,
@@ -46,7 +49,11 @@ export async function GET() {
   let from = 0;
   for (;;) {
     let q: any = db.from('profiles').select('group_tags').order('id', { ascending: true }).range(from, from + pageSize - 1);
-    q = buildScopedQuery(scopedUser, q, 'profiles', { allowed_profile_ids: Array.isArray(allowed_profile_ids) ? allowed_profile_ids : undefined });
+    if (!isAdmin) {
+      q = buildScopedQuery(scopedUser, q, 'profiles', {
+        allowed_profile_ids: Array.isArray(allowed_profile_ids) ? allowed_profile_ids : undefined,
+      });
+    }
     const { data, error } = await q;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     const rows = (data ?? []) as any[];

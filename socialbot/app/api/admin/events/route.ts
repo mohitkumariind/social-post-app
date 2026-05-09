@@ -42,10 +42,13 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
-  if (auth.role === 'admin' && !admin) {
+  if (!admin) {
     return json({ error: 'Admin event access requires SUPABASE_SERVICE_ROLE_KEY' }, 503);
   }
-  const db = admin ?? supabase;
+  const db = admin;
+  const isAdmin = auth.role === 'admin';
+  console.log('ROLE:', auth.role);
+  console.log('USING ADMIN RAW QUERY:', isAdmin);
 
   const id = (request.nextUrl.searchParams.get('id') ?? '').trim();
   const name = (request.nextUrl.searchParams.get('name') ?? '').trim();
@@ -99,11 +102,13 @@ export async function GET(request: NextRequest) {
   let q = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit) as any;
   if (!includeDeleted) q = q.is('deleted_at', null);
   if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
-  q = buildScopedQuery(
-    { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
-    q,
-    'events'
-  );
+  if (!isAdmin) {
+    q = buildScopedQuery(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      q,
+      'events'
+    );
+  }
   const { data, error } = await q;
   if (error) return json({ error: error.message }, 500);
   const rows = (data ?? []) as any[];

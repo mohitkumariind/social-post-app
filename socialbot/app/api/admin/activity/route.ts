@@ -38,6 +38,9 @@ export async function GET(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
+  const isAdmin = auth.role === 'admin';
+  console.log('ROLE:', auth.role);
+  console.log('USING ADMIN RAW QUERY:', isAdmin);
 
   const sp = request.nextUrl.searchParams;
   const limit = toInt(sp.get('limit'), 50);
@@ -69,16 +72,18 @@ export async function GET(request: NextRequest) {
     query = query.or(`resource_name.ilike.%${q}%,actor_user_id.eq.${q}`);
   }
 
-  query = buildScopedQuery(
-    {
-      id: auth.user.id,
-      role: auth.role,
-      assigned_state_ids: auth.assigned_state_ids,
-      assigned_group_ids: auth.assigned_group_ids,
-    } as any,
-    query,
-    'admin_logs'
-  );
+  if (!isAdmin) {
+    query = buildScopedQuery(
+      {
+        id: auth.user.id,
+        role: auth.role,
+        assigned_state_ids: auth.assigned_state_ids,
+        assigned_group_ids: auth.assigned_group_ids,
+      } as any,
+      query,
+      'admin_logs'
+    );
+  }
 
   const { data, error } = await query;
   if (error) {

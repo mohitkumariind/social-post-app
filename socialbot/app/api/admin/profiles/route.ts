@@ -43,14 +43,17 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
-  if (auth.role === 'admin' && !admin) {
-    // Fail closed for admin list APIs: without service-role, RLS can degrade to own-row-only.
+  if (!admin) {
+    // No JWT fallback in /api/admin/*: avoid implicit RLS-scoped reads.
     return NextResponse.json(
       { error: 'Admin list access requires SUPABASE_SERVICE_ROLE_KEY' },
       { status: 503 }
     );
   }
-  const db = admin ?? supabase;
+  const db = admin;
+  const isAdmin = auth.role === 'admin';
+  console.log('ROLE:', auth.role);
+  console.log('USING ADMIN RAW QUERY:', isAdmin);
 
   const sp = request.nextUrl.searchParams;
   const party = (sp.get('party') ?? '').trim();
@@ -73,7 +76,7 @@ export async function GET(request: NextRequest) {
         : '*';
     let q = db.from('profiles').select(selectCols);
 
-    if (auth.role === 'moderator') {
+    if (!isAdmin && auth.role === 'moderator') {
       q = buildScopedQuery(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
         q,
@@ -109,7 +112,7 @@ export async function GET(request: NextRequest) {
 
   {
     let q = buildQuery('created_at') as any;
-    if (auth.role === 'campaign_manager') {
+    if (!isAdmin && auth.role === 'campaign_manager') {
       q = buildScopedQuery(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
         q,
@@ -130,7 +133,7 @@ export async function GET(request: NextRequest) {
       msg.toLowerCase().includes('does not exist');
     if (looksLikeMissingCreatedAt) {
       let q2 = buildQuery('id') as any;
-      if (auth.role === 'campaign_manager') {
+      if (!isAdmin && auth.role === 'campaign_manager') {
         q2 = buildScopedQuery(
           { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
           q2,
@@ -175,7 +178,13 @@ export async function DELETE(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
-  const db = admin ?? supabase;
+  if (!admin) {
+    return NextResponse.json(
+      { error: 'Admin profile mutation requires SUPABASE_SERVICE_ROLE_KEY' },
+      { status: 503 }
+    );
+  }
+  const db = admin;
 
   const scopedUser = {
     id: auth.user.id,

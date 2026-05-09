@@ -384,6 +384,9 @@ export async function GET(request: NextRequest) {
   if (!admin) {
     return NextResponse.json({ error: NO_SERVICE_ROLE }, { status: 503 });
   }
+  const isAdmin = auth.role === 'admin';
+  console.log('ROLE:', auth.role);
+  console.log('USING ADMIN RAW QUERY:', isAdmin);
 
   const tag = (request.nextUrl.searchParams.get('tag') ?? '').trim();
 
@@ -440,7 +443,9 @@ export async function GET(request: NextRequest) {
       }
 
       // Apply RBAC scoping (moderator state scope, campaign_manager group/membership scope).
-      profQ = buildScopedQuery(scopedUser, profQ, 'profiles');
+      if (!isAdmin) {
+        profQ = buildScopedQuery(scopedUser, profQ, 'profiles');
+      }
       const { data: profRows, error: profErr } = await profQ;
       if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
 
@@ -459,11 +464,13 @@ export async function GET(request: NextRequest) {
     // Prefer authoritative group list from `groups` table; if deleted_at is missing in DB, fall back gracefully.
     // Build a scoped query instead of fetching all groups then filtering in JS.
     let q = admin.from('groups').select('id, name, created_by, deleted_at').order('id', { ascending: true }) as any;
-    q = buildScopedQuery(
-      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
-      q,
-      'groups'
-    );
+    if (!isAdmin) {
+      q = buildScopedQuery(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+        q,
+        'groups'
+      );
+    }
     const res = await q;
     let groupRowsAll = ((res as any).data ?? []) as any[];
     let baseErr = (res as any).error ?? null;
@@ -471,11 +478,13 @@ export async function GET(request: NextRequest) {
     if (baseErr && isMissingColumnErr(baseErr, 'deleted_at')) {
       hasDeletedAt = false;
       let q2 = admin.from('groups').select('id, name, created_by').order('id', { ascending: true }) as any;
-      q2 = buildScopedQuery(
-        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
-        q2,
-        'groups'
-      );
+      if (!isAdmin) {
+        q2 = buildScopedQuery(
+          { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+          q2,
+          'groups'
+        );
+      }
       const res2 = await q2;
       groupRowsAll = ((res2 as any).data ?? []) as any[];
       baseErr = (res2 as any).error ?? null;
@@ -530,7 +539,9 @@ export async function GET(request: NextRequest) {
             .in('group_id', visibleGroupIds)
             .order('id', { ascending: true })
             .range(from, from + pageSize - 1);
-          pq = buildScopedQuery(scopedUser, pq, 'profiles');
+          if (!isAdmin) {
+            pq = buildScopedQuery(scopedUser, pq, 'profiles');
+          }
           const { data: pRows, error: pErr } = await pq;
           if (pErr) throw new Error(pErr.message);
           const rows = (pRows ?? []) as any[];

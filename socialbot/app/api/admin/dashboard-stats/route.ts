@@ -27,16 +27,18 @@ export async function GET() {
   }
 
   const admin = createServiceRoleClient();
-  if (auth.role === 'admin' && !admin) {
-    // Fail closed for admin analytics: falling back to user client can become own-row-only under RLS.
+  if (!admin) {
+    // No JWT fallback in /api/admin/*: avoid implicit RLS-scoped reads.
     return NextResponse.json(
       { error: 'Admin analytics access requires SUPABASE_SERVICE_ROLE_KEY' },
       { status: 503 }
     );
   }
-  const db = admin ?? supabase;
+  const db = admin;
 
   const isAdmin = auth.role === 'admin';
+  console.log('ROLE:', auth.role);
+  console.log('USING ADMIN RAW QUERY:', isAdmin);
   const scopedUser = {
     id: auth.user.id,
     role: auth.role,

@@ -29,13 +29,16 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
-  if (auth.role === 'admin' && !admin) {
+  if (!admin) {
     return NextResponse.json(
       { error: 'Admin frame access requires SUPABASE_SERVICE_ROLE_KEY' },
       { status: 503 }
     );
   }
-  const db = admin ?? supabase;
+  const db = admin;
+  const isAdmin = auth.role === 'admin';
+  console.log('ROLE:', auth.role);
+  console.log('USING ADMIN RAW QUERY:', isAdmin);
 
   // Enforce scope BEFORE querying frames.
   const scopedUser = {
@@ -51,15 +54,21 @@ export async function GET(request: NextRequest) {
       : null;
 
   {
-    const profQuery = buildScopedQuery(
-      scopedUser,
-      db.from('profiles').select('id').eq('id', userId).limit(1) as any,
-      'profiles',
-      { allowed_profile_ids: Array.isArray(allowed_profile_ids) ? allowed_profile_ids : undefined }
-    );
-    const { data: prof, error: profErr } = await profQuery.maybeSingle();
-    if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
-    if (!prof) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    if (isAdmin) {
+      const { data: prof, error: profErr } = await db.from('profiles').select('id').eq('id', userId).maybeSingle();
+      if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
+      if (!prof) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    } else {
+      const profQuery = buildScopedQuery(
+        scopedUser,
+        db.from('profiles').select('id').eq('id', userId).limit(1) as any,
+        'profiles',
+        { allowed_profile_ids: Array.isArray(allowed_profile_ids) ? allowed_profile_ids : undefined }
+      );
+      const { data: prof, error: profErr } = await profQuery.maybeSingle();
+      if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
+      if (!prof) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
   }
 
   const base = () =>

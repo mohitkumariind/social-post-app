@@ -121,6 +121,9 @@ export async function GET(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
+  const isAdmin = auth.role === 'admin';
+  console.log('ROLE:', auth.role);
+  console.log('USING ADMIN RAW QUERY:', isAdmin);
 
   const scopedUser = {
     id: auth.user.id,
@@ -135,11 +138,11 @@ export async function GET(request: NextRequest) {
     .select('id,title,image_url,category,created_at,scheduled_at,status,deleted_at,created_by,state_id,group_id')
     .order('created_at', { ascending: false })
     .limit(200) as any;
-  const q = buildScopedQuery(scopedUser, base, 'posts');
+  const q = isAdmin ? base : buildScopedQuery(scopedUser, base, 'posts');
   let res: any = await q;
   if (res.error && isMissingColumnErr(res.error, 'scheduled_at')) {
     const fallback = admin.from('posts').select('id,title,image_url,category,created_at,state_id,group_id').order('created_at', { ascending: false }).limit(200) as any;
-    res = await buildScopedQuery(scopedUser, fallback, 'posts');
+    res = isAdmin ? await fallback : await buildScopedQuery(scopedUser, fallback, 'posts');
   }
   if (res.error) return json({ error: res.error.message }, 500);
   return json({ posts: res.data ?? [], usedServiceRole: true });
