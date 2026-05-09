@@ -27,6 +27,11 @@ function toGroupIdNums(groupIds: string[]): number[] {
   return groupIds.map((x) => Number(x)).filter((n) => Number.isSafeInteger(n) && n > 0);
 }
 
+function toUuidList(ids: string[]): string[] {
+  // Keep conservative to avoid malformed PostgREST filter strings.
+  return ids.filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+}
+
 export type ScopedQueryContext = {
   /**
    * Optional precomputed IDs for scoping when a direct DB predicate isn't possible
@@ -94,11 +99,14 @@ export function buildScopedQuery(
       // Require profile.assigned_state_ids subset of moderator assigned_state_ids.
       return baseQuery.not('assigned_state_ids', 'is', null).neq('assigned_state_ids', '{}').containedBy('assigned_state_ids', canonical.stateIds);
     }
-    // campaign_manager: best DB-level filter is by allowed profile IDs (from group_memberships prequery)
-    const allowed = Array.isArray(ctx.allowed_profile_ids) ? ctx.allowed_profile_ids.map((x) => String(x).trim()).filter(Boolean) : [];
-    if (allowed.length > 0) return baseQuery.in('id', allowed);
-    // Legacy fallback: profiles.group_id in assigned groups
+    // campaign_manager: support mixed deployments where some data uses group_memberships while some still uses profiles.group_id.
+    const allowedRaw = Array.isArray(ctx.allowed_profile_ids) ? ctx.allowed_profile_ids.map((x) => String(x).trim()).filter(Boolean) : [];
+    const allowed = toUuidList(allowedRaw);
     const gids = toGroupIdNums(canonical.groupIds);
+    if (allowed.length > 0 && gids.length > 0) {
+      return baseQuery.or(`id.in.(${allowed.join(',')}),group_id.in.(${gids.join(',')})`);
+    }
+    if (allowed.length > 0) return baseQuery.in('id', allowed);
     return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
   }
 
@@ -156,9 +164,13 @@ export function buildScopedAnalyticsQuery(
 
   if (resourceType === 'profiles') {
     if (role === 'moderator') return baseQuery.not('assigned_state_ids', 'is', null).neq('assigned_state_ids', '{}').containedBy('assigned_state_ids', canonical.stateIds);
-    const allowed = Array.isArray(ctx.allowed_profile_ids) ? ctx.allowed_profile_ids.map((x) => String(x).trim()).filter(Boolean) : [];
-    if (allowed.length > 0) return baseQuery.in('id', allowed);
+    const allowedRaw = Array.isArray(ctx.allowed_profile_ids) ? ctx.allowed_profile_ids.map((x) => String(x).trim()).filter(Boolean) : [];
+    const allowed = toUuidList(allowedRaw);
     const gids = toGroupIdNums(canonical.groupIds);
+    if (allowed.length > 0 && gids.length > 0) {
+      return baseQuery.or(`id.in.(${allowed.join(',')}),group_id.in.(${gids.join(',')})`);
+    }
+    if (allowed.length > 0) return baseQuery.in('id', allowed);
     return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
   }
 
