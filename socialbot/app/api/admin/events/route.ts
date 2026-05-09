@@ -248,7 +248,8 @@ export async function POST(request: NextRequest) {
 
   // Best-effort compatibility for schema cache lag / partial migrations:
   // retry inserts while stripping unknown columns indicated by PostgREST.
-  const requiredKeys = new Set(['name', 'start', 'end']);
+  // Never strip RBAC / scope columns on retry — partial inserts (e.g. missing target_groups) become invisible in scoped listings.
+  const requiredKeys = new Set(['name', 'start', 'end', 'target_groups', 'state_id', 'created_by']);
   let insertPayload: Record<string, unknown> = { ...payload };
   let insertRes = await admin.from('events').insert(insertPayload).select().single();
   for (let attempts = 0; attempts < 10 && insertRes.error; attempts++) {

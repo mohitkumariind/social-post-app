@@ -24,6 +24,10 @@ class FakeQuery {
     this.calls.push({ method: 'containedBy', args });
     return this;
   }
+  or(...args: unknown[]) {
+    this.calls.push({ method: 'or', args });
+    return this;
+  }
 }
 
 describe('scoped query builder', () => {
@@ -44,6 +48,8 @@ describe('scoped query builder', () => {
 
   it('scopes campaign manager profiles via allowed profile IDs', () => {
     const q = new FakeQuery();
+    const p1 = '11111111-1111-4111-8111-111111111111';
+    const p2 = '22222222-2222-4222-8222-222222222222';
     buildScopedQuery(
       {
         id: 'u2',
@@ -53,9 +59,9 @@ describe('scoped query builder', () => {
       },
       q,
       'profiles',
-      { allowed_profile_ids: ['p1', 'p2'] }
+      { allowed_profile_ids: [p1, p2] }
     );
-    expect(q.calls).toEqual([{ method: 'in', args: ['id', ['p1', 'p2']] }]);
+    expect(q.calls[0]).toEqual({ method: 'or', args: [`id.in.(${p1},${p2}),group_id.in.(1)`] });
   });
 
   it('keeps analytics scoping aligned for campaign manager events', () => {
@@ -71,5 +77,6 @@ describe('scoped query builder', () => {
       'events'
     );
     expect(q.calls.map((c) => c.method)).toEqual(['not', 'neq', 'containedBy']);
+    expect(q.calls[2]).toEqual({ method: 'containedBy', args: ['target_groups', ['10']] });
   });
 });

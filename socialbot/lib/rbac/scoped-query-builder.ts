@@ -90,12 +90,13 @@ export function buildScopedQuery(
       return baseQuery.not('state_id', 'is', null).neq('state_id', '{}').containedBy('state_id', canonical.stateIds);
     }
     // campaign_manager: require event.target_groups subset of assigned_group_ids.
+    // Use normalized string IDs for PostgREST: `events.target_groups` is text[] (numeric strings) in canonical schema;
+    // passing number[] can break `<@` / `containedBy` matching against text[].
     if (canonical.groupIds.length === 0) return baseQuery.eq('id', '__none__');
-    const gids = toGroupIdNums(canonical.groupIds);
     return baseQuery
       .not('target_groups', 'is', null)
       .neq('target_groups', '{}')
-      .containedBy('target_groups', gids.length > 0 ? gids : canonical.groupIds);
+      .containedBy('target_groups', canonical.groupIds);
   }
 
   if (resourceType === 'profiles') {
@@ -180,12 +181,11 @@ export function buildScopedAnalyticsQuery(
 
   if (resourceType === 'events') {
     if (role === 'moderator') return baseQuery.not('state_id', 'is', null).neq('state_id', '{}').containedBy('state_id', canonical.stateIds);
-    const gids = toGroupIdNums(canonical.groupIds);
     return canonical.groupIds.length > 0
       ? baseQuery
           .not('target_groups', 'is', null)
           .neq('target_groups', '{}')
-          .containedBy('target_groups', gids.length > 0 ? gids : canonical.groupIds)
+          .containedBy('target_groups', canonical.groupIds)
       : baseQuery.eq('id', '__none__');
   }
 
