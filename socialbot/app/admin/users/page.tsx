@@ -276,7 +276,9 @@ export default function UserManagement() {
     assigned_group_ids: string[];
   } | null>(null);
   const isModerator = viewer?.role === 'moderator';
+  const isCampaignManager = viewer?.role === 'campaign_manager';
   const isAdmin = viewer?.role === 'admin';
+  const isRestrictedViewer = isModerator || isCampaignManager;
 
   const [statesList, setStatesList] = useState<StateRow[]>([]);
   const [statesLoading, setStatesLoading] = useState(false);
@@ -909,7 +911,7 @@ export default function UserManagement() {
                 <div className="w-24 h-24 bg-blue-600 rounded-[30px] flex items-center justify-center text-white shadow-xl shadow-blue-500/20"><User size={48} /></div>
                 <div>
                     <h2 className="text-4xl font-black tracking-tight leading-none">{selectedUser.name}</h2>
-                    {!isModerator ? (
+                    {!isRestrictedViewer ? (
                       <div className="flex items-center gap-4 mt-3">
                           <span className="bg-blue-600 text-[11px] font-black uppercase px-3 py-1 rounded-lg tracking-widest">
                             {fmt(displayPartyLabel(selectedUser.party, selectedUser.party_label) || getPartyLabel(selectedUser.party))}
@@ -919,7 +921,7 @@ export default function UserManagement() {
                 </div>
             </div>
             <div className="p-10 grid grid-cols-1 lg:grid-cols-12 gap-10 max-h-[60vh] overflow-y-auto bg-white">
-                {!isModerator ? (
+                {!isRestrictedViewer ? (
                 <div className="lg:col-span-4 space-y-8 border-r border-slate-100 pr-6">
                     <div className="space-y-6">
                         <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><Info size={14} className="text-blue-500" /> Personal Info</h3>
@@ -970,7 +972,7 @@ export default function UserManagement() {
                 ) : null}
 
                 {/* UPDATED: USER FRAMES SECTION */}
-                <div className={`${isModerator ? 'lg:col-span-12' : 'lg:col-span-8'} space-y-6`}>
+                <div className={`${isRestrictedViewer ? 'lg:col-span-12' : 'lg:col-span-8'} space-y-6`}>
                     <div className="flex items-center justify-between px-2">
                         <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 font-mono"><History size={14} className="text-blue-500" /> User Frames</h3>
                         <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{selectedUser.personalFrames.length} Frames</p>
@@ -1033,7 +1035,7 @@ export default function UserManagement() {
       </div>
 
       {/* ADVANCED FILTERS */}
-      {!isModerator ? (
+      {!isRestrictedViewer ? (
       <div className="bg-white p-5 rounded-[40px] border border-slate-200 shadow-lg space-y-4">
         <div className="flex flex-col md:flex-row gap-4">
           <div className="flex items-center gap-4 flex-[2] bg-slate-50 p-4 rounded-2xl border border-slate-100 focus-within:border-blue-300 transition-all">
@@ -1116,7 +1118,7 @@ export default function UserManagement() {
             key={user.id}
             className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm hover:shadow-md transition-all duration-300 group flex flex-col relative overflow-hidden"
           >
-            {!isModerator ? (
+            {isAdmin ? (
               <div className="absolute top-6 right-6">
                 <button onClick={() => setIsDeleting(user)} className="p-2 text-slate-200 hover:text-red-500 transition-all"><Trash2 size={18} /></button>
               </div>
@@ -1141,7 +1143,7 @@ export default function UserManagement() {
                   <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Name</span>
                   <span className="font-bold text-slate-900 text-right">{fmt(user.name)}</span>
                 </div>
-                {!isModerator ? (
+                {!isRestrictedViewer ? (
                   <>
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Party Name</span>
@@ -1192,7 +1194,7 @@ export default function UserManagement() {
               </div>
             </div>
 
-            {!isModerator && user.group_tags.length > 0 && (
+            {!isRestrictedViewer && user.group_tags.length > 0 && (
               <div className="mt-4 flex flex-wrap gap-1.5 justify-center">
                 {user.group_tags.slice(0, 6).map((t) => (
                   <span
@@ -1212,7 +1214,7 @@ export default function UserManagement() {
             )}
 
             <button onClick={() => openUserProfile(user)} className="mt-6 w-full py-3 bg-slate-50 rounded-2xl text-[9px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-100 transition-all flex items-center justify-center gap-2 active:scale-95">
-              {isModerator ? 'Frames' : 'Profile & Frames'} <ExternalLink size={14} />
+              {isRestrictedViewer ? 'Frames' : 'Profile & Frames'} <ExternalLink size={14} />
             </button>
 
             {isAdmin ? (

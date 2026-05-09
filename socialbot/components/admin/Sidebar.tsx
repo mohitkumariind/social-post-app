@@ -52,7 +52,12 @@ export default function Sidebar() {
     const r = role?.toLowerCase() ?? '';
     if (r === 'moderator') {
       // Moderator: Dashboard, Users, Events, Notifications, Groups (NO Activity Center)
-      return navItems.filter((i) => i.href !== '/admin/parties' && i.href !== '/admin/activity-center');
+      return navItems.filter(
+        (i) =>
+          i.href !== '/admin/parties' &&
+          i.href !== '/admin/activity-center' &&
+          i.href !== '/admin/rbac-observability'
+      );
     }
     if (r === 'campaign_manager') {
       // Campaign Manager: Dashboard, Users, Events, Notifications, Groups (NO Activity Center)
