@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { RbacError, requireModeratorHasAssignedStates, requireOwnership, requireRole, requireScopeState, toNumArray } from '@/lib/rbac/require';
+import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
+import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
+import { RbacError, requireGroupAssignment, requireModeratorHasAssignedStates, requireRole, requireScopeState, toNumArray, toStrArray } from '@/lib/rbac/require';
 import { withAudit } from '@/lib/audit/withAudit';
 
 function json(body: unknown, status = 200) {
@@ -13,19 +15,77 @@ function isMissingColumnErr(err: { message?: string } | null | undefined, column
   return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column'));
 }
 
-async function selectPostsList(admin: any) {
-  // Try “new schema” first (status/deleted_at/scheduled_at/created_by)
-  const res = await admin
-    .from('posts')
-    .select('id,title,image_url,category,created_at,scheduled_at,status,deleted_at,created_by,state_id,group_id')
-    .order('created_at', { ascending: false })
-    .limit(200);
-  if (!res.error) return { data: res.data ?? [], error: null, hasStatus: true, hasDeletedAt: true, hasScheduledAt: true, hasCreatedBy: true };
+type ScopeParse = { state_ids: number[]; group_id: string; group_ids: string[] };
 
-  // Fall back if some columns don’t exist (older DB)
-  const cols = 'id,title,image_url,category,created_at,state_id,group_id';
-  const res2 = await admin.from('posts').select(cols).order('created_at', { ascending: false }).limit(200);
-  return { data: res2.data ?? [], error: res2.error ?? res.error, hasStatus: false, hasDeletedAt: false, hasScheduledAt: false, hasCreatedBy: false };
+function parseScopeFromInput(input: Record<string, unknown>): ScopeParse {
+  return {
+    state_ids: toNumArray((input as any).state_id ?? (input as any).assigned_state_ids),
+    group_id: String((input as any).group_id ?? '').trim(),
+    group_ids: toStrArray((input as any).target_groups ?? (input as any).group_ids),
+  };
+}
+
+function validateScopePayloadShape(
+  auth: { role: 'admin' | 'moderator' | 'campaign_manager' },
+  input: Record<string, unknown>
+) {
+  if (auth.role === 'admin') return;
+
+  const hasStateField = Object.prototype.hasOwnProperty.call(input, 'state_id') || Object.prototype.hasOwnProperty.call(input, 'assigned_state_ids');
+  const hasGroupField = Object.prototype.hasOwnProperty.call(input, 'group_id');
+  const hasGroupArrayField = Object.prototype.hasOwnProperty.call(input, 'target_groups') || Object.prototype.hasOwnProperty.call(input, 'group_ids');
+
+  if (auth.role === 'moderator') {
+    if (hasGroupField || hasGroupArrayField) {
+      throw new RbacError('Forbidden: moderator payload cannot contain group scope fields', 403);
+    }
+  }
+  if (auth.role === 'campaign_manager') {
+    if (hasStateField) {
+      throw new RbacError('Forbidden: campaign_manager payload cannot contain state scope fields', 403);
+    }
+  }
+
+  if (hasStateField) {
+    const raw = (input as any).state_id ?? (input as any).assigned_state_ids;
+    const parsed = toNumArray(raw);
+    if (raw != null && parsed.length === 0) throw new RbacError('Forbidden: malformed state scope payload', 403);
+  }
+
+  if (hasGroupField) {
+    const raw = (input as any).group_id;
+    if (raw != null && !String(raw).trim()) throw new RbacError('Forbidden: malformed group_id payload', 403);
+  }
+
+  if (hasGroupArrayField) {
+    const raw = (input as any).target_groups ?? (input as any).group_ids;
+    if (raw != null && !Array.isArray(raw)) throw new RbacError('Forbidden: malformed target_groups payload', 403);
+    if (Array.isArray(raw)) {
+      const parsed = toStrArray(raw);
+      if (raw.length > 0 && parsed.length === 0) throw new RbacError('Forbidden: malformed target_groups payload', 403);
+    }
+  }
+}
+
+function requireNonEmptyScopeForPosts(
+  auth: { role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[]; assigned_group_ids?: string[] },
+  scope: { state_ids: number[]; group_id: string; group_ids: string[] }
+) {
+  if (auth.role === 'admin') return;
+  if (auth.role === 'moderator') {
+    if (scope.state_ids.length === 0) throw new RbacError('Forbidden: missing state scope', 403);
+    requireScopeState(scope.state_ids, auth.assigned_state_ids, 'subset');
+    return;
+  }
+  // campaign_manager
+  if (!scope.group_id && scope.group_ids.length === 0) throw new RbacError('Forbidden: missing group scope', 403);
+  const gids = new Set(toStrArray(auth.assigned_group_ids));
+  if (gids.size === 0) throw new RbacError('Forbidden: missing assigned_group_ids', 403);
+  if (scope.group_id) requireGroupAssignment(auth as any, scope.group_id);
+  if (scope.group_ids.length > 0) {
+    const ok = scope.group_ids.every((g) => gids.has(String(g).trim()));
+    if (!ok) throw new RbacError('Forbidden: outside assigned_group_ids', 403);
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -43,31 +103,27 @@ export async function GET(request: NextRequest) {
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
-  const res = await selectPostsList(admin);
+  const scopedUser = {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+  } as any;
+
+  // Always scope in SQL (no fetch-all-then-filter).
+  const base = admin
+    .from('posts')
+    .select('id,title,image_url,category,created_at,scheduled_at,status,deleted_at,created_by,state_id,group_id')
+    .order('created_at', { ascending: false })
+    .limit(200) as any;
+  const q = buildScopedQuery(scopedUser, base, 'posts');
+  let res: any = await q;
+  if (res.error && isMissingColumnErr(res.error, 'scheduled_at')) {
+    const fallback = admin.from('posts').select('id,title,image_url,category,created_at,state_id,group_id').order('created_at', { ascending: false }).limit(200) as any;
+    res = await buildScopedQuery(scopedUser, fallback, 'posts');
+  }
   if (res.error) return json({ error: res.error.message }, 500);
-
-  let rows: any[] = res.data ?? [];
-
-  // RBAC filtering (best-effort without breaking older schemas)
-  if (auth.role === 'campaign_manager' && res.hasCreatedBy) {
-    rows = rows.filter((r) => String(r.created_by ?? '').trim() === auth.user.id);
-  }
-  if (auth.role === 'moderator') {
-    // State-scope: only posts within assigned_state_ids.
-    // If state_id missing, preserve prior behavior (don’t break).
-    rows = rows.filter((r) => {
-      const stateIds = toNumArray((r as any).state_id);
-      if (stateIds.length === 0) return true;
-      try {
-        requireScopeState(stateIds, auth.assigned_state_ids, 'overlap');
-        return true;
-      } catch {
-        return false;
-      }
-    });
-  }
-
-  return json({ posts: rows, schema: res });
+  return json({ posts: res.data ?? [], usedServiceRole: true });
 }
 
 export const POST = withAudit(
@@ -103,7 +159,37 @@ export const POST = withAudit(
     }
 
     // Ownership fields if present in DB (retry if missing)
-    payload.created_by = auth.user.id;
+    if (auth.role !== 'admin') payload.created_by = auth.user.id;
+
+    const scope = parseScopeFromInput(payload);
+    try {
+      validateScopePayloadShape(auth as any, payload as any);
+      requireNonEmptyScopeForPosts(auth as any, scope);
+    } catch (e) {
+      if (e instanceof RbacError) {
+        // Ensure denied attempts are audited via scoped write engine.
+        canPerformMutation(
+          { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+          'posts.create',
+          null,
+          payload as any,
+          { resourceType: 'posts', resourceName: String((payload as any)?.title ?? '') }
+        );
+        return json({ error: e.message }, e.status);
+      }
+      return json({ error: 'Forbidden' }, 403);
+    }
+
+    {
+      const decision = canPerformMutation(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+        'posts.create',
+        null,
+        payload as any,
+        { resourceType: 'posts', resourceName: String((payload as any)?.title ?? '') }
+      );
+      if (!decision.ok) return json({ error: decision.reason }, 403);
+    }
 
     let insertRes = await admin.from('posts').insert(payload as any).select('*').single();
     if (insertRes.error && isMissingColumnErr(insertRes.error, 'created_by')) {
@@ -163,23 +249,44 @@ export const PATCH = withAudit(
     const before: any = previous_data ?? null;
     if (!before) return json({ error: 'Not found' }, 404);
 
-    // RBAC: ownership checks (best-effort)
-    if (auth.role === 'campaign_manager') {
-      try {
-        requireOwnership(before.created_by, auth.user.id);
-      } catch {
-        return json({ error: 'Forbidden' }, 403);
+    const beforeScope = parseScopeFromInput(before as any);
+
+    const patchInput = {
+      ...before,
+      ...patch,
+      // Keep scheduling fields from patch, everything else merged for scope validation.
+      scheduled_at: (patch as any).scheduled_at,
+    } as Record<string, unknown>;
+    const nextScope = parseScopeFromInput(patchInput);
+
+    // Enforce BOTH previous row scope and incoming payload scope (deny if scope missing/malformed).
+    try {
+      validateScopePayloadShape(auth as any, patch as any);
+      requireNonEmptyScopeForPosts(auth as any, beforeScope);
+      requireNonEmptyScopeForPosts(auth as any, nextScope);
+    } catch (e) {
+      if (e instanceof RbacError) {
+        canPerformMutation(
+          { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+          'posts.update',
+          { created_by: (before as any)?.created_by, state_ids: beforeScope.state_ids, group_id: beforeScope.group_id, group_ids: beforeScope.group_ids } as any,
+          patch as any,
+          { resourceType: 'posts', resourceId: id, resourceName: String((before as any)?.title ?? '') }
+        );
+        return json({ error: e.message }, e.status);
       }
+      return json({ error: 'Forbidden' }, 403);
     }
-    if (auth.role === 'moderator') {
-      const stateIds = toNumArray(before.state_id);
-      if (stateIds.length > 0) {
-        try {
-          requireScopeState(stateIds, auth.assigned_state_ids, 'overlap');
-        } catch {
-          return json({ error: 'Forbidden' }, 403);
-        }
-      }
+
+    {
+      const decision = canPerformMutation(
+        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+        'posts.update',
+        { created_by: (before as any)?.created_by, state_ids: beforeScope.state_ids, group_id: beforeScope.group_id, group_ids: beforeScope.group_ids } as any,
+        patch as any,
+        { resourceType: 'posts', resourceId: id, resourceName: String((before as any)?.title ?? '') }
+      );
+      if (!decision.ok) return json({ error: decision.reason }, 403);
     }
 
     // Scheduling logic
@@ -196,6 +303,12 @@ export const PATCH = withAudit(
 
     // Prevent non-admin from changing ownership
     if (auth.role !== 'admin') delete nextPatch.created_by;
+    // Prevent non-admin from writing malformed scope payload.
+    if (auth.role !== 'admin') {
+      if (nextScope.state_ids.length > 0) nextPatch.state_id = nextScope.state_ids;
+      if (nextScope.group_id) nextPatch.group_id = nextScope.group_id;
+      if (nextScope.group_ids.length > 0) nextPatch.target_groups = nextScope.group_ids;
+    }
 
     const { data, error } = await admin.from('posts').update(nextPatch).eq('id', id).select('*').single();
     if (error) return json({ error: error.message }, 500);

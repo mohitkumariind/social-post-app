@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
+import { logAdminAction } from '@/lib/audit/logAdminAction';
+import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
+import { RbacError, requireRole } from '@/lib/rbac/require';
 
 type Body = { ids?: string[]; group_tags?: string[]; /** Only if you intentionally want to clear tags for all selected users. */ allowClear?: boolean };
 
@@ -13,8 +17,11 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator') {
-    return NextResponse.json({ error: 'Moderators cannot bulk edit profile tags' }, { status: 403 });
+  try {
+    requireRole(auth, ['admin', 'campaign_manager']);
+  } catch (e) {
+    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   let body: Body = {};
@@ -46,21 +53,72 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: NO_SERVICE_ROLE }, { status: 503 });
   }
 
+  const scopedUser = {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+  } as any;
+
+  const allowed_profile_ids =
+    auth.role === 'campaign_manager' ? await resolveAllowedProfileIdsForCampaignManager(admin as any, auth.assigned_group_ids) : null;
+
+  if (auth.role === 'campaign_manager') {
+    // Strict: ALL requested ids must be within assigned groups (deny partial writes).
+    const q = buildScopedQuery(
+      scopedUser,
+      admin.from('profiles').select('id').in('id', ids) as any,
+      'profiles',
+      { allowed_profile_ids: Array.isArray(allowed_profile_ids) ? allowed_profile_ids : undefined }
+    );
+    const { data: allowedRows, error: allowErr } = await q;
+    if (allowErr) return NextResponse.json({ error: allowErr.message }, { status: 500 });
+    const allowed = new Set((allowedRows ?? []).map((r: any) => String(r.id ?? '').trim()).filter(Boolean));
+    const outside = ids.filter((id) => !allowed.has(id));
+    if (outside.length > 0) {
+      // Ensure denied attempts are audited via scoped write engine.
+      canPerformMutation(
+        scopedUser,
+        'profiles.bulk_tags',
+        { group_id: '__outside__' } as any,
+        { ids, group_tags } as any,
+        { resourceType: 'profiles', resourceName: 'bulk-tags' }
+      );
+      return NextResponse.json({ error: 'Forbidden: includes users outside assigned_group_ids' }, { status: 403 });
+    }
+    // Record allowed attempt for consistent auditing. (Scope already validated above.)
+    {
+      const decision = canPerformMutation(
+        scopedUser,
+        'profiles.bulk_tags',
+        { group_ids: auth.assigned_group_ids } as any,
+        { ids, group_tags } as any,
+        { resourceType: 'profiles', resourceName: 'bulk-tags' }
+      );
+      if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+    }
+  }
+
   /** Column name must match Supabase `profiles.group_tags` (TEXT[]). */
   const { data, error } = await admin.from('profiles').update({ group_tags }).in('id', ids).select('id, group_tags');
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  console.log('[admin/profiles/bulk-tags][POST]', {
-    table: 'profiles',
-    updateColumn: 'group_tags',
-    idCount: ids.length,
-    payloadGroupTags: group_tags,
-    returnedRows: (data ?? []).length,
-    sampleWritten: (data ?? []).slice(0, 5).map((r: { id?: string; group_tags?: unknown }) => ({
-      id: r.id,
-      group_tags: r.group_tags,
-    })),
+  void logAdminAction({
+    actor_user_id: auth.user.id,
+    actor_role: auth.role,
+    action_type: 'profiles.bulk_tags',
+    resource_type: 'profiles',
+    resource_id: null,
+    resource_name: 'bulk-tags',
+    previous_data: null,
+    new_data: { ids_count: ids.length, group_tags },
+    metadata: { ids: ids.slice(0, 200) },
+    affected_users_count: ids.length,
+    severity: 'info',
+    undoable: false,
+    scope_group_ids: auth.role === 'campaign_manager' ? (auth.assigned_group_ids ?? []) : [],
+    scope_user_ids: ids,
   });
 
   return NextResponse.json({ ok: true, updated: ids.length }, { headers: { 'Cache-Control': 'no-store' } });

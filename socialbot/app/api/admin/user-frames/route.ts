@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
+import { RbacError, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
 
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -8,8 +10,12 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator' && auth.assigned_state_ids.length === 0) {
-    return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
+  try {
+    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireModeratorHasAssignedStates(auth);
+  } catch (e) {
+    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const userId = (request.nextUrl.searchParams.get('user_id') ?? '').trim();
@@ -21,20 +27,29 @@ export async function GET(request: NextRequest) {
   const admin = createServiceRoleClient();
   const db = admin ?? supabase;
 
-  // Moderators may only access frames for users in their assigned states.
-  if (auth.role === 'moderator') {
-    const { data: prof, error: profErr } = await db
-      .from('profiles')
-      .select('id, assigned_state_ids')
-      .eq('id', userId)
-      .maybeSingle();
+  // Enforce scope BEFORE querying frames.
+  const scopedUser = {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+  } as any;
+
+  const allowed_profile_ids =
+    auth.role === 'campaign_manager' && admin
+      ? await resolveAllowedProfileIdsForCampaignManager(admin as any, auth.assigned_group_ids)
+      : null;
+
+  {
+    const profQuery = buildScopedQuery(
+      scopedUser,
+      db.from('profiles').select('id').eq('id', userId).limit(1) as any,
+      'profiles',
+      { allowed_profile_ids: Array.isArray(allowed_profile_ids) ? allowed_profile_ids : undefined }
+    );
+    const { data: prof, error: profErr } = await profQuery.maybeSingle();
     if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
-    const idsArr = Array.isArray((prof as any)?.assigned_state_ids) ? (prof as any).assigned_state_ids : [];
-    const viewerStates = auth.assigned_state_ids.map(Number);
-    const ok = idsArr.some((x: any) => viewerStates.includes(Number(x)));
-    if (!ok) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    if (!prof) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const base = () =>

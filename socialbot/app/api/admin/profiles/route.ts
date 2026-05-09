@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
+import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { RbacError, requireRole } from '@/lib/rbac/require';
 
 function toNumArr(v: unknown): number[] {
   if (v == null) return [];
@@ -135,8 +138,11 @@ export async function DELETE(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role === 'moderator') {
-    return NextResponse.json({ error: 'Moderators cannot delete users' }, { status: 403 });
+  try {
+    requireRole(auth, ['admin', 'campaign_manager']);
+  } catch (e) {
+    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const id = request.nextUrl.searchParams.get('id');
@@ -146,6 +152,55 @@ export async function DELETE(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   const db = admin ?? supabase;
+
+  const scopedUser = {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+  } as any;
+
+  if (auth.role === 'campaign_manager') {
+    const cmAllowedProfileIds = admin ? await resolveAllowedProfileIdsForCampaignManager(admin, auth.assigned_group_ids) : null;
+    // Enforce membership-based scope when possible; fall back to legacy `profiles.group_id` scoping in buildScopedQuery.
+    const { data: rows, error: readErr } = await buildScopedQuery(
+      scopedUser,
+      db.from('profiles').select('id,group_id').eq('id', id).limit(1) as any,
+      'profiles',
+      { allowed_profile_ids: Array.isArray(cmAllowedProfileIds) ? cmAllowedProfileIds : undefined }
+    ).maybeSingle();
+    if (readErr) return NextResponse.json({ error: readErr.message }, { status: 500 });
+    if (!rows) {
+      // Audit denied attempt.
+      canPerformMutation(
+        scopedUser,
+        'profiles.delete',
+        { group_id: '__outside__' } as any,
+        { id } as any,
+        { resourceType: 'profiles', resourceId: id }
+      );
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    const ok = canAccessResource(scopedUser, { group_id: String((rows as any).group_id ?? '').trim() } as any);
+    if (!ok) {
+      canPerformMutation(
+        scopedUser,
+        'profiles.delete',
+        { group_id: String((rows as any).group_id ?? '').trim() } as any,
+        { id } as any,
+        { resourceType: 'profiles', resourceId: id }
+      );
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    const decision = canPerformMutation(
+      scopedUser,
+      'profiles.delete',
+      { group_id: String((rows as any).group_id ?? '').trim() } as any,
+      null,
+      { resourceType: 'profiles', resourceId: id }
+    );
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+  }
 
   const { error } = await db.from('profiles').delete().eq('id', id);
   if (error) {

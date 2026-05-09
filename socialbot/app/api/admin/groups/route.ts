@@ -151,34 +151,6 @@ async function removeMembersFromGroup(admin: SupabaseClient, groupId: number, us
   }
 }
 
-async function countMembersByGroupId(admin: SupabaseClient): Promise<Map<number, number>> {
-  const pageSize = 1000;
-  const counts = new Map<number, number>();
-  let from = 0;
-  for (;;) {
-    const { data, error } = await admin
-      .from('group_memberships')
-      .select('group_id')
-      .order('group_id', { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (error) {
-      if (isMissingTableErr(error as any, 'group_memberships')) throw new Error('__MISSING_GROUP_MEMBERSHIPS__');
-      throw new Error(error.message);
-    }
-    const rows = (data ?? []) as any[];
-    if (rows.length === 0) break;
-    for (const r of rows) {
-      const gid = toNum(r.group_id);
-      if (gid == null) continue;
-      counts.set(gid, (counts.get(gid) ?? 0) + 1);
-    }
-    if (rows.length < pageSize) break;
-    from += pageSize;
-    if (from > 2000000) break;
-  }
-  return counts;
-}
-
 async function selectGroupMaybeDeletedById(admin: SupabaseClient, id: number) {
   const res = await admin.from('groups').select('id, name, created_by, deleted_at').eq('id', id).maybeSingle();
   if (res.error && isMissingColumnErr(res.error, 'deleted_at')) {
@@ -281,30 +253,6 @@ async function resolveGroup(
   return null;
 }
 
-/** Paginate through all profiles (PostgREST often caps ~1k rows per request). */
-async function fetchAllProfileIdAndGroupId(admin: SupabaseClient): Promise<{ id: string; group_id: unknown }[]> {
-  const pageSize = 1000;
-  const out: { id: string; group_id: unknown }[] = [];
-  let from = 0;
-  for (;;) {
-    const { data, error } = await admin
-      .from('profiles')
-      .select('id, group_id')
-      .order('id', { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (error) throw new Error(error.message);
-    const rows = (data ?? []) as Record<string, unknown>[];
-    if (rows.length === 0) break;
-    for (const r of rows) {
-      out.push({ id: String(r.id ?? ''), group_id: (r as any).group_id });
-    }
-    if (rows.length < pageSize) break;
-    from += pageSize;
-    if (from > 500000) break;
-  }
-  return out;
-}
-
 async function fetchMembersForGroupId(admin: SupabaseClient, groupId: number) {
   const pageSize = 1000;
   const out: Record<string, unknown>[] = [];
@@ -381,60 +329,42 @@ export async function GET(request: NextRequest) {
         if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
-      let rows: any[] = [];
+      const scopedUser = {
+        id: auth.user.id,
+        role: auth.role,
+        assigned_state_ids: auth.assigned_state_ids,
+        assigned_group_ids: auth.assigned_group_ids,
+      } as any;
+
+      // Build a profiles query scoped in SQL (no fetch-then-filter).
+      let profQ: any = admin.from('profiles').select('id, name, phone, avatar_url, group_id');
+
       if (hasMemberships) {
-        try {
-          rows = await fetchMembersForGroupIdViaMemberships(admin, grp.id);
-        } catch (e) {
-          if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') return groupMembershipsMissingResponse();
-          throw e;
+        // In many-to-many mode, membership is authoritative. Fetch member IDs for this group,
+        // then query profiles with RBAC scoping applied.
+        const memberIds = await listMemberIdsForGroup(admin, grp.id);
+        if (memberIds.length === 0) {
+          return NextResponse.json({ tag: String(grp.id), name: grp.name, members: [] }, { headers: { 'Cache-Control': 'no-store' } });
         }
+        profQ = profQ.in('id', memberIds);
       } else {
-        rows = await fetchMembersForGroupId(admin, grp.id);
+        // Legacy single-group mode.
+        profQ = profQ.eq('group_id', grp.id);
       }
-      const membersAll = rows.map((r) => ({
+
+      // Apply RBAC scoping (moderator state scope, campaign_manager group/membership scope).
+      profQ = buildScopedQuery(scopedUser, profQ, 'profiles');
+      const { data: profRows, error: profErr } = await profQ;
+      if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
+
+      const redactPhone = auth.role === 'moderator' || auth.role === 'campaign_manager';
+      const members = ((profRows ?? []) as any[]).map((r) => ({
         id: String(r.id ?? ''),
         name: String(r.name ?? ''),
-        phone: String(r.phone ?? ''),
+        phone: redactPhone ? '' : String(r.phone ?? ''),
         avatar_url: String(r.avatar_url ?? ''),
         group_id: toNum((r as any).group_id),
       }));
-      const members =
-        auth.role === 'moderator'
-          ? membersAll.filter((m) => {
-              // Only include members in the assigned state, and do not return phone (personal info).
-              return true;
-            }).map((m) => ({ ...m, phone: '' }))
-          : membersAll;
-
-      if (auth.role === 'moderator') {
-        const memberIds = membersAll.map((m) => m.id).filter(Boolean);
-        if (memberIds.length > 0) {
-          const { data: stRows, error: stErr } = await admin
-            .from('profiles')
-            .select('id, assigned_state_ids')
-            .in('id', memberIds);
-          if (stErr) throw new Error(stErr.message);
-          const viewerStates = auth.assigned_state_ids.map(Number);
-          const allowed = new Set(
-            (stRows ?? [])
-              .filter((r: any) => {
-                const ids = Array.isArray(r.assigned_state_ids) ? r.assigned_state_ids : [];
-                return ids.some((x: any) => viewerStates.includes(Number(x)));
-              })
-              .map((r: any) => String(r.id))
-          );
-          const filtered = membersAll.filter((m) => allowed.has(m.id)).map((m) => ({ ...m, phone: '' }));
-          return NextResponse.json({ tag: String(grp.id), name: grp.name, members: filtered }, { headers: { 'Cache-Control': 'no-store' } });
-        }
-        return NextResponse.json({ tag: String(grp.id), name: grp.name, members: [] }, { headers: { 'Cache-Control': 'no-store' } });
-      }
-
-      if (auth.role === 'campaign_manager') {
-        // Read-only visibility: allow only within assigned groups; redact phone.
-        const filtered = membersAll.map((m) => ({ ...m, phone: '' }));
-        return NextResponse.json({ tag: String(grp.id), name: grp.name, members: filtered }, { headers: { 'Cache-Control': 'no-store' } });
-      }
 
       return NextResponse.json({ tag: String(grp.id), name: grp.name, members }, { headers: { 'Cache-Control': 'no-store' } });
     }
@@ -466,60 +396,69 @@ export async function GET(request: NextRequest) {
     if (baseErr) throw new Error(baseErr.message);
     const groupRows = groupRowsAll.filter((g) => (hasDeletedAt ? (g as any).deleted_at == null : true));
 
-    const counts =
-      hasMemberships
-        ? await (async () => {
-            let base: Map<number, number>;
-            try {
-              base = await countMembersByGroupId(admin);
-            } catch (e) {
-              if (e instanceof Error && e.message === '__MISSING_GROUP_MEMBERSHIPS__') {
-                throw new Error('__MISSING_GROUP_MEMBERSHIPS__');
-              }
-              throw e;
-            }
-            // For assigned-group campaign managers, counts should reflect only their visible groups.
-            if (auth.role === 'campaign_manager') {
-              const allowed = new Set(Array.isArray(auth.assigned_group_ids) ? auth.assigned_group_ids : []);
-              for (const k of Array.from(base.keys())) {
-                if (!allowed.has(String(k))) base.delete(k);
-              }
-            }
-            // For moderators, group list is already filtered by ownership; counts can be left as-is.
-            return base;
-          })()
-        : await (async () => {
-            const countsRowsAll = await fetchAllProfileIdAndGroupId(admin);
-            const countsRows =
-              auth.role === 'moderator'
-                ? await (async () => {
-                    const ids = countsRowsAll.map((r) => r.id).filter(Boolean);
-                    if (ids.length === 0) return [];
-                    const { data: stRows, error: stErr } = await admin
-                      .from('profiles')
-                      .select('id, assigned_state_ids, group_id')
-                      .in('id', ids);
-                    if (stErr) throw new Error(stErr.message);
-                    const viewerStates = auth.assigned_state_ids.map(Number);
-                    return (stRows ?? [])
-                      .filter((r: any) => {
-                        const idsArr = Array.isArray(r.assigned_state_ids) ? r.assigned_state_ids : [];
-                        return idsArr.some((x: any) => viewerStates.includes(Number(x)));
-                      })
-                      .map((r: any) => ({ id: String(r.id ?? ''), group_id: (r as any).group_id }))
-                      .filter((r) => r.id);
-                  })()
-                : auth.role === 'campaign_manager'
-                  ? countsRowsAll.filter((r) => {
-                      const gid = toNum(r.group_id);
-                      if (gid == null) return false;
-                      return Array.isArray(auth.assigned_group_ids) && auth.assigned_group_ids.includes(String(gid));
-                    })
-                  : countsRowsAll;
-            const map = new Map<number, number>();
-            for (const g of aggregateGroupIds(countsRows)) map.set(Number(g.tag), g.count);
-            return map;
-          })();
+    const visibleGroupIds = groupRows.map((g) => Number(g.id)).filter((n) => Number.isFinite(n));
+    const counts = new Map<number, number>();
+
+    if (visibleGroupIds.length > 0) {
+      if (hasMemberships) {
+        // Count members by group_id for ONLY visible groups (no global scans).
+        const pageSize = 1000;
+        let from = 0;
+        for (;;) {
+          const { data: memRows, error: memErr } = await admin
+            .from('group_memberships')
+            .select('group_id')
+            .in('group_id', visibleGroupIds)
+            .order('group_id', { ascending: true })
+            .range(from, from + pageSize - 1);
+          if (memErr) {
+            if (isMissingTableErr(memErr as any, 'group_memberships')) throw new Error('__MISSING_GROUP_MEMBERSHIPS__');
+            throw new Error(memErr.message);
+          }
+          const rows = (memRows ?? []) as any[];
+          if (rows.length === 0) break;
+          for (const r of rows) {
+            const gid = toNum(r.group_id);
+            if (gid == null) continue;
+            counts.set(gid, (counts.get(gid) ?? 0) + 1);
+          }
+          if (rows.length < pageSize) break;
+          from += pageSize;
+          if (from > 2000000) break;
+        }
+      } else {
+        // Legacy fallback: count via scoped profiles (still DB-scoped before fetch).
+        const scopedUser = {
+          id: auth.user.id,
+          role: auth.role,
+          assigned_state_ids: auth.assigned_state_ids,
+          assigned_group_ids: auth.assigned_group_ids,
+        } as any;
+        const pageSize = 1000;
+        let from = 0;
+        for (;;) {
+          let pq: any = admin
+            .from('profiles')
+            .select('group_id')
+            .in('group_id', visibleGroupIds)
+            .order('id', { ascending: true })
+            .range(from, from + pageSize - 1);
+          pq = buildScopedQuery(scopedUser, pq, 'profiles');
+          const { data: pRows, error: pErr } = await pq;
+          if (pErr) throw new Error(pErr.message);
+          const rows = (pRows ?? []) as any[];
+          if (rows.length === 0) break;
+          for (const r of rows) {
+            const gid = toNum((r as any).group_id);
+            if (gid == null) continue;
+            counts.set(gid, (counts.get(gid) ?? 0) + 1);
+          }
+          if (rows.length < pageSize) break;
+          from += pageSize;
+          if (from > 500000) break;
+        }
+      }
+    }
 
     const groups = ((groupRows ?? []) as any[]).map((g) => ({
       tag: String(g.id ?? ''),
