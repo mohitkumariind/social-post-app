@@ -14,6 +14,9 @@ const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+const LEGACY_NOTIFY_ENABLED = (Deno.env.get('ENABLE_LEGACY_NOTIFY_WORKERS') ?? '').trim().toLowerCase() === 'true';
+const LEGACY_NOTIFY_SECRET = (Deno.env.get('LEGACY_NOTIFY_WORKERS_SECRET') ?? '').trim();
+
 type Filters = {
   party?: string | null;
   state?: string | null;
@@ -150,6 +153,17 @@ Deno.serve(async (req) => {
   }
 
   try {
+    if (!LEGACY_NOTIFY_ENABLED) {
+      return json(
+        {
+          error: 'Deprecated endpoint',
+          code: 'LEGACY_NOTIFY_DISABLED',
+          message: 'Use /api/notifications/send or /api/admin/notifications/schedule instead.',
+        },
+        410
+      );
+    }
+
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     if (!serviceKey?.trim() || !supabaseUrl?.trim()) {
@@ -158,6 +172,14 @@ Deno.serve(async (req) => {
 
     if (req.method !== 'POST') {
       return json({ error: 'Method not allowed' }, 405);
+    }
+
+    if (!LEGACY_NOTIFY_SECRET) {
+      return json({ error: 'LEGACY_NOTIFY_WORKERS_SECRET not configured' }, 503);
+    }
+    const reqSecret = req.headers.get('x-legacy-notify-secret')?.trim() ?? '';
+    if (!reqSecret || reqSecret !== LEGACY_NOTIFY_SECRET) {
+      return json({ error: 'Unauthorized' }, 401);
     }
 
     const payload = (await req.json()) as RequestBody;
@@ -270,6 +292,7 @@ Deno.serve(async (req) => {
 
     let deliveredTotal = 0;
     let failedTotal = 0;
+    let sentAttemptedTotal = 0;
     const dataPayload: Record<string, unknown> = {
       ...(payload.data ?? {}),
       broadcast_id: broadcastId,
@@ -325,6 +348,7 @@ Deno.serve(async (req) => {
 
       for (let i = 0; i < messages.length; i += step) {
         const chunk = messages.slice(i, i + step);
+        sentAttemptedTotal += chunk.length;
         const res = await fetch(EXPO_PUSH_SEND_URL, {
           method: 'POST',
           headers: {
@@ -382,7 +406,7 @@ Deno.serve(async (req) => {
           }
           await admin
             .from('notification_broadcasts')
-            .update({ sent_count: messages.length, failed_count: failedTotal + chunk.length })
+            .update({ sent_count: sentAttemptedTotal, failed_count: failedTotal + chunk.length })
             .eq('id', broadcastId);
           return json(
             { error: `Expo push HTTP ${res.status}`, detail: rawText.slice(0, 500), broadcast_id: broadcastId },
@@ -412,7 +436,7 @@ Deno.serve(async (req) => {
     await admin
       .from('notification_broadcasts')
       .update({
-        sent_count: messages.length,
+        sent_count: sentAttemptedTotal,
         delivered_count: deliveredTotal,
         failed_count: failedTotal,
       })
@@ -422,7 +446,7 @@ Deno.serve(async (req) => {
       ok: true,
       broadcast_id: broadcastId,
       target_user_count: profileIds.length,
-      sent_count: messages.length,
+      sent_count: sentAttemptedTotal,
       delivered_count: deliveredTotal,
       failed_count: failedTotal,
     });

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import Expo, { type ExpoPushMessage } from 'expo-server-sdk';
 import { ANDROID_NOTIFICATION_CHANNEL_ID } from '../../lib/pushChannel';
+import { filterRetryRecipientIds } from '@/lib/workers/notification-retry';
 
 const HISTORY_INSERT_CHUNK = 500;
 const EXPO_SAME_PROJECT_ERR_RE = /All messages must be for the same project/i;
@@ -42,6 +43,15 @@ export type BroadcastRunOptions = {
    * Skip notifications_history inserts (used when history already exists for a reused broadcast).
    */
   skip_history_insert?: boolean;
+  /**
+   * Deterministic identity for scheduled notification workers.
+   * Prevents duplicate broadcast rows for the same scheduled job.
+   */
+  scheduled_notification_id?: string | null;
+  /**
+   * On retry, send only recipients still pending/retryable.
+   */
+  resume_pending_only?: boolean;
 };
 
 export async function fetchFilteredProfileIds(
@@ -155,34 +165,19 @@ export async function runBroadcast(
         : null,
   };
 
-  const profileIds = await fetchFilteredProfileIds(admin, allWorkers, filters);
-  const tokenRows = await fetchTokensForUsers(admin, profileIds);
-  const tokenToUser = new Map<string, string>();
-  const tokenToProject = new Map<string, string | null>();
-  for (const row of tokenRows) {
-    if (!tokenToUser.has(row.token)) {
-      tokenToUser.set(row.token, row.user_id);
-      tokenToProject.set(row.token, row.project_id ?? null);
-    }
-  }
-  const uniqueTokens = [...tokenToUser.keys()].filter((t) => Expo.isExpoPushToken(t));
-
-  const tokensByProject = new Map<string, string[]>();
-  for (const tok of uniqueTokens) {
-    const pid = tokenToProject.get(tok) ?? null;
-    const key = pid && pid.trim().length > 0 ? pid.trim() : '__unknown__';
-    const arr = tokensByProject.get(key) ?? [];
-    arr.push(tok);
-    tokensByProject.set(key, arr);
-  }
+  const baseProfileIds = await fetchFilteredProfileIds(admin, allWorkers, filters);
 
   if (payload.preview_only === true) {
+    const previewTokenRows = await fetchTokensForUsers(admin, baseProfileIds);
+    const previewUnique = new Set(
+      previewTokenRows.map((r) => String(r.token ?? '').trim()).filter((t) => t && Expo.isExpoPushToken(t))
+    );
     return {
       ok: true,
       preview: true,
-      profile_count: profileIds.length,
-      token_count: uniqueTokens.length,
-      worker_count: profileIds.length,
+      profile_count: baseProfileIds.length,
+      token_count: previewUnique.size,
+      worker_count: baseProfileIds.length,
     };
   }
 
@@ -209,25 +204,65 @@ export async function runBroadcast(
   };
 
   const existingBroadcastId = String(options.existing_broadcast_id ?? '').trim();
+  const scheduledNotificationId = String(options.scheduled_notification_id ?? '').trim();
   let broadcastId = existingBroadcastId;
   if (!broadcastId) {
-    const { data: bcIns, error: bcErr } = await admin
+    let bcInsert = await admin
       .from('notification_broadcasts')
       .insert({
         title,
         body,
         image_url: imageUrl,
         filters: filtersStored,
-        target_user_count: profileIds.length,
+        target_user_count: baseProfileIds.length,
         sent_count: 0,
         delivered_count: 0,
         failed_count: 0,
         opened_count: 0,
+        scheduled_notification_id: scheduledNotificationId || null,
       })
       .select('id')
       .single();
+    if (bcInsert.error && String(bcInsert.error.message ?? '').toLowerCase().includes('scheduled_notification_id')) {
+      bcInsert = await admin
+        .from('notification_broadcasts')
+        .insert({
+          title,
+          body,
+          image_url: imageUrl,
+          filters: filtersStored,
+          target_user_count: baseProfileIds.length,
+          sent_count: 0,
+          delivered_count: 0,
+          failed_count: 0,
+          opened_count: 0,
+        })
+        .select('id')
+        .single();
+    }
+    const bcIns = bcInsert.data;
+    const bcErr = bcInsert.error;
 
     if (bcErr || !bcIns?.id) {
+      const dup =
+        String((bcErr as any)?.code ?? '') === '23505' ||
+        /duplicate key/i.test(String(bcErr?.message ?? ''));
+      if (dup && scheduledNotificationId) {
+        const reused = await admin
+          .from('notification_broadcasts')
+          .select('id')
+          .eq('scheduled_notification_id', scheduledNotificationId)
+          .maybeSingle();
+        if (!reused.error && reused.data?.id) {
+          broadcastId = String(reused.data.id);
+          console.info('[worker.broadcast.reused]', JSON.stringify({
+            scheduled_notification_id: scheduledNotificationId,
+            broadcast_id: broadcastId,
+          }));
+        }
+      }
+    }
+    if (!broadcastId && (bcErr || !bcIns?.id)) {
       return {
         ok: false,
         error:
@@ -235,7 +270,46 @@ export async function runBroadcast(
           'Failed to create notification_broadcasts row (run migration 20260405140000_notification_broadcast_center.sql?)',
       };
     }
-    broadcastId = String(bcIns.id);
+    if (!broadcastId && bcIns?.id) broadcastId = String(bcIns.id);
+  }
+
+  let profileIds = baseProfileIds;
+  if (options.resume_pending_only && broadcastId) {
+    const pendingRes = await admin
+      .from('notifications_history')
+      .select('user_id')
+      .eq('broadcast_id', broadcastId)
+      .in('delivery_status', ['pending', 'failed_retryable']);
+    if (!pendingRes.error) {
+      profileIds = filterRetryRecipientIds(
+        profileIds,
+        (pendingRes.data ?? []) as Array<{ user_id: string | null }>
+      );
+      console.info('[worker.retry.resumed]', JSON.stringify({
+        broadcast_id: broadcastId,
+        pending_recipients: profileIds.length,
+      }));
+    }
+  }
+
+  const tokenRows = await fetchTokensForUsers(admin, profileIds);
+  const tokenToUser = new Map<string, string>();
+  const tokenToProject = new Map<string, string | null>();
+  for (const row of tokenRows) {
+    if (!tokenToUser.has(row.token)) {
+      tokenToUser.set(row.token, row.user_id);
+      tokenToProject.set(row.token, row.project_id ?? null);
+    }
+  }
+  const uniqueTokens = [...tokenToUser.keys()].filter((t) => Expo.isExpoPushToken(t));
+
+  const tokensByProject = new Map<string, string[]>();
+  for (const tok of uniqueTokens) {
+    const pid = tokenToProject.get(tok) ?? null;
+    const key = pid && pid.trim().length > 0 ? pid.trim() : '__unknown__';
+    const arr = tokensByProject.get(key) ?? [];
+    arr.push(tok);
+    tokensByProject.set(key, arr);
   }
 
   if (!options.skip_history_insert && profileIds.length > 0) {
@@ -246,11 +320,17 @@ export async function runBroadcast(
       image_url: imageUrl,
       is_read: false,
       broadcast_id: broadcastId,
+      delivery_status: 'pending',
     }));
 
     for (let i = 0; i < historyRows.length; i += HISTORY_INSERT_CHUNK) {
       const chunk = historyRows.slice(i, i + HISTORY_INSERT_CHUNK);
-      const { error: histErr } = await admin.from('notifications_history').insert(chunk);
+      let { error: histErr } = await admin.from('notifications_history').insert(chunk);
+      if (histErr && String(histErr.message ?? '').toLowerCase().includes('delivery_status')) {
+        const fallbackChunk = chunk.map(({ delivery_status: _delivery_status, ...rest }) => rest);
+        const fallback = await admin.from('notifications_history').insert(fallbackChunk);
+        histErr = fallback.error ?? null;
+      }
       if (histErr) {
         if (!existingBroadcastId) {
           await admin.from('notification_broadcasts').delete().eq('id', broadcastId);
@@ -292,6 +372,7 @@ export async function runBroadcast(
 
   let deliveredTotal = 0;
   let failedTotal = 0;
+  let sentAttemptedTotal = 0;
 
   async function removeBadToken(token: string) {
     const t = String(token ?? '').trim();
@@ -315,15 +396,44 @@ export async function runBroadcast(
     return false;
   }
 
+  async function markDeliveryStatus(
+    userIds: string[],
+    status: 'sent' | 'failed_retryable' | 'failed_permanent',
+    errorMessage?: string
+  ) {
+    const ids = Array.from(new Set(userIds.map((x) => String(x).trim()).filter(Boolean)));
+    if (ids.length === 0) return;
+    const patch = {
+      delivery_status: status,
+      delivery_last_attempt_at: new Date().toISOString(),
+      delivery_error: errorMessage ?? null,
+    };
+    const res = await admin
+      .from('notifications_history')
+      .update(patch)
+      .eq('broadcast_id', broadcastId)
+      .in('user_id', ids);
+    if (res.error && String(res.error.message ?? '').toLowerCase().includes('delivery_status')) {
+      // Backward compatibility for older schemas without delivery columns.
+      return;
+    }
+    if (res.error) {
+      console.warn('[worker.delivery.status.update.failed]', JSON.stringify({ status, count: ids.length, error: res.error.message }));
+    }
+  }
+
   async function sendChunkWithIsolation(chunk: ExpoPushMessage[]) {
     // Sends individually so mixed-project tokens cannot poison the whole batch.
     for (const msg of chunk) {
+      sentAttemptedTotal += 1;
+      const userId = String(tokenToUser.get(String(msg.to ?? '')) ?? '').trim();
       try {
         const tickets = await expo.sendPushNotificationsAsync([msg]);
         const t = tickets?.[0];
         if (!t) continue;
         if (t.status === 'ok') {
           deliveredTotal += 1;
+          if (userId) await markDeliveryStatus([userId], 'sent');
           continue;
         }
         failedTotal += 1;
@@ -332,6 +442,13 @@ export async function runBroadcast(
         const err = String(details?.error ?? '');
         const message = String((t as any)?.message ?? '');
         console.error(`[push] invalidToken (isolated): ${message}${err ? ` (${err})` : ''}`);
+        if (userId) {
+          await markDeliveryStatus(
+            [userId],
+            shouldDeleteToken(err, message) ? 'failed_permanent' : 'failed_retryable',
+            message || err || 'expo-ticket-error'
+          );
+        }
         if (shouldDeleteToken(err, message)) {
           await removeBadToken(String(msg.to ?? ''));
         }
@@ -339,6 +456,7 @@ export async function runBroadcast(
         failedTotal += 1;
         const em = e instanceof Error ? e.message : String(e);
         console.error('[push] send threw (isolated):', em);
+        if (userId) await markDeliveryStatus([userId], 'failed_retryable', em);
         if (shouldDeleteToken('', em)) {
           await removeBadToken(String(msg.to ?? ''));
         }
@@ -374,12 +492,19 @@ export async function runBroadcast(
 
     const chunks = expo.chunkPushNotifications(groupMessages);
     for (const chunk of chunks) {
+      sentAttemptedTotal += chunk.length;
       try {
         const tickets = await expo.sendPushNotificationsAsync(chunk);
+        const sentUsers: string[] = [];
+        const failedRetryableUsers: string[] = [];
+        const failedPermanentUsers: string[] = [];
         for (let i = 0; i < tickets.length; i++) {
           const t = tickets[i];
+          const tok = String(chunk[i]?.to ?? '');
+          const uid = String(tokenToUser.get(tok) ?? '').trim();
           if (t.status === 'ok') {
             deliveredTotal += 1;
+            if (uid) sentUsers.push(uid);
             continue;
           }
           failedTotal += 1;
@@ -388,9 +513,15 @@ export async function runBroadcast(
           const err = String(details?.error ?? '');
           const message = String((t as any)?.message ?? '');
           console.error(`[push] invalidToken: ${message}${err ? ` (${err})` : ''}`);
-          const tok = String(chunk[i]?.to ?? '');
+          if (uid) {
+            if (shouldDeleteToken(err, message)) failedPermanentUsers.push(uid);
+            else failedRetryableUsers.push(uid);
+          }
           if (shouldDeleteToken(err, message)) await removeBadToken(tok);
         }
+        await markDeliveryStatus(sentUsers, 'sent');
+        await markDeliveryStatus(failedRetryableUsers, 'failed_retryable', 'expo-ticket-retryable');
+        await markDeliveryStatus(failedPermanentUsers, 'failed_permanent', 'expo-ticket-permanent');
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error('[push] send threw:', msg);
@@ -400,10 +531,14 @@ export async function runBroadcast(
           await sendChunkWithIsolation(chunk);
           continue;
         }
+        const chunkUsers = chunk
+          .map((m) => String(tokenToUser.get(String(m.to ?? '')) ?? '').trim())
+          .filter(Boolean);
+        await markDeliveryStatus(chunkUsers, 'failed_retryable', msg);
         await admin
           .from('notification_broadcasts')
           .update({
-            sent_count: messages.length,
+            sent_count: sentAttemptedTotal,
             failed_count: failedTotal + chunk.length,
           })
           .eq('id', broadcastId);
@@ -415,7 +550,7 @@ export async function runBroadcast(
   await admin
     .from('notification_broadcasts')
     .update({
-      sent_count: messages.length,
+      sent_count: sentAttemptedTotal,
       delivered_count: deliveredTotal,
       failed_count: failedTotal,
     })
@@ -425,7 +560,7 @@ export async function runBroadcast(
     ok: true,
     broadcast_id: broadcastId,
     target_user_count: profileIds.length,
-    sent_count: messages.length,
+    sent_count: sentAttemptedTotal,
     delivered_count: deliveredTotal,
     failed_count: failedTotal,
   };

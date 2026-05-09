@@ -22,6 +22,79 @@ function isMissingSchemaError(err: { message?: string } | null | undefined, toke
   return msg.includes(token.toLowerCase()) && (msg.includes('does not exist') || msg.includes('schema cache') || msg.includes('column'));
 }
 
+const CLEANUP_BATCH_SIZE = 500;
+const CLEANUP_MAX_BATCHES = 200;
+
+async function pruneScheduledNotifications(admin: any, cutoffIso: string) {
+  let pruned = 0;
+  let batches = 0;
+  let truncated = false;
+  for (;;) {
+    if (batches >= CLEANUP_MAX_BATCHES) {
+      truncated = true;
+      break;
+    }
+    const sel = await admin
+      .from('scheduled_notifications')
+      .select('id')
+      .in('status', ['sent', 'cancelled'])
+      .lt('created_at', cutoffIso)
+      .order('created_at', { ascending: true })
+      .limit(CLEANUP_BATCH_SIZE);
+    if ((sel as any).error) throw new Error((sel as any).error.message);
+    const rows = Array.isArray((sel as any).data) ? ((sel as any).data as { id: string }[]) : [];
+    if (rows.length === 0) break;
+    const ids = rows.map((r) => String(r.id)).filter(Boolean);
+    const del = await admin.from('scheduled_notifications').delete().in('id', ids);
+    if ((del as any).error) throw new Error((del as any).error.message);
+    pruned += ids.length;
+    batches++;
+    if (rows.length < CLEANUP_BATCH_SIZE) break;
+  }
+  return { pruned, batches, batch_size: CLEANUP_BATCH_SIZE, truncated };
+}
+
+async function clearNonProcessingLocks(admin: any, table: string, processingStatus: string, olderThanIso?: string) {
+  let cleared = 0;
+  let batches = 0;
+  let truncated = false;
+  for (;;) {
+    if (batches >= CLEANUP_MAX_BATCHES) {
+      truncated = true;
+      break;
+    }
+    let q = admin
+      .from(table)
+      .select('id')
+      .neq('status', processingStatus)
+      .not('locked_at', 'is', null)
+      .order('locked_at', { ascending: true })
+      .limit(CLEANUP_BATCH_SIZE);
+    if (olderThanIso) q = q.lt('created_at', olderThanIso);
+    const sel = await q;
+    if ((sel as any).error) {
+      if (isMissingSchemaError((sel as any).error, 'locked_at')) {
+        return { cleared: 0, batches: 0, batch_size: CLEANUP_BATCH_SIZE, truncated: false, skipped: true, reason: 'locked-columns-missing' as const };
+      }
+      throw new Error((sel as any).error.message);
+    }
+    const rows = Array.isArray((sel as any).data) ? ((sel as any).data as { id: string }[]) : [];
+    if (rows.length === 0) break;
+    const ids = rows.map((r) => String(r.id)).filter(Boolean);
+    const upd = await admin.from(table).update({ locked_at: null, locked_by: null }).in('id', ids);
+    if ((upd as any).error) {
+      if (isMissingSchemaError((upd as any).error, 'locked_at')) {
+        return { cleared: 0, batches: 0, batch_size: CLEANUP_BATCH_SIZE, truncated: false, skipped: true, reason: 'locked-columns-missing' as const };
+      }
+      throw new Error((upd as any).error.message);
+    }
+    cleared += ids.length;
+    batches++;
+    if (rows.length < CLEANUP_BATCH_SIZE) break;
+  }
+  return { cleared, batches, batch_size: CLEANUP_BATCH_SIZE, truncated, skipped: false };
+}
+
 export async function POST(request: Request) {
   const cronAuth = validateCronRequest(request);
   if (!cronAuth.ok) return json({ error: cronAuth.error }, cronAuth.status);
@@ -34,70 +107,53 @@ export async function POST(request: Request) {
   const failedPublishDays = retentionDays('RETENTION_FAILED_PUBLISH_DAYS', 30);
   const notifCutoff = new Date(Date.now() - schedNotifDays * 24 * 60 * 60 * 1000).toISOString();
   const publishCutoff = new Date(Date.now() - failedPublishDays * 24 * 60 * 60 * 1000).toISOString();
+  const worker = process.env.WORKER_ID?.trim() || 'api/jobs/cleanup-scheduler-state';
 
-  // 1) Remove terminal scheduled_notifications rows older than retention.
-  const notifDelete = await admin
-    .from('scheduled_notifications')
-    .delete()
-    .in('status', ['sent', 'cancelled'])
-    .lt('created_at', notifCutoff)
-    .select('id');
-  if ((notifDelete as any).error) return json({ error: (notifDelete as any).error.message }, 500);
-
-  // 2) Defensive lock cleanup for non-processing rows where stale lock metadata remains.
-  const staleLocks = await admin
-    .from('scheduled_notifications')
-    .update({ locked_at: null, locked_by: null })
-    .neq('status', 'processing')
-    .not('locked_at', 'is', null)
-    .select('id');
-  if ((staleLocks as any).error) return json({ error: (staleLocks as any).error.message }, 500);
-
-  let postsStaleLocksCount = 0;
-  const postsStaleLocks = await admin
-    .from('posts')
-    .update({ locked_at: null, locked_by: null })
-    .neq('status', 'processing_publish')
-    .not('locked_at', 'is', null)
-    .lt('created_at', publishCutoff)
-    .select('id');
-  if ((postsStaleLocks as any).error) {
-    if (!isMissingSchemaError((postsStaleLocks as any).error, 'locked_at')) {
-      return json({ error: (postsStaleLocks as any).error.message }, 500);
-    }
-  } else {
-    postsStaleLocksCount = Array.isArray((postsStaleLocks as any).data) ? (postsStaleLocks as any).data.length : 0;
-  }
-
-  let eventsStaleLocksCount = 0;
-  const eventsStaleLocks = await admin
-    .from('events')
-    .update({ locked_at: null, locked_by: null })
-    .neq('status', 'processing_publish')
-    .not('locked_at', 'is', null)
-    .lt('created_at', publishCutoff)
-    .select('id');
-  if ((eventsStaleLocks as any).error) {
-    if (!isMissingSchemaError((eventsStaleLocks as any).error, 'locked_at')) {
-      return json({ error: (eventsStaleLocks as any).error.message }, 500);
-    }
-  } else {
-    eventsStaleLocksCount = Array.isArray((eventsStaleLocks as any).data) ? (eventsStaleLocks as any).data.length : 0;
-  }
-
-  return json({
-    ok: true,
-    worker: 'api/jobs/cleanup-scheduler-state',
-    duration_ms: Date.now() - startedAt,
+  console.info('[worker.cleanup-scheduler-state.start]', JSON.stringify({
+    worker,
     retention_days: {
       scheduled_notifications_terminal: schedNotifDays,
       scheduled_publish_failed: failedPublishDays,
     },
-    results: {
-      scheduled_notifications_pruned: Array.isArray((notifDelete as any).data) ? (notifDelete as any).data.length : 0,
-      scheduled_notifications_stale_locks_cleared: Array.isArray((staleLocks as any).data) ? (staleLocks as any).data.length : 0,
-      posts_stale_locks_cleared: postsStaleLocksCount,
-      events_stale_locks_cleared: eventsStaleLocksCount,
-    },
-  });
+  }));
+
+  try {
+    const notifDelete = await pruneScheduledNotifications(admin, notifCutoff);
+    const staleLocks = await clearNonProcessingLocks(admin, 'scheduled_notifications', 'processing');
+    const postsLocks = await clearNonProcessingLocks(admin, 'posts', 'processing_publish', publishCutoff);
+    const eventsLocks = await clearNonProcessingLocks(admin, 'events', 'processing_publish', publishCutoff);
+
+    const payload = {
+      ok: true,
+      worker,
+      duration_ms: Date.now() - startedAt,
+      retention_days: {
+        scheduled_notifications_terminal: schedNotifDays,
+        scheduled_publish_failed: failedPublishDays,
+      },
+      results: {
+        scheduled_notifications_pruned: notifDelete.pruned,
+        scheduled_notifications_prune_batches: notifDelete.batches,
+        scheduled_notifications_prune_truncated: notifDelete.truncated,
+        scheduled_notifications_stale_locks_cleared: staleLocks.cleared,
+        scheduled_notifications_lock_cleanup_batches: staleLocks.batches,
+        posts_stale_locks_cleared: postsLocks.cleared,
+        posts_lock_cleanup_batches: postsLocks.batches,
+        posts_lock_cleanup_skipped: postsLocks.skipped,
+        events_stale_locks_cleared: eventsLocks.cleared,
+        events_lock_cleanup_batches: eventsLocks.batches,
+        events_lock_cleanup_skipped: eventsLocks.skipped,
+      },
+    };
+    console.info('[worker.cleanup-scheduler-state.done]', JSON.stringify(payload));
+    return json(payload);
+  } catch (e) {
+    const err = e instanceof Error ? e.message : 'cleanup failed';
+    console.error('[worker.cleanup-scheduler-state.failed]', JSON.stringify({
+      worker,
+      duration_ms: Date.now() - startedAt,
+      error: err,
+    }));
+    return json({ error: err }, 500);
+  }
 }

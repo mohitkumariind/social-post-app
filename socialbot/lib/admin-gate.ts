@@ -2,16 +2,29 @@ import { createClient, type SupabaseClient, type User } from '@supabase/supabase
 import { fetchProfileAccessForMiddleware, isAdminRole, isCampaignManagerRole, isModeratorRole } from '@/lib/supabase/session-helpers';
 import type { AdminRole } from '@/lib/permissions';
 
-/** Same allowlist as middleware — must stay in sync for API routes. */
-export const ADMIN_EMAIL_BYPASS = 'mohitkumariind@gmail.com';
+/**
+ * Optional emergency local bypass for development only.
+ * Fail-closed in production: even if env is set, bypass is ignored.
+ */
+export function getAdminEmailBypass(): string | null {
+  const configured = process.env.ADMIN_EMAIL_BYPASS?.trim().toLowerCase() ?? '';
+  if (!configured) return null;
+  if (process.env.NODE_ENV === 'production') {
+    console.warn('[security.auth] ADMIN_EMAIL_BYPASS is ignored in production');
+    return null;
+  }
+  return configured;
+}
 
 export function isAdminEmailBypass(email: string | null | undefined): boolean {
   const e = email?.toLowerCase().trim();
-  return !!e && e === ADMIN_EMAIL_BYPASS.toLowerCase();
+  const bypass = getAdminEmailBypass();
+  return !!e && !!bypass && e === bypass;
 }
 
 /**
- * Confirms the cookie session may access admin APIs (DB role admin or email bypass).
+ * Confirms the cookie session may access admin APIs.
+ * In production this always relies on persisted profile roles (no email bypass).
  */
 export async function validateAdminSession(
   supabase: SupabaseClient

@@ -1,6 +1,6 @@
 import { type NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { ADMIN_EMAIL_BYPASS } from '@/lib/admin-gate';
+import { isAdminEmailBypass } from '@/lib/admin-gate';
 import {
   createSupabaseProxyClient,
   fetchProfileAccessForMiddleware,
@@ -93,11 +93,10 @@ export async function proxy(request: NextRequest) {
     return sessionResponse;
   }
 
-  const emailLower = user?.email?.toLowerCase() ?? '';
-  const isBypassEmail = emailLower === ADMIN_EMAIL_BYPASS.toLowerCase();
+  const isBypassEmail = isAdminEmailBypass(user?.email);
 
   if (user && isBypassEmail) {
-    proxyLog('[proxy] Step BYPASS: allowlisted email', { email: user.email });
+    proxyLog('[proxy] Step BYPASS: non-production ADMIN_EMAIL_BYPASS', { email: user.email });
     if (isAdminLogin) {
       proxyLog('[proxy] Step BYPASS: redirect /admin');
       return redirectPreservingAuthCookies(request, sessionResponse, '/admin');

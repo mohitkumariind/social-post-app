@@ -1,13 +1,14 @@
 import { createServiceRoleClient } from '@/lib/admin-gate';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { validateCronRequest } from '@/lib/cron-auth';
-import { nowIso, resolveWorkerRuntime, staleIso } from '@/lib/workers/runtime';
+import { computeExponentialBackoffMs, createLockToken, nowIso, resolveWorkerRuntime, staleIso } from '@/lib/workers/runtime';
 
 export const runtime = 'nodejs';
 const WORKER = resolveWorkerRuntime('api/jobs/process-scheduled-posts', {
   leaseMs: 10 * 60 * 1000,
   maxAttempts: 5,
   batchSize: 50,
+  maxRunMs: 45_000,
 });
 
 function json(body: unknown, status = 200) {
@@ -32,6 +33,17 @@ export async function POST(request: Request) {
   const startedAt = Date.now();
   const dueNowIso = nowIso();
   const staleLeaseIso = staleIso(WORKER.leaseMs);
+  let supportsLockToken = true;
+  let supportsRetryScheduling = true;
+  const logWorker = (event: string, meta: Record<string, unknown>) =>
+    console.info(`[${event}]`, JSON.stringify({ worker: WORKER.workerId, ...meta }));
+  console.info('[worker.process-scheduled-posts.start]', JSON.stringify({
+    worker: WORKER.workerId,
+    batch_size: WORKER.batchSize,
+    max_attempts: WORKER.maxAttempts,
+    lease_ms: WORKER.leaseMs,
+    max_run_ms: WORKER.maxRunMs,
+  }));
 
   /**
    * Enterprise scheduling model:
@@ -60,7 +72,8 @@ export async function POST(request: Request) {
         isMissingColumnErr(r.error, 'locked_at') ||
         isMissingColumnErr(r.error, 'locked_by'))
     ) {
-      // Backward-compatible fallback when locking columns aren't deployed yet.
+      // Backward-compatible fallback when lock/retry columns aren't deployed yet.
+      supportsRetryScheduling = false;
       const r2 = await admin.from('posts').select('id,title,scheduled_at').lte('scheduled_at', dueNowIso).order('scheduled_at', { ascending: true }).limit(WORKER.batchSize);
       if (r2.error) return json({ error: r2.error.message }, 500);
       due = (r2.data ?? []) as any[];
@@ -70,6 +83,11 @@ export async function POST(request: Request) {
       due = (r.data ?? []) as any[];
     }
   }
+  const { count: queueDepth } = await admin
+    .from('posts')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'scheduled_publish')
+    .is('deleted_at', null);
 
   const results: any[] = [];
   let claimedCount = 0;
@@ -77,18 +95,24 @@ export async function POST(request: Request) {
   let successCount = 0;
   let failedCount = 0;
   let skippedCount = 0;
+  let retriedCount = 0;
+  let exhaustedCount = 0;
+  let lostLockCount = 0;
   for (const p of due) {
+    if (Date.now() - startedAt > WORKER.maxRunMs) break;
     const id = String(p?.id ?? '').trim();
     if (!id) continue;
     try {
+      const lockToken = createLockToken(WORKER.workerId, id);
       // 1) Atomic claim with strict predicates.
       const claimPatch: any = {
         status: 'processing_publish',
         locked_at: dueNowIso,
         locked_by: WORKER.workerId,
+        lock_token: lockToken,
         last_error: null,
       };
-      const claimRes = await admin
+      let claimRes = await admin
         .from('posts')
         .update(claimPatch)
         .eq('id', id)
@@ -96,8 +120,26 @@ export async function POST(request: Request) {
         .lte('scheduled_at', dueNowIso)
         .lt('attempt_count', WORKER.maxAttempts)
         .or(`status.eq.scheduled_publish,and(status.eq.processing_publish,locked_at.lt.${staleLeaseIso})`)
-        .select('id,title,status,scheduled_at,created_by,attempt_count,locked_at,locked_by')
+        .select('id,title,status,scheduled_at,created_by,attempt_count,locked_at,locked_by,lock_token')
         .maybeSingle();
+      if (claimRes.error && isMissingColumnErr(claimRes.error, 'lock_token')) {
+        supportsLockToken = false;
+        claimRes = await admin
+          .from('posts')
+          .update({
+            status: 'processing_publish',
+            locked_at: dueNowIso,
+            locked_by: WORKER.workerId,
+            last_error: null,
+          })
+          .eq('id', id)
+          .is('deleted_at', null)
+          .lte('scheduled_at', dueNowIso)
+          .lt('attempt_count', WORKER.maxAttempts)
+          .or(`status.eq.scheduled_publish,and(status.eq.processing_publish,locked_at.lt.${staleLeaseIso})`)
+          .select('id,title,status,scheduled_at,created_by,attempt_count,locked_at,locked_by')
+          .maybeSingle();
+      }
 
       if (claimRes.error) {
         // Legacy fallback path when lease columns aren't available in DB yet.
@@ -173,10 +215,11 @@ export async function POST(request: Request) {
       }
 
       const claimed = claimRes.data as any;
+      logWorker(String((p as any)?.status ?? '') === 'processing_publish' ? 'worker.lock.reclaimed' : 'worker.lock.claimed', { id });
       const attempt = Number(claimed?.attempt_count ?? 0) + 1;
 
       // 2) Publish only if this worker still owns the lease (idempotent transition).
-      const publishRes = await admin
+      let publishQ = admin
         .from('posts')
         .update({
           status: 'published',
@@ -192,13 +235,18 @@ export async function POST(request: Request) {
         .eq('locked_at', dueNowIso)
         .is('deleted_at', null)
         .lte('scheduled_at', dueNowIso)
-        .select('id,title,status,scheduled_at,created_by,published_at')
-        .maybeSingle();
+        .select('id,title,status,scheduled_at,created_by,published_at');
+      if (supportsLockToken) publishQ = publishQ.eq('lock_token', lockToken);
+      const publishRes = await publishQ.maybeSingle();
+      if (publishRes.error && isMissingColumnErr(publishRes.error, 'lock_token')) {
+        supportsLockToken = false;
+      }
 
       if (publishRes.error) {
         // Release lease for retry or dead-letter after max attempts.
         const terminalStatus = attempt >= WORKER.maxAttempts ? 'scheduled_publish_failed' : 'scheduled_publish';
-        await admin
+        const retryAt = new Date(Date.now() + computeExponentialBackoffMs(attempt)).toISOString();
+        let retryQ = admin
           .from('posts')
           .update({
             status: terminalStatus,
@@ -206,11 +254,21 @@ export async function POST(request: Request) {
             locked_by: null,
             attempt_count: attempt,
             last_error: publishRes.error.message,
+            ...(terminalStatus === 'scheduled_publish' ? { scheduled_at: retryAt } : {}),
           })
           .eq('id', id)
           .eq('status', 'processing_publish')
           .eq('locked_by', WORKER.workerId)
           .eq('locked_at', dueNowIso);
+        if (supportsLockToken) retryQ = retryQ.eq('lock_token', lockToken);
+        await retryQ;
+        if (terminalStatus === 'scheduled_publish') {
+          retriedCount++;
+          logWorker('worker.retry.scheduled', { id, attempt, next_retry_at: retryAt });
+        } else {
+          exhaustedCount++;
+          logWorker('worker.retry.exhausted', { id, attempt });
+        }
         failedCount++;
         results.push({ id, ok: false, error: publishRes.error.message, attempt, terminalStatus });
         continue;
@@ -219,6 +277,8 @@ export async function POST(request: Request) {
       if (!publishRes.data) {
         // Lost lease or already processed by another node.
         skippedCount++;
+        lostLockCount++;
+        logWorker('worker.lock.lost', { id });
         results.push({ id, ok: true, skipped: true, reason: 'lease-lost-or-already-processed' });
         continue;
       }
@@ -240,6 +300,7 @@ export async function POST(request: Request) {
       });
 
       successCount++;
+      logWorker('worker.lock.completed', { id });
       results.push({ id, ok: true, attempt });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -248,7 +309,7 @@ export async function POST(request: Request) {
     }
   }
 
-  return json({
+  const payload = {
     ok: true,
     processed: results.length,
     worker: WORKER.workerId,
@@ -259,11 +320,20 @@ export async function POST(request: Request) {
       succeeded: successCount,
       failed: failedCount,
       skipped: skippedCount,
+      retried: retriedCount,
+      retry_exhausted: exhaustedCount,
+      lock_lost: lostLockCount,
+      queue_depth: typeof queueDepth === 'number' ? queueDepth : null,
+      supports_lock_token: supportsLockToken,
+      supports_retry_scheduling: supportsRetryScheduling,
       batch_size: WORKER.batchSize,
       max_attempts: WORKER.maxAttempts,
       lease_ms: WORKER.leaseMs,
+      max_run_ms: WORKER.maxRunMs,
     },
     results,
-  });
+  };
+  console.info('[worker.process-scheduled-posts.done]', JSON.stringify(payload));
+  return json(payload);
 }
 

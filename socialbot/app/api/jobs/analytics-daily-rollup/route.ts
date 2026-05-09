@@ -66,6 +66,10 @@ export async function POST(request: Request) {
 
   const daysRaw = Number(new URL(request.url).searchParams.get('days') ?? 7);
   const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(31, Math.floor(daysRaw))) : 7;
+  console.info('[worker.analytics-daily-rollup.start]', JSON.stringify({
+    worker: 'api/jobs/analytics-daily-rollup',
+    days,
+  }));
 
   const out: any[] = [];
   for (let i = 0; i < days; i++) {
@@ -120,13 +124,20 @@ export async function POST(request: Request) {
     }
   }
 
-  return json({
+  const payload = {
     ok: true,
     worker: 'api/jobs/analytics-daily-rollup',
     duration_ms: Date.now() - startedAt,
     days,
     rolled_up: out.length,
     rows: out,
-  });
+  };
+  console.info('[worker.analytics-daily-rollup.done]', JSON.stringify({
+    worker: payload.worker,
+    duration_ms: payload.duration_ms,
+    days: payload.days,
+    rolled_up: payload.rolled_up,
+  }));
+  return json(payload);
 }
 

@@ -6,7 +6,7 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
 
 - **Expo app (repo root):** create `.env` with **`EXPO_PUBLIC_SUPABASE_URL`** and **`EXPO_PUBLIC_SUPABASE_ANON_KEY`** (see `.env.example`). For EAS builds, set the same names as [EAS secrets](https://docs.expo.dev/build-reference/variables/).
 - **Admin (`socialbot/`):** create `socialbot/.env.local` with **`NEXT_PUBLIC_SUPABASE_URL`**, **`NEXT_PUBLIC_SUPABASE_ANON_KEY`**, and **`SUPABASE_SERVICE_ROLE_KEY`** (see `socialbot/.env.example`). The URL and anon key must match the Expo app.
-- **Edge Function `notify-workers`:** Supabase injects **`SUPABASE_URL`** and **`SUPABASE_SERVICE_ROLE_KEY`** when deployed; no hardcoding in code.
+- **Edge Function `notify-workers` (legacy):** Disabled by default (`410 Gone`). If temporarily re-enabled, require both `ENABLE_LEGACY_NOTIFY_WORKERS=true` and `LEGACY_NOTIFY_WORKERS_SECRET`.
 
 Never commit `.env` / `.env.local` or paste **service_role** keys into client code.
 
