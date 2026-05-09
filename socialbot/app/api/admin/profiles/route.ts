@@ -8,7 +8,11 @@ import {
   validateAdminSession,
 } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
+import {
+  buildScopedQuery,
+  resolveAllowedProfileIdsForCampaignManager,
+  resolveEffectiveGroupIdsForCampaignManager,
+} from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireRole } from '@/lib/rbac/require';
@@ -42,13 +46,6 @@ export async function GET(request: NextRequest) {
   if (isModerator(auth) && auth.assigned_state_ids.length === 0) {
     return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
-  try {
-    requireCampaignManagerHasAssignedGroups(auth);
-  } catch (e) {
-    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
   const admin = createServiceRoleClient();
   if (!admin) {
     // No JWT fallback in /api/admin/*: avoid implicit RLS-scoped reads.
@@ -60,6 +57,18 @@ export async function GET(request: NextRequest) {
   const db = admin;
   const adminRole = isAdmin(auth);
   if (adminRole) assertAdminRole(auth);
+
+  let cmEffectiveGroupIds: string[] | undefined;
+  if (isCampaignManager(auth)) {
+    const eff = await resolveEffectiveGroupIdsForCampaignManager(db, auth.user.id, auth.assigned_group_ids);
+    if (eff === null) {
+      return NextResponse.json({ error: 'Unable to resolve group assignments' }, { status: 500 });
+    }
+    if (eff.length === 0) {
+      return NextResponse.json({ error: 'Campaign manager is missing assigned_group_ids' }, { status: 403 });
+    }
+    cmEffectiveGroupIds = eff;
+  }
 
   const sp = request.nextUrl.searchParams;
   const party = (sp.get('party') ?? '').trim();
@@ -111,10 +120,9 @@ export async function GET(request: NextRequest) {
   let error: { message?: string } | null = null;
 
   let cmAllowedProfileIds: string[] | null = null;
-  if (isCampaignManager(auth) && admin) {
-    // Prefer membership-based IDs; if table missing, fall back inside buildScopedQuery.
+  if (isCampaignManager(auth) && admin && cmEffectiveGroupIds) {
     const hasM = await hasGroupMembershipsTable(db);
-    if (hasM) cmAllowedProfileIds = await resolveAllowedProfileIdsForCampaignManager(admin, auth.assigned_group_ids);
+    if (hasM) cmAllowedProfileIds = await resolveAllowedProfileIdsForCampaignManager(admin, cmEffectiveGroupIds);
   }
 
   {
@@ -124,7 +132,10 @@ export async function GET(request: NextRequest) {
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
         q,
         'profiles',
-        { allowed_profile_ids: Array.isArray(cmAllowedProfileIds) ? cmAllowedProfileIds : undefined }
+        {
+          allowed_profile_ids: Array.isArray(cmAllowedProfileIds) ? cmAllowedProfileIds : undefined,
+          effective_group_ids: cmEffectiveGroupIds,
+        }
       );
     }
     const res = await q;
@@ -145,7 +156,10 @@ export async function GET(request: NextRequest) {
           { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
           q2,
           'profiles',
-          { allowed_profile_ids: Array.isArray(cmAllowedProfileIds) ? cmAllowedProfileIds : undefined }
+          {
+            allowed_profile_ids: Array.isArray(cmAllowedProfileIds) ? cmAllowedProfileIds : undefined,
+            effective_group_ids: cmEffectiveGroupIds,
+          }
         );
       }
       const res2 = await q2;

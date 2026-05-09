@@ -1,11 +1,18 @@
 import { NextResponse } from 'next/server';
-import { assertAdminRole, createServiceRoleClient, isAdmin, isCampaignManager, validateAdminSession } from '@/lib/admin-gate';
+import {
+  assertAdminRole,
+  createServiceRoleClient,
+  isAdmin,
+  isCampaignManager,
+  validateAdminSession,
+} from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
   buildScopedAnalyticsQuery,
   resolveAllowedProfileIdsForCampaignManager,
+  resolveEffectiveGroupIdsForCampaignManager,
 } from '@/lib/rbac/scoped-query-builder';
-import { RbacError, requireStandardRbacContext } from '@/lib/rbac/require';
+import { RbacError, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
 
 function startOfTodayIso(): string {
   const now = new Date();
@@ -20,7 +27,8 @@ export async function GET() {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
   try {
-    requireStandardRbacContext(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -38,23 +46,44 @@ export async function GET() {
 
   const adminRole = isAdmin(auth);
   if (adminRole) assertAdminRole(auth);
+
+  let cmEffectiveGroupIds: string[] | undefined;
+  if (isCampaignManager(auth)) {
+    const eff = await resolveEffectiveGroupIdsForCampaignManager(db, auth.user.id, auth.assigned_group_ids);
+    if (eff === null) {
+      return NextResponse.json({ error: 'Unable to resolve group assignments' }, { status: 500 });
+    }
+    if (eff.length === 0) {
+      return NextResponse.json({ error: 'Campaign manager is missing assigned_group_ids' }, { status: 403 });
+    }
+    cmEffectiveGroupIds = eff;
+  }
+
   const scopedUser = {
     id: auth.user.id,
     role: auth.role,
     assigned_state_ids: auth.assigned_state_ids,
     assigned_group_ids: auth.assigned_group_ids,
   } as any;
-  const allowed_profile_ids =
-    isCampaignManager(auth)
-      ? await resolveAllowedProfileIdsForCampaignManager(db as any, auth.assigned_group_ids)
-      : null;
+  const cmAnalyticsCtx = {
+    allowed_profile_ids: undefined as string[] | undefined,
+    effective_group_ids: undefined as string[] | undefined,
+  };
+  if (isCampaignManager(auth) && cmEffectiveGroupIds) {
+    cmAnalyticsCtx.effective_group_ids = cmEffectiveGroupIds;
+    cmAnalyticsCtx.allowed_profile_ids = (await resolveAllowedProfileIdsForCampaignManager(
+      db as any,
+      cmEffectiveGroupIds
+    )) ?? undefined;
+  }
 
   const runProfilesCount = (createdTodayOnly: boolean) => {
     let q = db.from('profiles').select('id', { count: 'exact', head: true });
     if (createdTodayOnly) q = q.gte('created_at', startOfTodayIso());
     if (adminRole) return q as any;
     return buildScopedAnalyticsQuery(scopedUser, q as any, 'profiles', {
-      allowed_profile_ids: allowed_profile_ids ?? undefined,
+      allowed_profile_ids: cmAnalyticsCtx.allowed_profile_ids,
+      effective_group_ids: cmAnalyticsCtx.effective_group_ids,
     }) as any;
   };
 
@@ -68,24 +97,36 @@ export async function GET() {
       .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`);
     const r = adminRole
       ? (base as any)
-      : ((await buildScopedAnalyticsQuery(scopedUser, base as any, 'posts')) as any);
+      : ((await buildScopedAnalyticsQuery(scopedUser, base as any, 'posts', {
+          effective_group_ids: cmAnalyticsCtx.effective_group_ids,
+        })) as any);
     if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
       const fallback = db.from('posts').select('id', { count: 'exact', head: true });
       return adminRole
         ? (fallback as any)
-        : ((await buildScopedAnalyticsQuery(scopedUser, fallback as any, 'posts')) as any);
+        : ((await buildScopedAnalyticsQuery(scopedUser, fallback as any, 'posts', {
+            effective_group_ids: cmAnalyticsCtx.effective_group_ids,
+          })) as any);
     }
     return r as any;
   };
 
   const runEventsCount = () => {
     const q = db.from('events').select('id', { count: 'exact', head: true });
-    return adminRole ? (q as any) : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events') as any);
+    return adminRole
+      ? (q as any)
+      : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events', {
+          effective_group_ids: cmAnalyticsCtx.effective_group_ids,
+        }) as any);
   };
 
   const runUpcomingEvents = () => {
     const q = db.from('events').select('id,name,end').order('end', { ascending: true }).limit(3);
-    return adminRole ? (q as any) : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events') as any);
+    return adminRole
+      ? (q as any)
+      : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events', {
+          effective_group_ids: cmAnalyticsCtx.effective_group_ids,
+        }) as any);
   };
 
   const runRecentPosts = async () => {

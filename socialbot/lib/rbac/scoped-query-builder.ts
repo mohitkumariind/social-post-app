@@ -38,7 +38,18 @@ export type ScopedQueryContext = {
    * (e.g. profiles visible via group_memberships).
    */
   allowed_profile_ids?: string[];
+  /**
+   * Union of `profiles.assigned_group_ids` and `group_memberships.group_id` rows for this user.
+   * When set, campaign_manager DB filters use this instead of JWT/profile-only `assigned_group_ids`
+   * so listings match mixed assignment models.
+   */
+  effective_group_ids?: string[];
 };
+
+function campaignManagerScopeGroupIds(canonical: CanonicalScope, ctx: ScopedQueryContext): string[] {
+  if (Array.isArray(ctx.effective_group_ids) && ctx.effective_group_ids.length > 0) return ctx.effective_group_ids;
+  return canonical.groupIds;
+}
 
 /**
  * Applies RBAC scoping at the DB query layer.
@@ -89,14 +100,15 @@ export function buildScopedQuery(
       // Require event.state_id subset of moderator assigned_state_ids.
       return baseQuery.not('state_id', 'is', null).neq('state_id', '{}').containedBy('state_id', canonical.stateIds);
     }
-    // campaign_manager: require event.target_groups subset of assigned_group_ids.
+    // campaign_manager: require event.target_groups subset of assigned (effective) group ids.
     // Use normalized string IDs for PostgREST: `events.target_groups` is text[] (numeric strings) in canonical schema;
     // passing number[] can break `<@` / `containedBy` matching against text[].
-    if (canonical.groupIds.length === 0) return baseQuery.eq('id', '__none__');
+    const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
+    if (scopeGids.length === 0) return baseQuery.eq('id', '__none__');
     return baseQuery
       .not('target_groups', 'is', null)
       .neq('target_groups', '{}')
-      .containedBy('target_groups', canonical.groupIds);
+      .containedBy('target_groups', scopeGids);
   }
 
   if (resourceType === 'profiles') {
@@ -107,7 +119,7 @@ export function buildScopedQuery(
     // campaign_manager: support mixed deployments where some data uses group_memberships while some still uses profiles.group_id.
     const allowedRaw = Array.isArray(ctx.allowed_profile_ids) ? ctx.allowed_profile_ids.map((x) => String(x).trim()).filter(Boolean) : [];
     const allowed = toUuidList(allowedRaw);
-    const gids = toGroupIdNums(canonical.groupIds);
+    const gids = toGroupIdNums(campaignManagerScopeGroupIds(canonical, ctx));
     if (allowed.length > 0 && gids.length > 0) {
       return baseQuery.or(`id.in.(${allowed.join(',')}),group_id.in.(${gids.join(',')})`);
     }
@@ -121,14 +133,15 @@ export function buildScopedQuery(
       return baseQuery.not('state_id', 'is', null).neq('state_id', '{}').containedBy('state_id', canonical.stateIds);
     }
     // campaign_manager: group-only scoping (indexed). If no groups are assigned, return empty.
-    const gids = toGroupIdNums(canonical.groupIds);
+    const gids = toGroupIdNums(campaignManagerScopeGroupIds(canonical, ctx));
     return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
   }
 
   if (resourceType === 'admin_logs') {
     if (role === 'campaign_manager') {
-      if (canonical.groupIds.length === 0) return baseQuery.eq('id', '__none__');
-      return baseQuery.not('scope_group_ids', 'is', null).neq('scope_group_ids', '{}').containedBy('scope_group_ids', canonical.groupIds);
+      const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
+      if (scopeGids.length === 0) return baseQuery.eq('id', '__none__');
+      return baseQuery.not('scope_group_ids', 'is', null).neq('scope_group_ids', '{}').containedBy('scope_group_ids', scopeGids);
     }
     // moderator: require scope_state_ids subset of assigned states.
     const sids = canonical.stateIds;
@@ -171,7 +184,7 @@ export function buildScopedAnalyticsQuery(
     if (role === 'moderator') return baseQuery.not('assigned_state_ids', 'is', null).neq('assigned_state_ids', '{}').containedBy('assigned_state_ids', canonical.stateIds);
     const allowedRaw = Array.isArray(ctx.allowed_profile_ids) ? ctx.allowed_profile_ids.map((x) => String(x).trim()).filter(Boolean) : [];
     const allowed = toUuidList(allowedRaw);
-    const gids = toGroupIdNums(canonical.groupIds);
+    const gids = toGroupIdNums(campaignManagerScopeGroupIds(canonical, ctx));
     if (allowed.length > 0 && gids.length > 0) {
       return baseQuery.or(`id.in.(${allowed.join(',')}),group_id.in.(${gids.join(',')})`);
     }
@@ -181,17 +194,18 @@ export function buildScopedAnalyticsQuery(
 
   if (resourceType === 'events') {
     if (role === 'moderator') return baseQuery.not('state_id', 'is', null).neq('state_id', '{}').containedBy('state_id', canonical.stateIds);
-    return canonical.groupIds.length > 0
+    const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
+    return scopeGids.length > 0
       ? baseQuery
           .not('target_groups', 'is', null)
           .neq('target_groups', '{}')
-          .containedBy('target_groups', canonical.groupIds)
+          .containedBy('target_groups', scopeGids)
       : baseQuery.eq('id', '__none__');
   }
 
   // posts
   if (role === 'moderator') return baseQuery.not('state_id', 'is', null).neq('state_id', '{}').containedBy('state_id', canonical.stateIds);
-  const gids = toGroupIdNums(canonical.groupIds);
+  const gids = toGroupIdNums(campaignManagerScopeGroupIds(canonical, ctx));
   return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
 }
 
@@ -254,6 +268,50 @@ export async function resolveAllowedProfileIdsForCampaignManager(
       const id = String(r.user_id ?? '').trim();
       if (id) dedup.add(id);
     }
+    if (rows.length < pageSize) break;
+    from += pageSize;
+    if (from > 2000000) break;
+  }
+  return Array.from(dedup);
+}
+
+/**
+ * Full campaign-manager group scope: profile `assigned_group_ids` ∪ every `group_memberships.group_id`
+ * for this user. Mirrors mixed assignment storage (profile column vs membership rows).
+ *
+ * Returns `null` if `group_memberships` exists but the query failed (caller may fall back to profile-only).
+ * Returns `[]` only when profile groups are malformed (parseGroupIds.malformed).
+ */
+export async function resolveEffectiveGroupIdsForCampaignManager(
+  admin: SupabaseClient,
+  userId: string,
+  assigned_group_ids: unknown
+): Promise<string[] | null> {
+  const fromProfile = parseGroupIds(assigned_group_ids);
+  if (fromProfile.malformed) return [];
+  const dedup = new Set<string>(fromProfile.ids);
+
+  const pageSize = 5000;
+  let from = 0;
+  for (;;) {
+    const { data, error } = await admin
+      .from('group_memberships')
+      .select('group_id')
+      .eq('user_id', userId)
+      .order('group_id', { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) {
+      const msg = String(error.message ?? '').toLowerCase();
+      const missing =
+        msg.includes('group_memberships') &&
+        (msg.includes('does not exist') || msg.includes('schema cache') || msg.includes('not found'));
+      if (missing) return Array.from(dedup);
+      return null;
+    }
+    const rows = (data ?? []) as { group_id?: unknown }[];
+    if (rows.length === 0) break;
+    const chunk = parseGroupIds(rows.map((r) => r.group_id)).ids;
+    for (const id of chunk) dedup.add(id);
     if (rows.length < pageSize) break;
     from += pageSize;
     if (from > 2000000) break;

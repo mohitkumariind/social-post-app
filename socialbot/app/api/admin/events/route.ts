@@ -10,10 +10,9 @@ import {
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
-import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
+import { buildScopedQuery, resolveEffectiveGroupIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import {
-  requireCampaignManagerHasAssignedGroups,
   RbacError,
   requireModeratorHasAssignedStates,
   requireOwnership,
@@ -48,6 +47,29 @@ function parseMissingColumnName(err: { message?: string } | null | undefined): s
   return m && m[1] ? String(m[1]).trim() : null;
 }
 
+async function resolveCmEffectiveGroupsOrError(
+  db: NonNullable<ReturnType<typeof createServiceRoleClient>>,
+  auth: { user: { id: string }; role: 'admin' | 'moderator' | 'campaign_manager'; assigned_group_ids: string[] }
+): Promise<{ error: ReturnType<typeof json> | null; ids: string[] | undefined }> {
+  if (!isCampaignManager(auth)) return { error: null, ids: undefined };
+  const eff = await resolveEffectiveGroupIdsForCampaignManager(db, auth.user.id, auth.assigned_group_ids);
+  if (eff === null) return { error: json({ error: 'Unable to resolve group assignments' }, 500), ids: undefined };
+  if (eff.length === 0) return { error: json({ error: 'Campaign manager is missing assigned_group_ids' }, 403), ids: undefined };
+  return { error: null, ids: eff };
+}
+
+function rbacUserForMutation(
+  auth: { user: { id: string }; role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[]; assigned_group_ids: string[] },
+  cmEffective?: string[]
+) {
+  return {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: isCampaignManager(auth) && cmEffective && cmEffective.length > 0 ? cmEffective : auth.assigned_group_ids,
+  } as const;
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
@@ -55,7 +77,6 @@ export async function GET(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
-    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -68,6 +89,32 @@ export async function GET(request: NextRequest) {
   const db = admin;
   const adminRole = isAdmin(auth);
   if (adminRole) assertAdminRole(auth);
+
+  let cmEffectiveGroupIds: string[] | undefined;
+  if (isCampaignManager(auth)) {
+    const eff = await resolveEffectiveGroupIdsForCampaignManager(db, auth.user.id, auth.assigned_group_ids);
+    if (eff === null) return json({ error: 'Unable to resolve group assignments' }, 500);
+    if (eff.length === 0) return json({ error: 'Campaign manager is missing assigned_group_ids' }, 403);
+    cmEffectiveGroupIds = eff;
+  }
+
+  const accessUser = () =>
+    isCampaignManager(auth) && cmEffectiveGroupIds && cmEffectiveGroupIds.length > 0
+      ? {
+          id: auth.user.id,
+          role: auth.role,
+          assigned_state_ids: auth.assigned_state_ids,
+          assigned_group_ids: cmEffectiveGroupIds,
+        }
+      : {
+          id: auth.user.id,
+          role: auth.role,
+          assigned_state_ids: auth.assigned_state_ids,
+          assigned_group_ids: auth.assigned_group_ids,
+        };
+
+  const eventsScopeCtx =
+    isCampaignManager(auth) && cmEffectiveGroupIds ? { effective_group_ids: cmEffectiveGroupIds } : {};
 
   const id = (request.nextUrl.searchParams.get('id') ?? '').trim();
   const name = (request.nextUrl.searchParams.get('name') ?? '').trim();
@@ -93,12 +140,7 @@ export async function GET(request: NextRequest) {
 
     try {
       const ok = canAccessResource(
-        {
-          id: auth.user.id,
-          role: auth.role,
-          assigned_state_ids: auth.assigned_state_ids,
-          assigned_group_ids: auth.assigned_group_ids,
-        },
+        accessUser() as any,
         {
           created_by: (data as any).created_by,
           state_ids: (data as any).state_id,
@@ -130,7 +172,8 @@ export async function GET(request: NextRequest) {
       : buildScopedQuery(
           { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
           qIn,
-          'events'
+          'events',
+          eventsScopeCtx
         );
 
   // Primary: created_at cursor pagination (preferred).
@@ -174,7 +217,6 @@ export async function POST(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
-    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -187,9 +229,13 @@ export async function POST(request: NextRequest) {
     return json({ error: 'Invalid JSON body' }, 400);
   }
 
+  const admin = createServiceRoleClient();
+  if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
   {
+    const { error: cmErr, ids: cmEff } = await resolveCmEffectiveGroupsOrError(admin, auth);
+    if (cmErr) return cmErr;
     const decision = canPerformMutation(
-      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      rbacUserForMutation(auth, cmEff) as any,
       'events.create',
       null,
       payload,
@@ -243,9 +289,6 @@ export async function POST(request: NextRequest) {
     (payload as any).published_by = auth.user.id;
   }
 
-  const admin = createServiceRoleClient();
-  if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
-
   // Best-effort compatibility for schema cache lag / partial migrations:
   // retry inserts while stripping unknown columns indicated by PostgREST.
   // Never strip RBAC / scope columns on retry — partial inserts (e.g. missing target_groups) become invisible in scoped listings.
@@ -289,7 +332,6 @@ export async function PATCH(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
-    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -307,6 +349,8 @@ export async function PATCH(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
+  const { error: cmErr, ids: cmEff } = await resolveCmEffectiveGroupsOrError(admin, auth);
+  if (cmErr) return cmErr;
 
   // Pre-read minimal resource for write guard
   const { data: evForGuard, error: evForGuardErr } = await admin
@@ -317,7 +361,7 @@ export async function PATCH(request: NextRequest) {
   if (evForGuardErr) return json({ error: evForGuardErr.message }, 500);
   {
     const decision = canPerformMutation(
-      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      rbacUserForMutation(auth, cmEff) as any,
       'events.update',
       {
         created_by: (evForGuard as any)?.created_by,
@@ -479,7 +523,6 @@ export async function DELETE(request: NextRequest) {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
-    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -490,6 +533,8 @@ export async function DELETE(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
+  const { error: cmErr, ids: cmEff } = await resolveCmEffectiveGroupsOrError(admin, auth);
+  if (cmErr) return cmErr;
 
   const { data: evForGuard, error: evForGuardErr } = await admin
     .from('events')
@@ -499,7 +544,7 @@ export async function DELETE(request: NextRequest) {
   if (evForGuardErr) return json({ error: evForGuardErr.message }, 500);
   {
     const decision = canPerformMutation(
-      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      rbacUserForMutation(auth, cmEff) as any,
       'events.delete',
       {
         created_by: (evForGuard as any)?.created_by,

@@ -64,6 +64,22 @@ describe('scoped query builder', () => {
     expect(q.calls[0]).toEqual({ method: 'or', args: [`id.in.(${p1},${p2}),group_id.in.(1)`] });
   });
 
+  it('prefers effective_group_ids over profile-only ids for campaign manager events', () => {
+    const q = new FakeQuery();
+    buildScopedQuery(
+      {
+        id: 'u4',
+        role: 'campaign_manager',
+        assigned_state_ids: [],
+        assigned_group_ids: ['1'],
+      },
+      q,
+      'events',
+      { effective_group_ids: ['1', '2', '3'] }
+    );
+    expect(q.calls[2]).toEqual({ method: 'containedBy', args: ['target_groups', ['1', '2', '3']] });
+  });
+
   it('keeps analytics scoping aligned for campaign manager events', () => {
     const q = new FakeQuery();
     buildScopedAnalyticsQuery(
