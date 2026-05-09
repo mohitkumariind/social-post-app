@@ -35,6 +35,11 @@ function parseFutureScheduledAt(input: unknown): { scheduled_at: string | null; 
   return { scheduled_at: iso, shouldSchedule: true };
 }
 
+function isMissingColumnErr(err: { message?: string } | null | undefined, columnName: string) {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column') || msg.includes('schema cache'));
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
@@ -201,8 +206,30 @@ export async function POST(request: NextRequest) {
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
-  const { data, error } = await admin.from('events').insert(payload).select().single();
-  if (error) return json({ error: error.message }, 500);
+  let insertRes = await admin.from('events').insert(payload).select().single();
+  if (insertRes.error && isMissingColumnErr(insertRes.error, 'created_by')) {
+    const { created_by: _createdBy, ...rest } = payload;
+    insertRes = await admin.from('events').insert(rest as any).select().single();
+  }
+  if (insertRes.error && isMissingColumnErr(insertRes.error, 'published_by')) {
+    const { published_by: _publishedBy, ...rest } = payload;
+    insertRes = await admin.from('events').insert(rest as any).select().single();
+  }
+  if (insertRes.error && isMissingColumnErr(insertRes.error, 'published_at')) {
+    const { published_at: _publishedAt, ...rest } = payload;
+    insertRes = await admin.from('events').insert(rest as any).select().single();
+  }
+  if (insertRes.error && isMissingColumnErr(insertRes.error, 'status')) {
+    const { status: _status, ...rest } = payload;
+    insertRes = await admin.from('events').insert(rest as any).select().single();
+  }
+  if (insertRes.error && isMissingColumnErr(insertRes.error, 'scheduled_at')) {
+    const { scheduled_at: _scheduledAt, ...rest } = payload;
+    insertRes = await admin.from('events').insert(rest as any).select().single();
+  }
+
+  if (insertRes.error) return json({ error: insertRes.error.message }, 500);
+  const data = insertRes.data as any;
 
   void logAdminAction({
     actor_user_id: auth.user.id,
