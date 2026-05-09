@@ -77,6 +77,14 @@ function isMissingColumnErr(err: { message?: string } | null | undefined, column
   return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column'));
 }
 
+async function detachLegacyProfilesGroupId(admin: SupabaseClient, groupId: number) {
+  // Best-effort. In many-to-many mode, profiles.group_id may still exist with an FK to groups.
+  // If we ever hard-delete a group row (schema fallback), detach legacy references first.
+  const res = await admin.from('profiles').update({ group_id: null }).eq('group_id', groupId);
+  if ((res as any)?.error && isMissingColumnErr((res as any).error, 'group_id')) return;
+  if ((res as any)?.error) throw new Error((res as any).error.message);
+}
+
 function isMissingTableErr(err: { message?: string } | null | undefined, tableName: string) {
   const msg = String(err?.message ?? '').toLowerCase();
   return msg.includes(tableName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('schema cache') || msg.includes('not found'));
@@ -678,6 +686,11 @@ export async function DELETE(request: NextRequest) {
   if (delErr) {
     // Backward-compatible: older DB may not have deleted_at/deleted_by columns yet.
     if (isMissingColumnErr(delErr as any, 'deleted_at') || isMissingColumnErr(delErr as any, 'deleted_by')) {
+      try {
+        await detachLegacyProfilesGroupId(admin, grp.id);
+      } catch (e) {
+        return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to detach legacy group_id' }, { status: 500 });
+      }
       const hard = await admin.from('groups').delete().eq('id', grp.id);
       if ((hard as any).error) {
         return NextResponse.json({ error: (hard as any).error?.message ?? 'Delete failed' }, { status: 500 });
