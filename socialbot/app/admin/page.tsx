@@ -1,21 +1,17 @@
 "use client";
-import { BarChart3, Calendar, ChevronRight, Users } from 'lucide-react';
+import { Calendar, ChevronRight, Users } from 'lucide-react';
 import Image from 'next/image';
+import Link from 'next/link';
 import React, { useEffect, useMemo, useState } from 'react';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
 
-interface PostRow {
-  id: string;
-  title: string;
-  date: string;
-}
-
-interface UpcomingEvent {
+interface DashboardEventCard {
   id: string;
   name: string;
-  date: string;
-  color: string;
+  endLabel: string;
+  subLabel: string;
+  accent: string;
 }
 
 export default function Dashboard() {
@@ -23,29 +19,27 @@ export default function Dashboard() {
   const [newUsersToday, setNewUsersToday] = useState<number | null>(null);
   const [postsCount, setPostsCount] = useState<number | null>(null);
   const [eventsCount, setEventsCount] = useState<number | null>(null);
-  const [recentPosts, setRecentPosts] = useState<PostRow[]>([]);
-  const [upcomingEvents, setUpcomingEvents] = useState<UpcomingEvent[]>([]);
+  const [publishedEvents, setPublishedEvents] = useState<DashboardEventCard[]>([]);
+  const [scheduledEvents, setScheduledEvents] = useState<DashboardEventCard[]>([]);
 
   const fmtDateShort = (iso: string | null | undefined) => {
     if (!iso) return '—';
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const fmtDateTimeShort = (iso: string | null | undefined) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      let role: string | null = null;
-      try {
-        const vr = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
-        const vd = (await vr.json().catch(() => ({}))) as { role?: string | null };
-        role = typeof vd.role === 'string' ? vd.role : null;
-      } catch {
-        role = null;
-      }
-
       const res = await fetch('/api/admin/dashboard-stats', { credentials: 'same-origin' });
       if (!res.ok) {
         if (__DEV__) {
@@ -58,8 +52,8 @@ export default function Dashboard() {
         newUsersToday: number | null;
         postsCount: number | null;
         eventsCount: number | null;
-        recentPosts: Array<{ id: string; title: string | null; created_at?: string | null }>;
-        upcomingEvents: Array<{ id: string; name: string; end?: string | null }>;
+        publishedEvents?: Array<{ id: string; name: string; end?: string | null; start?: string | null; scheduled_at?: string | null }>;
+        scheduledEvents?: Array<{ id: string; name: string; end?: string | null; scheduled_at?: string | null }>;
       };
 
       if (cancelled) return;
@@ -69,26 +63,30 @@ export default function Dashboard() {
       setEventsCount(payload.eventsCount);
       setNewUsersToday(payload.newUsersToday);
 
-      const r = (role ?? '').toLowerCase();
-      const canSeeRecentPosts = r === 'admin';
-      setRecentPosts(
-        canSeeRecentPosts
-          ? (payload.recentPosts || []).map((p) => ({
-              id: p.id,
-              title: String(p.title ?? '').trim() || '—',
-              date: fmtDateShort(p.created_at),
-            }))
-          : []
-      );
+      const toPublishedCards = (
+        rows: Array<{ id: string; name: string; end?: string | null; start?: string | null }>
+      ): DashboardEventCard[] =>
+        (rows || []).map((e, idx) => ({
+          id: String(e.id ?? '').trim() || String(e.name ?? ''),
+          name: String(e.name ?? '').trim() || '—',
+          endLabel: fmtDateShort(e.end),
+          subLabel: `Start ${fmtDateShort(e.start)}`,
+          accent: idx % 3 === 0 ? 'border-emerald-500' : idx % 3 === 1 ? 'border-blue-500' : 'border-violet-500',
+        }));
 
-      setUpcomingEvents(
-        (payload.upcomingEvents || []).map((e, idx) => ({
-          id: e.id ?? e.name,
-          name: e.name,
-          date: fmtDateShort(e.end),
-          color: idx % 3 === 0 ? 'border-orange-500' : idx % 3 === 1 ? 'border-red-500' : 'border-blue-500',
-        }))
-      );
+      const toScheduledCards = (
+        rows: Array<{ id: string; name: string; end?: string | null; scheduled_at?: string | null }>
+      ): DashboardEventCard[] =>
+        (rows || []).map((e, idx) => ({
+          id: String(e.id ?? '').trim() || String(e.name ?? ''),
+          name: String(e.name ?? '').trim() || '—',
+          endLabel: fmtDateTimeShort(e.scheduled_at),
+          subLabel: `Campaign end ${fmtDateShort(e.end)}`,
+          accent: idx % 3 === 0 ? 'border-amber-500' : idx % 3 === 1 ? 'border-sky-500' : 'border-fuchsia-500',
+        }));
+
+      setPublishedEvents(toPublishedCards(payload.publishedEvents ?? []));
+      setScheduledEvents(toScheduledCards(payload.scheduledEvents ?? []));
     })();
 
     return () => {
@@ -104,6 +102,38 @@ export default function Dashboard() {
       { id: 4, label: 'Active Campaigns', value: eventsCount != null ? String(eventsCount) : '—', color: 'bg-indigo-600', shadow: 'shadow-indigo-100' },
     ],
     [totalUsers, newUsersToday, postsCount, eventsCount]
+  );
+
+  const eventRow = (title: string, events: DashboardEventCard[], emptyHint: string, mode: 'published' | 'scheduled') => (
+    <div className="space-y-4">
+      <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] px-2 flex items-center gap-2">
+        <Calendar size={14} className="text-orange-500" /> {title}
+      </h3>
+      {events.length === 0 ? (
+        <p className="px-2 text-sm font-bold text-slate-400">{emptyHint}</p>
+      ) : (
+        <div className="flex gap-4 overflow-x-auto pb-2 -mx-1 px-1 scroll-smooth snap-x snap-mandatory">
+          {events.map((event) => (
+            <Link
+              key={event.id}
+              href="/admin/events"
+              className={`snap-start shrink-0 w-[min(100%,280px)] bg-white p-6 rounded-[35px] border-l-8 ${event.accent} border border-slate-100 shadow-sm flex items-center justify-between group hover:shadow-md transition-all`}
+            >
+              <div className="min-w-0 pr-2">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">
+                  {mode === 'published' ? `End: ${event.endLabel}` : `Scheduled: ${event.endLabel}`}
+                </p>
+                <h4 className="text-lg font-black text-slate-900 leading-tight truncate">{event.name}</h4>
+                <p className="text-[10px] font-bold text-slate-400 mt-1 truncate">{event.subLabel}</p>
+              </div>
+              <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-300 group-hover:text-slate-900 transition-colors shrink-0">
+                <ChevronRight size={20} />
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
   );
 
   return (
@@ -142,52 +172,9 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {recentPosts.length > 0 ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 bg-white rounded-[40px] border border-slate-100 shadow-sm flex flex-col overflow-hidden">
-            <div className="p-8 border-b border-slate-50 flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <BarChart3 className="text-blue-600" />
-                <h3 className="font-black text-slate-900 text-lg">Recent posts</h3>
-              </div>
-            </div>
-            <table className="w-full text-left">
-              <thead>
-                <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
-                  <th className="px-8 py-4">Post title</th>
-                  <th className="px-8 py-4 text-right">Added</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {recentPosts.map((post) => (
-                  <tr key={post.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-8 py-5 font-bold text-slate-800">{post.title}</td>
-                    <td className="px-8 py-5 text-right font-black text-slate-500">{post.date}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="space-y-4 pt-4">
-        <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] px-2 flex items-center gap-2">
-          <Calendar size={14} className="text-orange-500" /> Upcoming Event Pipeline
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {upcomingEvents.map((event) => (
-            <div key={event.id} className={`bg-white p-6 rounded-[35px] border-l-8 ${event.color} border border-slate-100 shadow-sm flex items-center justify-between group hover:shadow-md transition-all`}>
-              <div>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Target Date: {event.date}</p>
-                <h4 className="text-lg font-black text-slate-900 leading-tight">{event.name}</h4>
-              </div>
-              <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-300 group-hover:text-slate-900 transition-colors">
-                <ChevronRight size={20} />
-              </div>
-            </div>
-          ))}
-        </div>
+      <div className="space-y-10 pt-4">
+        {eventRow('Published Event', publishedEvents, 'No published events in your scope.', 'published')}
+        {eventRow('Scheduled Event', scheduledEvents, 'No scheduled events in your scope.', 'scheduled')}
       </div>
 
     </div>

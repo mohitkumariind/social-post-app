@@ -607,9 +607,42 @@ export async function DELETE(request: NextRequest) {
   if (!before) return json({ error: 'Not found' }, 404);
   if ((before as any).deleted_at != null) return json({ ok: true, alreadyDeleted: true });
 
-  const patch = { deleted_at: new Date().toISOString(), deleted_by: auth.user.id, status: 'archived' };
-  const { data, error } = await admin.from('events').update(patch).eq('id', id).select().single();
-  if (error) return json({ error: error.message }, 500);
+  /** Soft-delete row; retry with smaller patch when columns or status CHECK differ across deployments. */
+  let deletePatch: Record<string, unknown> = {
+    deleted_at: new Date().toISOString(),
+    deleted_by: auth.user.id,
+    status: 'archived',
+  };
+  let updateRes = await admin.from('events').update(deletePatch).eq('id', id).select().single();
+  for (let attempts = 0; attempts < 12 && updateRes.error; attempts++) {
+    const missing = parseMissingColumnName(updateRes.error as any);
+    if (missing && missing !== 'deleted_at' && Object.prototype.hasOwnProperty.call(deletePatch, missing)) {
+      delete (deletePatch as any)[missing];
+      updateRes = await admin.from('events').update(deletePatch).eq('id', id).select().single();
+      continue;
+    }
+    const msg = String((updateRes.error as any)?.message ?? '').toLowerCase();
+    if (
+      (msg.includes('check') || msg.includes('constraint') || msg.includes('violates')) &&
+      Object.prototype.hasOwnProperty.call(deletePatch, 'status')
+    ) {
+      delete (deletePatch as any).status;
+      updateRes = await admin.from('events').update(deletePatch).eq('id', id).select().single();
+      continue;
+    }
+    break;
+  }
+
+  let data = updateRes.data as any;
+  if (updateRes.error) {
+    if (isMissingColumnErr(updateRes.error, 'deleted_at')) {
+      const hard = await admin.from('events').delete().eq('id', id).select().single();
+      if (hard.error) return json({ error: hard.error.message }, 500);
+      data = hard.data;
+    } else {
+      return json({ error: updateRes.error.message }, 500);
+    }
+  }
 
   void logAdminAction({
     actor_user_id: auth.user.id,

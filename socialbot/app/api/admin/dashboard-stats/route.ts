@@ -14,6 +14,20 @@ import {
 } from '@/lib/rbac/scoped-query-builder';
 import { RbacError, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
 
+function isMissingColumnErr(err: { message?: string } | null | undefined, columnName: string) {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column') || msg.includes('schema cache'));
+}
+
+export type DashboardEventRow = {
+  id: string;
+  name: string;
+  end?: string | null;
+  start?: string | null;
+  status?: string | null;
+  scheduled_at?: string | null;
+};
+
 function startOfTodayIso(): string {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -120,49 +134,121 @@ export async function GET() {
         }) as any);
   };
 
-  const runUpcomingEvents = () => {
-    const q = db.from('events').select('id,name,end').order('end', { ascending: true }).limit(3);
-    return adminRole
-      ? (q as any)
-      : (buildScopedAnalyticsQuery(scopedUser, q as any, 'events', {
+  const nowIso = new Date().toISOString();
+
+  const applyEventsScope = (qIn: any) =>
+    adminRole
+      ? qIn
+      : buildScopedAnalyticsQuery(scopedUser, qIn as any, 'events', {
           effective_group_ids: cmAnalyticsCtx.effective_group_ids,
-        }) as any);
-  };
+        });
 
-  const runRecentPosts = async () => {
-    if (!adminRole) return { data: [], error: null } as any;
-    const nowIso = new Date().toISOString();
-    const r = await db
-      .from('posts')
-      .select('id,title,created_at')
-      .eq('status', 'published')
-      .is('deleted_at', null)
-      .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`)
-      .order('created_at', { ascending: false })
-      .limit(5);
-    if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
-      return (await db.from('posts').select('id,title,created_at').order('created_at', { ascending: false }).limit(5)) as any;
+  /** Published = status published (soft-delete excluded). Legacy DB without `status`: non-deleted rows that are not future-scheduled. */
+  const runPublishedEventsList = async (): Promise<{ data: DashboardEventRow[]; error: unknown }> => {
+    const selectFull = 'id,name,end,start,status,scheduled_at';
+    const selectLite = 'id,name,end,start,scheduled_at';
+    const selectMin = 'id,name,end,start';
+
+    const run = async (q: any) => {
+      const scoped = applyEventsScope(q);
+      return scoped as any;
+    };
+
+    let res = await run(
+      db.from('events').select(selectFull).is('deleted_at', null).eq('status', 'published').order('end', { ascending: false }).limit(40)
+    );
+    if (res.error && isMissingColumnErr(res.error, 'status')) {
+      res = await run(
+        db
+          .from('events')
+          .select(selectLite)
+          .is('deleted_at', null)
+          .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`)
+          .order('end', { ascending: false })
+          .limit(40)
+      );
     }
-    return r as any;
+    if (res.error && isMissingColumnErr(res.error, 'deleted_at')) {
+      res = await run(
+        db.from('events').select(selectFull).eq('status', 'published').order('end', { ascending: false }).limit(40)
+      );
+    }
+    if (res.error && isMissingColumnErr(res.error, 'status')) {
+      res = await run(
+        db
+          .from('events')
+          .select(selectLite)
+          .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`)
+          .order('end', { ascending: false })
+          .limit(40)
+      );
+    }
+    if (res.error && isMissingColumnErr(res.error, 'scheduled_at')) {
+      res = await run(db.from('events').select(selectMin).is('deleted_at', null).order('end', { ascending: false }).limit(40));
+    }
+    if (res.error && isMissingColumnErr(res.error, 'deleted_at')) {
+      res = await run(db.from('events').select(selectMin).order('end', { ascending: false }).limit(40));
+    }
+    return { data: (res.data || []) as DashboardEventRow[], error: res.error };
   };
 
-  const [usersCountRes, postsCountRes, eventsCountRes, newUsersRes, recentPostsRes, upcomingEventsRes] =
-    await Promise.all([
-      runProfilesCount(false),
-      runPostsCount(),
-      runEventsCount(),
-      runProfilesCount(true),
-      runRecentPosts(),
-      runUpcomingEvents(),
-    ]);
+  const runScheduledEventsList = async (): Promise<{ data: DashboardEventRow[]; error: unknown }> => {
+    const selectFull = 'id,name,end,start,status,scheduled_at';
+    const selectLite = 'id,name,end,start,scheduled_at';
+
+    const run = async (q: any) => applyEventsScope(q) as any;
+
+    let res = await run(
+      db
+        .from('events')
+        .select(selectFull)
+        .is('deleted_at', null)
+        .eq('status', 'scheduled_publish')
+        .gt('scheduled_at', nowIso)
+        .order('scheduled_at', { ascending: true })
+        .limit(40)
+    );
+    if (res.error && isMissingColumnErr(res.error, 'status')) {
+      res = await run(
+        db.from('events').select(selectLite).is('deleted_at', null).gt('scheduled_at', nowIso).order('scheduled_at', { ascending: true }).limit(40)
+      );
+    }
+    if (res.error && isMissingColumnErr(res.error, 'deleted_at')) {
+      res = await run(
+        db
+          .from('events')
+          .select(selectFull)
+          .eq('status', 'scheduled_publish')
+          .gt('scheduled_at', nowIso)
+          .order('scheduled_at', { ascending: true })
+          .limit(40)
+      );
+    }
+    if (res.error && isMissingColumnErr(res.error, 'status')) {
+      res = await run(db.from('events').select(selectLite).gt('scheduled_at', nowIso).order('scheduled_at', { ascending: true }).limit(40));
+    }
+    if (res.error && isMissingColumnErr(res.error, 'scheduled_at')) {
+      return { data: [], error: null };
+    }
+    return { data: (res.data || []) as DashboardEventRow[], error: res.error };
+  };
+
+  const [usersCountRes, postsCountRes, eventsCountRes, newUsersRes, publishedEventsRes, scheduledEventsRes] = await Promise.all([
+    runProfilesCount(false),
+    runPostsCount(),
+    runEventsCount(),
+    runProfilesCount(true),
+    runPublishedEventsList(),
+    runScheduledEventsList(),
+  ]);
 
   return NextResponse.json({
     totalUsers: typeof usersCountRes.count === 'number' ? usersCountRes.count : null,
     newUsersToday: typeof newUsersRes.count === 'number' ? newUsersRes.count : null,
     postsCount: typeof postsCountRes.count === 'number' ? postsCountRes.count : null,
     eventsCount: typeof eventsCountRes.count === 'number' ? eventsCountRes.count : null,
-    recentPosts: (recentPostsRes.data || []) as Array<{ id: string; title: string | null; created_at?: string | null }>,
-    upcomingEvents: (upcomingEventsRes.data || []) as Array<{ id: string; name: string; end?: string | null }>,
+    publishedEvents: publishedEventsRes.data ?? [],
+    scheduledEvents: scheduledEventsRes.data ?? [],
     usedServiceRole: !!admin,
   });
 }
