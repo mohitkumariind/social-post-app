@@ -43,6 +43,20 @@ export function hasUsableProfileForVisibility(u: {
   return !!profileId && Number.isFinite(partyId as number) && Number.isFinite(stateId as number);
 }
 
+/** Narrow loose dashboard `user` records for visibility checks (socialbot build typechecks ../utils). */
+export function toVisibilityUserSlice(user: Record<string, unknown> | null | undefined): {
+  profile_id?: string;
+  party_id?: number | null;
+  state_id?: number | null;
+} {
+  if (user == null) return {};
+  return {
+    profile_id: user.profile_id != null ? String(user.profile_id) : undefined,
+    party_id: normalizeStrictId(user.party_id),
+    state_id: normalizeStrictId(user.state_id),
+  };
+}
+
 /**
  * @param profileLoaded — whether server profile gate is satisfied (replaces ref snapshot in original).
  */
@@ -52,7 +66,7 @@ export function explainVisibility(
   profileLoaded: boolean
 ): VisibilityExplainResult {
   const result: VisibilityExplainResult = { ok: false, reason: 'unknown' };
-  if (!profileLoaded && !hasUsableProfileForVisibility(user as { profile_id?: string; party_id?: unknown; state_id?: unknown })) {
+  if (!profileLoaded && !hasUsableProfileForVisibility(toVisibilityUserSlice(user))) {
     result.reason = 'profile_not_loaded';
     return result;
   }
