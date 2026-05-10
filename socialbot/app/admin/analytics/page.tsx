@@ -485,10 +485,6 @@ export default function AdminAnalyticsPage() {
         <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Campaign Intelligence</h2>
-            <p className="mt-0.5 text-xs text-zinc-600">
-              Events and metrics are scoped by your role on the server (admin / moderator / campaign manager). Click a
-              row to drill into users who have not downloaded that event.
-            </p>
           </div>
           {ciLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-zinc-500" /> : null}
         </div>
