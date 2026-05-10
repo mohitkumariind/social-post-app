@@ -7,7 +7,7 @@ import { adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 import { getStateVisibility } from '@/lib/admin/state-filter';
-import { BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG } from '@/lib/broadcast-send';
+import { BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG } from '@/lib/broadcast-constants';
 import { BroadcastEventSelector, type BroadcastMode } from './BroadcastEventSelector';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';

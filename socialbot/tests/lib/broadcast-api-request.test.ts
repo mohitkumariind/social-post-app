@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG } from '@/lib/broadcast-send';
+import { BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG } from '@/lib/broadcast-constants';
 import { normalizeBroadcastIncomingRequest } from '@/lib/broadcast-api-request';
 
 describe('normalizeBroadcastIncomingRequest', () => {

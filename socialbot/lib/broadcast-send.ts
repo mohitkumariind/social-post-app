@@ -1,7 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import Expo, { type ExpoPushMessage } from 'expo-server-sdk';
 import { ANDROID_NOTIFICATION_CHANNEL_ID } from '../../lib/pushChannel';
+import {
+  BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG,
+  NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN,
+} from '@/lib/broadcast-constants';
 import { filterRetryRecipientIds } from '@/lib/workers/notification-retry';
+
+export { BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG, NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN };
 
 const HISTORY_INSERT_CHUNK = 500;
 const EXPO_SAME_PROJECT_ERR_RE = /All messages must be for the same project/i;
@@ -39,12 +45,6 @@ export type BroadcastPayload = {
   /** Optional `public.events.id` (top-level UUID). Required when `data.type` is `"event_campaign"` (event broadcast mode); omitted for global broadcasts. Stored on `notification_broadcasts` and copied into push `data.event_id` when present. */
   event_id?: string | null;
 };
-
-/** Push `data.type` value that requires a persisted `notification_broadcasts.event_id`. */
-export const NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN = 'event_campaign' as const;
-
-/** Admin UI + API when `data.type` is `event_campaign` but `event_id` is missing or invalid. */
-export const BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG = 'Please select an event for event campaign';
 
 /** Optional campaign/event linkage (validated UUID or null). */
 export function optionalEventIdFromPayload(payload: BroadcastPayload): string | null {

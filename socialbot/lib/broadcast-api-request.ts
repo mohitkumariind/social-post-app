@@ -1,9 +1,9 @@
-import type { BroadcastFilterLabels, BroadcastFilters, BroadcastPayload } from '@/lib/broadcast-send';
 import {
   BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG,
   NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN,
-  optionalEventIdFromPayload,
-} from '@/lib/broadcast-send';
+} from '@/lib/broadcast-constants';
+import type { BroadcastFilterLabels, BroadcastFilters, BroadcastPayload } from '@/lib/broadcast-send';
+import { optionalEventIdFromPayload } from '@/lib/broadcast-send';
 
 export type BroadcastApiBroadcastMode = 'event' | 'global';
 
