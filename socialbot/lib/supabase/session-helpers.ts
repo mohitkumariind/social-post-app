@@ -225,7 +225,8 @@ export async function fetchProfileAccessForMiddleware(
 }
 
 export function isAdminRole(role: string | null): boolean {
-  return role != null && role.toLowerCase() === 'admin';
+  const r = role?.trim().toLowerCase() ?? '';
+  return r === 'admin' || r === 'super_admin';
 }
 
 export function isModeratorRole(role: string | null): boolean {
