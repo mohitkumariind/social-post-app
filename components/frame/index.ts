@@ -1,3 +1,5 @@
+export { getFrameFonts, normalizeProfileFrameLanguage, FRAME_FONT_ASSETS } from '../../lib/frameFonts';
+export type { FrameFonts, FrameProfileLanguageCode } from '../../lib/frameFonts';
 export { CachedFrameMedia, IMAGE_SKELETON_BG } from './CachedFrameMedia';
 export { FrameEngine } from './FrameEngine';
 export type { FrameEngineProps } from './FrameEngine';

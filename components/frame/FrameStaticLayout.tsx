@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
-import React, { memo } from 'react';
+import React, { memo, useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { FrameAvatarSlotMode } from '../../hooks/useFrameCutout';
-import { FRAME_TEXT_BAND_MIN_HEIGHT, buildFrameSocialStripItems, getFontForLang, getFramePartyStripPalette } from './frameTheme';
+import { getFrameFonts } from '../../lib/frameFonts';
+import { FRAME_TEXT_BAND_MIN_HEIGHT, buildFrameSocialStripItems, getFramePartyStripPalette } from './frameTheme';
 import { framePostStyles } from './framePostStyles';
 
 const TEXT_SAFE_MARGIN = 125;
@@ -12,7 +13,8 @@ export type FrameStaticLayoutProps = {
   side: 'left' | 'right';
   displayName: string;
   filledDesignations: string[];
-  userLanguage?: string;
+  /** `UserInfo.language` from profile only — not app UI / device locale. */
+  profileLanguage: string | undefined;
   partyName?: string;
   userForSocial: Parameters<typeof buildFrameSocialStripItems>[0];
   avatarUrl: string;
@@ -32,7 +34,7 @@ function FrameStaticLayoutInner(props: FrameStaticLayoutProps) {
     side,
     displayName,
     filledDesignations,
-    userLanguage,
+    profileLanguage,
     partyName,
     userForSocial,
     avatarUrl,
@@ -50,6 +52,14 @@ function FrameStaticLayoutInner(props: FrameStaticLayoutProps) {
   const isAvatarRight = side === 'right';
   const partySocialStripPalette = getFramePartyStripPalette(partyName);
   const socialStripItems = buildFrameSocialStripItems(userForSocial);
+  const { nameTypography, infoTypography } = useMemo(() => {
+    const f = getFrameFonts(profileLanguage);
+    const base = { fontWeight: 'normal' as const };
+    return {
+      nameTypography: { ...base, fontFamily: f.nameFont },
+      infoTypography: { ...base, fontFamily: f.infoFont },
+    };
+  }, [profileLanguage]);
   const socialStripJustifyContent =
     socialStripItems.length <= 2 ? ('center' as const) : isAvatarRight ? ('flex-start' as const) : ('flex-end' as const);
 
@@ -71,7 +81,7 @@ function FrameStaticLayoutInner(props: FrameStaticLayoutProps) {
           <Text
             style={[
               framePostStyles.userName,
-              getFontForLang(userLanguage, true),
+              nameTypography,
               { fontSize: nameSize, lineHeight: Math.round(nameSize * 1.2) },
             ]}
           >
@@ -82,7 +92,7 @@ function FrameStaticLayoutInner(props: FrameStaticLayoutProps) {
               key={`d-${idx}-${line.slice(0, 32)}`}
               style={[
                 framePostStyles.userDesignation,
-                getFontForLang(userLanguage, false),
+                infoTypography,
                 idx > 0 ? framePostStyles.userDesignationStacked : null,
                 { fontSize: designationSize, lineHeight: Math.round(designationSize * 1.2) },
               ]}
@@ -99,7 +109,11 @@ function FrameStaticLayoutInner(props: FrameStaticLayoutProps) {
             <View key={it.key} style={framePostStyles.framePartySocialItem}>
               <Ionicons name={it.icon as never} size={contentSize} color={partySocialStripPalette.fg} />
               <Text
-                style={[framePostStyles.framePartySocialText, { color: partySocialStripPalette.fg, fontSize: contentSize }]}
+                style={[
+                  framePostStyles.framePartySocialText,
+                  infoTypography,
+                  { color: partySocialStripPalette.fg, fontSize: contentSize },
+                ]}
                 numberOfLines={1}
               >
                 {it.value}

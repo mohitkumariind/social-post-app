@@ -1,3 +1,4 @@
+import { useFonts } from 'expo-font';
 import { Stack, useRouter } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
@@ -10,6 +11,7 @@ import { I18nextProvider } from 'react-i18next';
 import { LanguageProvider } from '../context/LanguageContext';
 import { UserProvider, useUser } from '../context/UserContext';
 import { cleanupDailyContentCache } from '../lib/mediaCache';
+import { FRAME_FONT_ASSETS } from '../lib/frameFonts';
 import {
   ANDROID_NOTIFICATION_CHANNEL_ID,
   recordBroadcastOpenFromNotificationResponse,
@@ -279,7 +281,7 @@ class RootErrorBoundary extends React.Component<{ children: React.ReactNode }, R
   }
 }
 
-export default function RootLayout() {
+function RootLayoutBody() {
   const [showCustomLoader, setShowCustomLoader] = useState(true);
   const [dots, setDots] = useState(1);
   const opacity = useRef(new Animated.Value(0)).current;
@@ -288,7 +290,6 @@ export default function RootLayout() {
   const updateCheckInFlightRef = useRef(false);
 
   useEffect(() => {
-    // OTA audit logs (shows if the installed build is checking the right channel and why updates may not apply).
     // These logs are safe in production and do not change UI.
     void (async () => {
       try {
@@ -439,6 +440,25 @@ export default function RootLayout() {
       ) : null}
     </GestureHandlerRootView>
   );
+}
+
+export default function RootLayout() {
+  const [fontsLoaded, fontError] = useFonts(FRAME_FONT_ASSETS);
+  const fontsReady = fontsLoaded || fontError != null;
+
+  useEffect(() => {
+    if (fontError && __DEV__) console.warn('[fonts] Frame font load error:', fontError);
+  }, [fontError]);
+
+  if (!fontsReady) {
+    return (
+      <GestureHandlerRootView style={styles.root}>
+        <View style={{ flex: 1, backgroundColor: '#FFFFFF' }} />
+      </GestureHandlerRootView>
+    );
+  }
+
+  return <RootLayoutBody />;
 }
 
 const styles = StyleSheet.create({

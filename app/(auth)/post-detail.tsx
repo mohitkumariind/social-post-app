@@ -757,7 +757,7 @@ export default function PostDetailScreen() {
                       overlayPngUrl={overlayUrl}
                       displayName={displayName}
                       filledDesignations={filledDesignations}
-                      userLanguage={userInfo?.language}
+                      profileLanguage={userInfo?.language}
                       partyName={userInfo?.partyName}
                       userForSocial={userInfo}
                       avatarUrl={avatarUrl}

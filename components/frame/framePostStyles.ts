@@ -67,8 +67,6 @@ export const framePostStyles = StyleSheet.create({
   },
   framePartySocialText: {
     marginLeft: 3,
-    fontFamily: 'Poppins-Bold',
-    fontWeight: '700',
     flexShrink: 1,
   },
   userPhotoActual: {
@@ -97,7 +95,6 @@ export const framePostStyles = StyleSheet.create({
   avatarDockLeft: { left: 0, right: null as unknown as number, alignItems: 'flex-start' },
   userName: {
     fontSize: 16,
-    fontWeight: '700',
     color: '#0F172A',
     textAlign: 'center',
     marginBottom: 0,
@@ -107,7 +104,6 @@ export const framePostStyles = StyleSheet.create({
   userDesignation: {
     fontSize: 13,
     color: '#64748B',
-    fontWeight: '600',
     textAlign: 'center',
     marginVertical: 0,
     paddingVertical: 0,

@@ -3,7 +3,7 @@ import React, { createContext, ReactNode, useContext, useState } from 'react';
 export interface UserInfo {
   /** Supabase auth user id (`profiles.id`) */
   profile_id: string;
-  /** Selected app language (mirrors `profiles.language`, and LanguageContext). */
+  /** Profile content language (`profiles.language`). Drives typography on posters/frames; app chrome may follow LanguageContext separately. */
   language: string;
   name: string;
   phone: string;
