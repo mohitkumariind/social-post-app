@@ -103,26 +103,32 @@ export async function GET() {
 
   const runPostsCount = async () => {
     const nowIso = new Date().toISOString();
-    const base = db
-      .from('posts')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'published')
-      .is('deleted_at', null)
-      .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`);
-    const r = adminRole
-      ? (base as any)
-      : ((await buildScopedAnalyticsQuery(scopedUser, base as any, 'posts', {
-          effective_group_ids: cmAnalyticsCtx.effective_group_ids,
-        })) as any);
-    if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
-      const fallback = db.from('posts').select('id', { count: 'exact', head: true });
-      return adminRole
-        ? (fallback as any)
-        : ((await buildScopedAnalyticsQuery(scopedUser, fallback as any, 'posts', {
-            effective_group_ids: cmAnalyticsCtx.effective_group_ids,
-          })) as any);
+    const withPostsScope = (q: any) =>
+      adminRole ? q : buildScopedAnalyticsQuery(scopedUser, q as any, 'posts', { effective_group_ids: cmAnalyticsCtx.effective_group_ids });
+
+    /** Try progressively simpler filters so legacy schemas (missing status/deleted_at/scheduled_at) still return a number. */
+    const builders = [
+      () =>
+        db.from('posts').select('id', { count: 'exact', head: true }).eq('status', 'published').is('deleted_at', null),
+      () =>
+        db
+          .from('posts')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'published')
+          .is('deleted_at', null)
+          .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`),
+      () => db.from('posts').select('id', { count: 'exact', head: true }).eq('status', 'published'),
+      () => db.from('posts').select('id', { count: 'exact', head: true }).is('deleted_at', null),
+      () => db.from('posts').select('id', { count: 'exact', head: true }),
+    ];
+
+    let last: { count: number | null; error: unknown } = { count: null, error: null };
+    for (const build of builders) {
+      const res = (await withPostsScope(build())) as { count: number | null; error: unknown };
+      last = res;
+      if (!res.error && typeof res.count === 'number') return res;
     }
-    return r as any;
+    return last;
   };
 
   const runEventsCount = () => {
