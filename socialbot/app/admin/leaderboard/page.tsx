@@ -172,10 +172,6 @@ export default function LeaderboardManagementPage() {
       <div className="mx-auto max-w-7xl space-y-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-white">Leaderboard Management</h1>
-          <p className="mt-1 text-sm text-zinc-400">
-            Operational view — points from <code className="text-zinc-300">post_downloads</code> (1 row = 1 point). Filters
-            are enforced server-side.
-          </p>
         </div>
 
         <div className="sticky top-0 z-10 space-y-3 border-b border-zinc-800 bg-zinc-950/95 pb-4 pt-1 backdrop-blur">
