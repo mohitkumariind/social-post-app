@@ -65,6 +65,7 @@ type PostRow = {
   image_url: string;
   category: string;
   event_date?: string;
+  download_count?: number | null;
   // Strict numeric-ID targeting arrays
   state_id?: number[] | number | null;
   loksabha_id?: number[] | number | null;
@@ -554,7 +555,7 @@ export default function DashboardScreen() {
       }
       map.get(catId)!.images.push({
         url: p.image_url,
-        shares: '0',
+        shares: String(p.download_count ?? 0),
         captions: postCaptionsForNavigation(p.captions),
         postId: p.id,
       });

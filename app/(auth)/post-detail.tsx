@@ -27,6 +27,11 @@ import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { useFrameCutout } from '../../hooks/useFrameCutout';
 import { getProfessionalFileName } from '../../lib/professionalFileName';
+import {
+  hashRenderedPostVariant,
+  incrementPostDownloadEngagement,
+  type PostDownloadAction,
+} from '../../lib/postDownloadEngagement';
 import { supabase } from '../../lib/supabase';
 import { resolveUserFrameOverlayUrl } from '../../lib/userFrameUrl';
 
@@ -333,6 +338,25 @@ export default function PostDetailScreen() {
     safeSelectedFrame >= 3 && safeSelectedFrame - 3 < frames.length ? frames[safeSelectedFrame - 3] : null;
   const overlayUrl = overlayRow ? resolveUserFrameOverlayUrl(overlayRow) : null;
 
+  const firePostDownloadEngagement = useCallback(
+    async (action: PostDownloadAction) => {
+      const postId = routeParamStr((params as any)?.postId);
+      if (!postId) return;
+      const n = originalData.length;
+      const slideIdx = n > 0 ? ((activeIndex % n) + n) % n : 0;
+      const imageUrl = originalData[slideIdx] ?? '';
+      const hash = await hashRenderedPostVariant({
+        postId,
+        selectedFrame: safeSelectedFrame,
+        overlayUrl: String(overlayUrl ?? ''),
+        frameLayoutVariant,
+        imageUrl,
+      });
+      await incrementPostDownloadEngagement({ postId, action, renderedVariantHash: hash });
+    },
+    [params, activeIndex, originalData, safeSelectedFrame, overlayUrl, frameLayoutVariant]
+  );
+
   const alertSafe = (title: string | undefined | null, message: string | undefined | null) => {
     const tt = String(title ?? '').trim();
     const mm = String(message ?? '').trim();
@@ -473,6 +497,7 @@ export default function PostDetailScreen() {
       }
 
       await MediaLibrary.saveToLibraryAsync(uriToSave);
+      void firePostDownloadEngagement('save');
       alertSafe(t('save_success_title') || 'Saved', t('save_success_message') || 'Saved to gallery.');
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error ?? '');
@@ -499,8 +524,9 @@ export default function PostDetailScreen() {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(named.uri, { dialogTitle: named.filename, mimeType: 'image/jpeg' });
       } else {
-        Share.share({ message: t('share_message') });
+        await Share.share({ message: t('share_message') });
       }
+      void firePostDownloadEngagement('whatsapp_share');
     } catch (e) {
       if (__DEV__) console.warn('share failed', e);
       const msg = e instanceof Error ? e.message : String(e ?? '');
