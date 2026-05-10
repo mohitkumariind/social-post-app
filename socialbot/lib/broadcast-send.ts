@@ -32,11 +32,24 @@ export type BroadcastPayload = {
   filters?: BroadcastFilters;
   filter_labels?: BroadcastFilterLabels;
   /**
-   * When non-empty, send only to these profile (auth user) ids after server-side RBAC filtering.
+   * When set, send only to these profile (auth user) ids after server-side RBAC filtering.
    * Skips geographic `filters` expansion (still subject to `/api/notifications/send` scope checks).
    */
   target_user_ids?: string[] | null;
+  /** Optional `public.events.id` stored on `notification_broadcasts` for campaign analytics. */
+  event_id?: string | null;
 };
+
+/** Optional campaign/event linkage (validated UUID or null). */
+function optionalEventIdFromPayload(payload: BroadcastPayload): string | null {
+  const raw = payload.event_id;
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (s.length === 0) return null;
+  const EVENT_ID_UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return EVENT_ID_UUID_RE.test(s) ? s : null;
+}
 
 export type BroadcastRunOptions = {
   /**
@@ -217,6 +230,8 @@ export async function runBroadcast(
     explicit_recipient_count: explicitTargets.length > 0 ? explicitTargets.length : null,
   };
 
+  const eventIdForBroadcast = optionalEventIdFromPayload(payload);
+
   const existingBroadcastId = String(options.existing_broadcast_id ?? '').trim();
   const scheduledNotificationId = String(options.scheduled_notification_id ?? '').trim();
   let broadcastId = existingBroadcastId;
@@ -228,6 +243,7 @@ export async function runBroadcast(
         body,
         image_url: imageUrl,
         filters: filtersStored,
+        event_id: eventIdForBroadcast,
         target_user_count: baseProfileIds.length,
         sent_count: 0,
         delivered_count: 0,
@@ -245,6 +261,7 @@ export async function runBroadcast(
           body,
           image_url: imageUrl,
           filters: filtersStored,
+          event_id: eventIdForBroadcast,
           target_user_count: baseProfileIds.length,
           sent_count: 0,
           delivered_count: 0,

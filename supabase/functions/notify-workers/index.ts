@@ -40,7 +40,18 @@ type RequestBody = {
   all_workers?: boolean;
   filters?: Filters;
   filter_labels?: FilterLabels;
+  /** Optional `public.events.id` for `notification_broadcasts.event_id`. */
+  event_id?: string | null;
 };
+
+function parseOptionalEventId(body: RequestBody): string | null {
+  const raw = body.event_id;
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const re = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return re.test(s) ? s : null;
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -241,6 +252,8 @@ Deno.serve(async (req) => {
       labels: payload.filter_labels ?? {},
     };
 
+    const eventIdForBroadcast = parseOptionalEventId(payload);
+
     const { data: bcIns, error: bcErr } = await admin
       .from('notification_broadcasts')
       .insert({
@@ -248,6 +261,7 @@ Deno.serve(async (req) => {
         body,
         image_url: imageUrl,
         filters: filtersStored,
+        event_id: eventIdForBroadcast,
         target_user_count: profileIds.length,
         sent_count: 0,
         delivered_count: 0,

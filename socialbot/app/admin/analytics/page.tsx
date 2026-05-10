@@ -316,6 +316,7 @@ export default function AdminAnalyticsPage() {
           title,
           body,
           target_user_ids: Array.from(selectedIds),
+          ...(selectedEventId ? { event_id: selectedEventId } : {}),
         }),
       });
       const d = (await res.json().catch(() => ({}))) as { error?: string; ok?: boolean; target_user_count?: number };
