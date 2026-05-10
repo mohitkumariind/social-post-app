@@ -39,6 +39,32 @@ function isMissingColumnErr(err: { message?: string } | null | undefined, column
   return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column') || msg.includes('schema cache'));
 }
 
+/** PostgREST rejects the whole projection if any listed column is missing. */
+function stripColumnFromSelect(selectList: string, column: string): string {
+  const col = column.trim().toLowerCase();
+  const t = selectList.trim();
+  if (t === '*') return '*';
+  const parts = t.split(',').map((s) => s.trim()).filter(Boolean);
+  const filtered = parts.filter((p) => p.split(/\s+/)[0]!.toLowerCase() !== col);
+  return filtered.length ? filtered.join(', ') : 'id';
+}
+
+type ServiceDb = NonNullable<ReturnType<typeof createServiceRoleClient>>;
+
+async function selectEventByIdMaybe(db: ServiceDb, id: string, selectList: string) {
+  let { data, error } = await db.from('events').select(selectList).eq('id', id).maybeSingle();
+  if (error && isMissingColumnErr(error, 'created_by')) {
+    const legacy = stripColumnFromSelect(selectList, 'created_by');
+    ({ data, error } = await db.from('events').select(legacy).eq('id', id).maybeSingle());
+  }
+  return { data, error };
+}
+
+function hasStoredCreatedBy(row: unknown): boolean {
+  const v = (row as any)?.created_by;
+  return v != null && String(v).trim() !== '';
+}
+
 function parseMissingColumnName(err: { message?: string } | null | undefined): string | null {
   const msg = String(err?.message ?? '');
   // Supabase PostgREST schema cache error commonly looks like:
@@ -353,11 +379,11 @@ export async function PATCH(request: NextRequest) {
   if (cmErr) return cmErr;
 
   // Pre-read minimal resource for write guard
-  const { data: evForGuard, error: evForGuardErr } = await admin
-    .from('events')
-    .select('id, created_by, state_id, target_groups, name')
-    .eq('id', id)
-    .maybeSingle();
+  const { data: evForGuard, error: evForGuardErr } = await selectEventByIdMaybe(
+    admin,
+    id,
+    'id, created_by, state_id, target_groups, name'
+  );
   if (evForGuardErr) return json({ error: evForGuardErr.message }, 500);
   {
     const decision = canPerformMutation(
@@ -375,27 +401,23 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (isModerator(auth)) {
-    const { data: ev, error: evErr } = await admin
-      .from('events')
-      .select('id,state_id,target_groups,created_by')
-      .eq('id', id)
-      .maybeSingle();
-    if (evErr) return json({ error: evErr.message }, 500);
     try {
-      requireOwnership((ev as any)?.created_by, auth.user.id);
-      requireScopeState((ev as any)?.state_id, auth.assigned_state_ids, 'subset');
+      if (hasStoredCreatedBy(evForGuard)) {
+        requireOwnership((evForGuard as any)?.created_by, auth.user.id);
+      }
+      requireScopeState((evForGuard as any)?.state_id, auth.assigned_state_ids, 'subset');
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
     }
-    const existingStateIds = toNumArray((ev as any)?.state_id);
+    const existingStateIds = toNumArray((evForGuard as any)?.state_id);
     const nextStateIds = patch.state_id != null ? toNumArray(patch.state_id) : existingStateIds;
     try {
       requireScopeState(nextStateIds, auth.assigned_state_ids, 'subset');
     } catch {
       return json({ error: 'Forbidden: cannot set states outside assignment' }, 403);
     }
-    const nextTargetGroups = patch.target_groups != null ? (Array.isArray(patch.target_groups) ? patch.target_groups : []) : ((ev as any)?.target_groups ?? []);
+    const nextTargetGroups = patch.target_groups != null ? (Array.isArray(patch.target_groups) ? patch.target_groups : []) : ((evForGuard as any)?.target_groups ?? []);
     if (Array.isArray(nextTargetGroups) && nextTargetGroups.length > 0) return json({ error: 'Forbidden: moderators cannot use target_groups events' }, 403);
 
     // Never allow moderators to change ownership.
@@ -403,10 +425,10 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (isCampaignManager(auth)) {
-    const { data: ev, error: evErr } = await admin.from('events').select('id,created_by').eq('id', id).maybeSingle();
-    if (evErr) return json({ error: evErr.message }, 500);
     try {
-      requireOwnership((ev as any)?.created_by, auth.user.id);
+      if (hasStoredCreatedBy(evForGuard)) {
+        requireOwnership((evForGuard as any)?.created_by, auth.user.id);
+      }
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
@@ -536,11 +558,11 @@ export async function DELETE(request: NextRequest) {
   const { error: cmErr, ids: cmEff } = await resolveCmEffectiveGroupsOrError(admin, auth);
   if (cmErr) return cmErr;
 
-  const { data: evForGuard, error: evForGuardErr } = await admin
-    .from('events')
-    .select('id, created_by, state_id, target_groups, name')
-    .eq('id', id)
-    .maybeSingle();
+  const { data: evForGuard, error: evForGuardErr } = await selectEventByIdMaybe(
+    admin,
+    id,
+    'id, created_by, state_id, target_groups, name'
+  );
   if (evForGuardErr) return json({ error: evForGuardErr.message }, 500);
   {
     const decision = canPerformMutation(
@@ -558,11 +580,11 @@ export async function DELETE(request: NextRequest) {
   }
 
   if (isModerator(auth)) {
-    const { data: ev, error: evErr } = await admin.from('events').select('id,state_id,created_by').eq('id', id).maybeSingle();
-    if (evErr) return json({ error: evErr.message }, 500);
     try {
-      requireOwnership((ev as any)?.created_by, auth.user.id);
-      requireScopeState((ev as any)?.state_id, auth.assigned_state_ids, 'subset');
+      if (hasStoredCreatedBy(evForGuard)) {
+        requireOwnership((evForGuard as any)?.created_by, auth.user.id);
+      }
+      requireScopeState((evForGuard as any)?.state_id, auth.assigned_state_ids, 'subset');
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
@@ -570,10 +592,10 @@ export async function DELETE(request: NextRequest) {
   }
 
   if (isCampaignManager(auth)) {
-    const { data: ev, error: evErr } = await admin.from('events').select('id,created_by').eq('id', id).maybeSingle();
-    if (evErr) return json({ error: evErr.message }, 500);
     try {
-      requireOwnership((ev as any)?.created_by, auth.user.id);
+      if (hasStoredCreatedBy(evForGuard)) {
+        requireOwnership((evForGuard as any)?.created_by, auth.user.id);
+      }
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
