@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Image as ExpoImage } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
@@ -20,331 +19,18 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ViewShot from "react-native-view-shot";
+import { CachedFrameMedia } from '../../components/frame/CachedFrameMedia';
+import { FrameEngine } from '../../components/frame/FrameEngine';
+import { FrameSelector } from '../../components/frame/FrameSelector';
 import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
-import { downloadMediaToCache } from '../../lib/mediaCache';
+import { useFrameCutout } from '../../hooks/useFrameCutout';
 import { getProfessionalFileName } from '../../lib/professionalFileName';
-import { supabase, supabaseAnonKey, supabaseUrl } from '../../lib/supabase';
+import { supabase } from '../../lib/supabase';
+import { resolveUserFrameOverlayUrl } from '../../lib/userFrameUrl';
 
 const FRAME_STATIC_COLOR = Colors.primary;
-
-/** Minimum height for the off-white name / designation band. */
-const FRAME_TEXT_BAND_MIN_HEIGHT = 55;
-
-type PartySocialStripPalette = { bg: string; fg: string };
-
-/** Party-colored bottom strip + contrasting label/icon color. */
-function getFramePartyStripPalette(partyName: unknown): PartySocialStripPalette {
-  const p = String(partyName ?? '').toLowerCase();
-  if (p.includes('bjp')) return { bg: '#FF9933', fg: '#1E293B' };
-  if (p.includes('congress')) return { bg: '#00A03E', fg: '#FFFFFF' };
-  if (p.includes('aap') || p.includes('aam aadmi')) return { bg: '#003399', fg: '#FFFFFF' };
-  if (p.includes('akali')) return { bg: '#FFCC00', fg: '#1E293B' };
-  return { bg: '#1E293B', fg: '#FFFFFF' };
-}
-
-type FrameSocialStripItem = { key: string; icon: string; value: string };
-
-function buildFrameSocialStripItems(u: { whatsapp?: string; facebook?: string; twitter?: string; instagram?: string } | null | undefined): FrameSocialStripItem[] {
-  if (!u) return [];
-  const out: FrameSocialStripItem[] = [];
-  const wa = String(u.whatsapp ?? '').trim();
-  if (wa) out.push({ key: 'wa', icon: 'logo-whatsapp', value: wa });
-  const fb = String(u.facebook ?? '').trim();
-  if (fb) out.push({ key: 'fb', icon: 'logo-facebook', value: fb });
-  const tw = String(u.twitter ?? '').trim();
-  if (tw) out.push({ key: 'tw', icon: 'logo-twitter', value: tw });
-  const ig = String(u.instagram ?? '').trim();
-  if (ig) out.push({ key: 'ig', icon: 'logo-instagram', value: ig });
-  return out;
-}
-
-const getFontForLang = (lang: string | undefined, isName: boolean) => {
-  const language = lang || 'en';
-  switch (language) {
-    case 'hi':
-    case 'en':
-      return { fontFamily: isName ? 'Poppins-ExtraBold' : 'Poppins-Bold', fontWeight: (isName ? '800' : '700') as const };
-    case 'pa':
-      return {
-        fontFamily: isName ? 'NotoSansGurmukhi-ExtraBold' : 'NotoSansGurmukhi-Bold',
-        fontWeight: (isName ? '800' : '700') as const,
-      };
-    case 'gu':
-      return {
-        fontFamily: isName ? 'NotoSansGujarati-ExtraBold' : 'NotoSansGujarati-Bold',
-        fontWeight: (isName ? '800' : '700') as const,
-      };
-    case 'mr':
-      return { fontFamily: isName ? 'GoogleSans-Bold' : 'GoogleSans-SemiBold', fontWeight: '700' as const };
-    default:
-      return { fontFamily: isName ? 'Poppins-ExtraBold' : 'Poppins-Bold', fontWeight: (isName ? '800' : '700') as const };
-  }
-};
-
-/** Supabase Storage — same bucket as post graphics / avatars */
-const POST_IMAGES_BUCKET = 'post-images';
-/** PixelBin Predictions API — `erase_bg` → path segment `erase/bg` (see @pixelbin/admin Predictions.js). */
-const PIXELBIN_API_ORIGIN = 'https://api.pixelbin.io';
-const PIXELBIN_PREDICTIONS_ERASE_BG = `${PIXELBIN_API_ORIGIN}/service/platform/transformation/v1.0/predictions/erase/bg`;
-/** PixelBin API token (client-side: easy to extract; prefer a backend proxy for production). */
-const PIXELBIN_TOKEN = 'ec264319-6e12-41b2-8079-e85a763f2026';
-
-const CUTOUT_LOG = '[PostDetail][Cutout]';
-
-function getTransparentCutoutObjectPath(userId: string): string {
-  return `transparent-avatars/${userId}.png`;
-}
-
-async function postImagesObjectExists(objectPath: string): Promise<boolean> {
-  console.log(CUTOUT_LOG, 'Checking Supabase cache for object:', objectPath);
-  const folder = objectPath.includes('/') ? objectPath.slice(0, objectPath.lastIndexOf('/')) : '';
-  const fileName = objectPath.includes('/') ? objectPath.slice(objectPath.lastIndexOf('/') + 1) : objectPath;
-  const searchPrefix = fileName.replace(/\.png$/i, '') || fileName;
-  const { data, error } = await supabase.storage.from(POST_IMAGES_BUCKET).list(folder, {
-    limit: 100,
-    search: searchPrefix,
-  });
-  if (error) {
-    console.log(CUTOUT_LOG, 'Cache list error (treating as miss):', error.message);
-    return false;
-  }
-  const hit = (data ?? []).some((f) => f.name === fileName);
-  console.log(CUTOUT_LOG, hit ? 'Cached cutout file FOUND' : 'Cached cutout file NOT found', {
-    folder,
-    fileName,
-    listed: (data ?? []).length,
-  });
-  return hit;
-}
-
-async function uploadCutoutPngViaRest(localUri: string, objectPath: string, accessToken: string): Promise<void> {
-  const uploadUrl = `${supabaseUrl}/storage/v1/object/${POST_IMAGES_BUCKET}/${objectPath}`;
-  const result = await FileSystem.uploadAsync(uploadUrl, localUri, {
-    httpMethod: 'PUT',
-    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-    headers: {
-      apikey: supabaseAnonKey,
-      Authorization: `Bearer ${accessToken}`,
-      'x-upsert': 'true',
-      'Content-Type': 'image/png',
-      Accept: 'application/json',
-    },
-  });
-  if (result.status < 200 || result.status >= 300) {
-    const body = typeof result.body === 'string' ? result.body : '';
-    throw new Error(`Cutout storage upload failed (${result.status})${body ? `: ${body.slice(0, 400)}` : ''}`);
-  }
-}
-
-async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
-  if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer();
-  return new Response(blob).arrayBuffer();
-}
-
-function uint8ToBase64(u8: Uint8Array): string {
-  if (typeof globalThis.btoa !== 'function') {
-    throw new Error('btoa is not available for cutout temp file encoding');
-  }
-  let binary = '';
-  for (let i = 0; i < u8.length; i++) {
-    binary += String.fromCharCode(u8[i]!);
-  }
-  return globalThis.btoa(binary);
-}
-
-/**
- * Writes cutout PNG locally, uploads to Supabase; on any upload failure returns local `file://` URI
- * so the frame can show the removed background immediately.
- */
-async function persistCutoutAfterPixelBin(
-  userId: string,
-  pngBlob: Blob
-): Promise<{ kind: 'remote'; publicUrl: string } | { kind: 'local'; localUri: string }> {
-  const objectPath = getTransparentCutoutObjectPath(userId);
-  const cacheDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? null;
-  if (!cacheDir) throw new Error('No cache directory for cutout upload');
-
-  const localPngUri = `${cacheDir}transparent-cutout-${userId}-${Date.now()}.png`;
-  const ab = await blobToArrayBuffer(pngBlob);
-  const u8 = new Uint8Array(ab);
-  await FileSystem.writeAsStringAsync(localPngUri, uint8ToBase64(u8), {
-    encoding: FileSystem.EncodingType.Base64,
-  });
-  console.log(CUTOUT_LOG, 'Wrote PixelBin PNG to temp file', localPngUri, 'bytes', u8.byteLength);
-
-  try {
-    console.log(CUTOUT_LOG, 'Supabase upload starting (js client)', objectPath);
-    const { error } = await supabase.storage.from(POST_IMAGES_BUCKET).upload(objectPath, u8, {
-      upsert: true,
-      contentType: 'image/png',
-    });
-    if (error) {
-      console.log(CUTOUT_LOG, 'Supabase storage.upload error:', error.message, error);
-      throw error;
-    }
-    console.log(CUTOUT_LOG, 'Supabase storage.upload OK', objectPath);
-  } catch (e1) {
-    console.log(CUTOUT_LOG, 'Supabase js upload failed; trying REST PUT fallback', e1);
-    try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
-      if (!accessToken) {
-        console.log(CUTOUT_LOG, 'No session access_token; cannot REST upload — using local cutout URI');
-        return { kind: 'local', localUri: localPngUri };
-      }
-      await uploadCutoutPngViaRest(localPngUri, objectPath, accessToken);
-      console.log(CUTOUT_LOG, 'Supabase REST upload OK', objectPath);
-    } catch (e2) {
-      console.log(CUTOUT_LOG, 'Supabase upload failed completely — using local cutout URI on frame', e2);
-      return { kind: 'local', localUri: localPngUri };
-    }
-  }
-
-  try {
-    await FileSystem.deleteAsync(localPngUri, { idempotent: true });
-    console.log(CUTOUT_LOG, 'Removed temp cutout file after successful upload');
-  } catch {
-    /* ignore */
-  }
-
-  const { data } = supabase.storage.from(POST_IMAGES_BUCKET).getPublicUrl(objectPath);
-  console.log(CUTOUT_LOG, 'Remote cutout public URL ready');
-  return { kind: 'remote', publicUrl: data.publicUrl };
-}
-
-function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * PixelBin erase_bg via official Predictions API (multipart + poll + download output).
- * Auth matches Pixelbin JS SDK: Authorization: Bearer base64(apiSecret) for ASCII secrets.
- */
-async function fetchTransparentCutoutFromPixelBin(sourceImageUri: string, sourceNameForMime: string): Promise<Blob> {
-  if (typeof globalThis.btoa !== 'function') {
-    throw new Error('btoa is not available for PixelBin auth');
-  }
-  const encodedToken = globalThis.btoa(String(PIXELBIN_TOKEN).trim());
-  const authHeaders = { Authorization: `Bearer ${encodedToken}` };
-
-  console.log(CUTOUT_LOG, 'PixelBin Predictions create starting', PIXELBIN_PREDICTIONS_ERASE_BG, {
-    tokenLen: PIXELBIN_TOKEN.length,
-    b64AuthLen: encodedToken.length,
-  });
-
-  const ext = sourceNameForMime.split('.').pop()?.toLowerCase() ?? '';
-  const mime =
-    ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/jpeg';
-
-  const form = new FormData();
-  form.append('input.image', { uri: sourceImageUri, name: `source.${ext || 'jpg'}`, type: mime } as any);
-  form.append('input.industry_type', 'human');
-  form.append('input.quality_type', 'original');
-  form.append('input.refine', 'true');
-  form.append('input.shadow', 'false');
-
-  const controller = new AbortController();
-  const timeoutMs = 240000;
-  const to = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(PIXELBIN_PREDICTIONS_ERASE_BG, {
-      method: 'POST',
-      headers: authHeaders,
-      body: form,
-      signal: controller.signal,
-    });
-
-    console.log(CUTOUT_LOG, 'PixelBin create HTTP', {
-      ok: res.ok,
-      status: res.status,
-      statusText: res.statusText,
-    });
-
-    const createText = await res.text().catch(() => '');
-    if (!res.ok) {
-      console.log(CUTOUT_LOG, 'PixelBin create error body (truncated):', createText.slice(0, 500));
-      throw new Error(`PixelBin create failed (${res.status}): ${createText.slice(0, 300)}`);
-    }
-
-    let createJson: { _id?: string; id?: string; status?: string };
-    try {
-      createJson = JSON.parse(createText) as { _id?: string; id?: string; status?: string };
-    } catch {
-      console.log(CUTOUT_LOG, 'PixelBin create non-JSON body (truncated):', createText.slice(0, 300));
-      throw new Error('PixelBin create: expected JSON job response');
-    }
-
-    const jobId = createJson._id ?? createJson.id;
-    console.log(CUTOUT_LOG, 'PixelBin job created', { jobId: jobId ?? null, initialStatus: createJson.status ?? null });
-    if (!jobId || typeof jobId !== 'string') {
-      throw new Error(`PixelBin create: missing job id: ${createText.slice(0, 400)}`);
-    }
-
-    const statusPath = `/service/platform/transformation/v1.0/predictions/${encodeURIComponent(jobId)}`;
-    const statusUrl = `${PIXELBIN_API_ORIGIN}${statusPath}`;
-
-    for (let attempt = 1; attempt <= 90; attempt++) {
-      await sleepMs(2000);
-      const stRes = await fetch(statusUrl, { headers: authHeaders, signal: controller.signal });
-      const stText = await stRes.text().catch(() => '');
-      let detail: {
-        status?: string;
-        output?: string[];
-        message?: string;
-        error?: unknown;
-      } = {};
-      try {
-        detail = JSON.parse(stText) as typeof detail;
-      } catch {
-        console.log(CUTOUT_LOG, 'PixelBin poll non-JSON (truncated):', stText.slice(0, 200));
-      }
-
-      console.log(CUTOUT_LOG, `PixelBin poll ${attempt}/90`, {
-        httpOk: stRes.ok,
-        jobStatus: detail.status ?? null,
-      });
-
-      if (!stRes.ok) {
-        throw new Error(`PixelBin poll failed (${stRes.status}): ${stText.slice(0, 250)}`);
-      }
-
-      if (detail.status === 'SUCCESS') {
-        const outUrl = Array.isArray(detail.output) ? detail.output[0] : undefined;
-        if (!outUrl || typeof outUrl !== 'string') {
-          throw new Error(`PixelBin SUCCESS but no output URL: ${stText.slice(0, 400)}`);
-        }
-        console.log(CUTOUT_LOG, 'PixelBin fetching result PNG', outUrl.slice(0, 80) + '…');
-        const imgRes = await fetch(outUrl, { signal: controller.signal });
-        if (!imgRes.ok) {
-          const t = await imgRes.text().catch(() => '');
-          throw new Error(`PixelBin output fetch failed (${imgRes.status}): ${t.slice(0, 200)}`);
-        }
-        const blob = await imgRes.blob();
-        console.log(CUTOUT_LOG, 'PixelBin OK; PNG blob', { size: blob?.size, type: blob?.type });
-        return blob;
-      }
-
-      if (detail.status === 'FAILURE') {
-        console.log(CUTOUT_LOG, 'PixelBin job FAILURE body (truncated):', stText.slice(0, 500));
-        throw new Error(`PixelBin prediction failed: ${detail.message ?? stText.slice(0, 300)}`);
-      }
-    }
-
-    throw new Error('PixelBin prediction timed out (still pending after 90 polls)');
-  } catch (err) {
-    console.log(CUTOUT_LOG, 'PixelBin pipeline threw:', err);
-    throw err;
-  } finally {
-    clearTimeout(to);
-  }
-}
-
-/** Solid skeleton while graphics / frame URLs resolve (no blurhash placeholder). */
-const IMAGE_SKELETON_BG = '#E8E8E8';
-
-type FrameAvatarSlotMode = 'loading' | 'cutout' | 'original';
 
 function routeParamStr(v: unknown): string {
   if (v == null) return '';
@@ -452,69 +138,6 @@ function parseCaptionsFromDb(raw: unknown): string[] {
   return [];
 }
 
-type MediaKind = 'daily' | 'frame';
-
-function useCachedMediaUri(opts: { kind: MediaKind; url: string | null | undefined; ext?: string }) {
-  const url = typeof opts.url === 'string' ? opts.url.trim() : '';
-  const [localUri, setLocalUri] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!url) {
-      setLocalUri(null);
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    (async () => {
-      try {
-        const uri = await downloadMediaToCache({ kind: opts.kind, url, ext: opts.ext });
-        if (!cancelled) setLocalUri(uri);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opts.kind, url, opts.ext]);
-
-  return { uri: localUri || url || null, loading };
-}
-
-function CachedMediaImage({
-  kind,
-  url,
-  style,
-  contentFit,
-}: {
-  kind: MediaKind;
-  url: string;
-  style?: any;
-  contentFit?: 'cover' | 'contain';
-}) {
-  const { uri, loading } = useCachedMediaUri({ kind, url });
-  // Frames are transparent PNG overlays; a grey skeleton behind them makes the poster look "greyed out".
-  const showSkeleton = kind !== 'frame';
-  return (
-    <View style={[style, { backgroundColor: showSkeleton ? IMAGE_SKELETON_BG : 'transparent' }]}>
-      {loading && showSkeleton ? (
-        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: IMAGE_SKELETON_BG }]} />
-      ) : null}
-      <ExpoImage
-        source={{ uri: String(uri || url) }}
-        style={StyleSheet.absoluteFillObject}
-        contentFit={contentFit ?? 'contain'}
-        cachePolicy="disk"
-      />
-    </View>
-  );
-}
-
 export default function PostDetailScreen() {
   const { width } = useWindowDimensions();
   const router = useRouter();
@@ -544,22 +167,13 @@ export default function PostDetailScreen() {
   const selectedFrameNum = Number(selectedFrame);
   const safeSelectedFrame = Number.isFinite(selectedFrameNum) && selectedFrameNum > 0 ? selectedFrameNum : 1;
 
-  // Frame variant is derived from the first two static "frame slots":
-  // 1 => Variant A (avatar right)
-  // 2 => Variant B (avatar left)
-  const isAvatarRight = safeSelectedFrame !== 2;
-  const AVATAR_SLOT = 135;
-  const TEXT_SAFE_MARGIN = 125;
+  const [frameLayoutVariant, setFrameLayoutVariant] = useState<1 | 2>(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [dynamicCaptions, setDynamicCaptions] = useState<string[]>([]);
-  /** Cached PixelBin cutout public URL; null until resolved or unavailable. */
-  const [frameCutoutUri, setFrameCutoutUri] = useState<string | null>(null);
-  /** Avoid showing original avatar while cutout pipeline runs or cutout image is decoding. */
-  const [frameAvatarSlotMode, setFrameAvatarSlotMode] = useState<FrameAvatarSlotMode>('loading');
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backNavLockRef = useRef(false);
@@ -690,10 +304,18 @@ export default function PostDetailScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  const isStaticFrame = safeSelectedFrame === 1 || safeSelectedFrame === 2;
-  // Render user's input as-is (supports regional/local languages).
   const displayName = String(userInfo?.name ?? '');
   const avatarUrl = String(userInfo?.avatar_url ?? '').trim();
+  const { frameCutoutUri, frameAvatarSlotMode, setFrameAvatarSlotMode, setFrameCutoutUri } = useFrameCutout(avatarUrl);
+
+  useEffect(() => {
+    if (safeSelectedFrame === 1 || safeSelectedFrame === 2) {
+      setFrameLayoutVariant(safeSelectedFrame as 1 | 2);
+    }
+  }, [safeSelectedFrame]);
+
+  const useFrameChromeOverflow = safeSelectedFrame === 1 || safeSelectedFrame === 2 || safeSelectedFrame >= 3;
+  const staticChromeSide = frameLayoutVariant === 2 ? ('left' as const) : ('right' as const);
 
   const filledDesignations = useMemo(() => {
     const raw = [
@@ -707,124 +329,9 @@ export default function PostDetailScreen() {
     return values.filter((s) => s.trim().length > 0);
   }, [userInfo?.designation1, userInfo?.designation2, userInfo?.designation3, userInfo?.designation4]);
 
-  const partySocialStripPalette = useMemo(
-    () => getFramePartyStripPalette(userInfo?.partyName),
-    [userInfo?.partyName]
-  );
-
-  const socialStripItems = useMemo(() => buildFrameSocialStripItems(userInfo), [
-    userInfo?.whatsapp,
-    userInfo?.facebook,
-    userInfo?.twitter,
-    userInfo?.instagram,
-  ]);
-
-  const socialStripJustifyContent = useMemo(() => {
-    const count = socialStripItems.length;
-    if (count <= 2) return 'center' as const;
-    return isAvatarRight ? ('flex-start' as const) : ('flex-end' as const);
-  }, [isAvatarRight, socialStripItems.length]);
-
-  useEffect(() => {
-    console.log('[PostDetail] selectedFrame=', safeSelectedFrame, 'isAvatarRight=', isAvatarRight);
-  }, [isAvatarRight, safeSelectedFrame]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setFrameCutoutUri(null);
-    setFrameAvatarSlotMode('loading');
-
-    (async () => {
-      try {
-        console.log(CUTOUT_LOG, 'Pipeline start (avatarUrl changed)');
-
-        const src = String(avatarUrl ?? '').trim();
-        if (!src) {
-          console.log(CUTOUT_LOG, 'Skip: no avatarUrl');
-          return;
-        }
-
-        // Match fetchFrames: auth restore can lag navigation; a single getSession miss
-        // must not lock us into `original` forever (effect only re-runs when avatarUrl changes).
-        let uid: string | undefined;
-        for (let i = 0; i < 5; i++) {
-          const { data: sess } = await supabase.auth.getSession();
-          uid = sess?.session?.user?.id;
-          if (uid) break;
-          const { data: authUser } = await supabase.auth.getUser();
-          uid = authUser?.user?.id;
-          if (uid) break;
-          await new Promise((r) => setTimeout(r, 400));
-          if (cancelled) return;
-        }
-
-        if (!uid) {
-          console.log(CUTOUT_LOG, 'Skip: missing uid after retries; fallback to original avatar on frame');
-          if (!cancelled && isMountedRef.current) setFrameAvatarSlotMode('original');
-          return;
-        }
-
-        const objectPath = getTransparentCutoutObjectPath(uid);
-        const cached = await postImagesObjectExists(objectPath);
-        if (cancelled || !isMountedRef.current) return;
-
-        if (cached) {
-          const { data } = supabase.storage.from(POST_IMAGES_BUCKET).getPublicUrl(objectPath);
-          console.log(CUTOUT_LOG, 'Using cached remote cutout URL');
-          if (!cancelled && isMountedRef.current) setFrameCutoutUri(data.publicUrl);
-          return;
-        }
-
-        console.log(CUTOUT_LOG, 'PixelBin path: downloading source avatar for erase_bg');
-
-        const cacheDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? null;
-        if (!cacheDir) throw new Error('No cache directory');
-
-        const cleanUrl = src.split('?')[0] ?? src;
-        const ext = cleanUrl.includes('.') ? (cleanUrl.split('.').pop()?.toLowerCase() ?? 'jpg') : 'jpg';
-        const safeExt = ext.length <= 5 && /^[a-z0-9]+$/i.test(ext) ? ext : 'jpg';
-        const tmpSrc = `${cacheDir}pixelbin-src-${uid}-${Date.now()}.${safeExt}`;
-
-        await FileSystem.downloadAsync(src, tmpSrc);
-        if (cancelled || !isMountedRef.current) return;
-
-        console.log(CUTOUT_LOG, 'Triggering PixelBin erase_bg API');
-        const pngBlob = await fetchTransparentCutoutFromPixelBin(tmpSrc, `source.${safeExt}`);
-        try {
-          await FileSystem.deleteAsync(tmpSrc, { idempotent: true });
-        } catch {
-          /* ignore */
-        }
-        if (cancelled || !isMountedRef.current) return;
-
-        const persisted = await persistCutoutAfterPixelBin(uid, pngBlob);
-        if (cancelled || !isMountedRef.current) return;
-
-        if (persisted.kind === 'remote') {
-          console.log(CUTOUT_LOG, 'Frame will use remote cutout URL');
-          setFrameCutoutUri(persisted.publicUrl);
-        } else {
-          console.log(CUTOUT_LOG, 'Frame will use LOCAL temp cutout (upload failed):', persisted.localUri);
-          setFrameCutoutUri(persisted.localUri);
-        }
-      } catch (e) {
-        console.log(CUTOUT_LOG, 'Pipeline failed; frame falls back to normal avatar_url', e);
-        if (!cancelled && isMountedRef.current) {
-          setFrameCutoutUri(null);
-          setFrameAvatarSlotMode('original');
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [avatarUrl]);
-
-  const overlayUrl =
-    safeSelectedFrame >= 3 && safeSelectedFrame - 3 < frames.length
-      ? (frames[safeSelectedFrame - 3]?.url || frames[safeSelectedFrame - 3]?.frame_url || null)
-      : null;
+  const overlayRow =
+    safeSelectedFrame >= 3 && safeSelectedFrame - 3 < frames.length ? frames[safeSelectedFrame - 3] : null;
+  const overlayUrl = overlayRow ? resolveUserFrameOverlayUrl(overlayRow) : null;
 
   const alertSafe = (title: string | undefined | null, message: string | undefined | null) => {
     const tt = String(title ?? '').trim();
@@ -1043,7 +550,7 @@ export default function PostDetailScreen() {
       ...frames.map((f, i) => ({
         id: i + 3,
         color: FRAME_COLORS[i + 3] ?? '#333',
-        url: (f.url || f.frame_url || '') as string,
+        url: resolveUserFrameOverlayUrl(f) || null,
       })),
     ],
     [frames]
@@ -1231,137 +738,46 @@ export default function PostDetailScreen() {
                     style={[
                       styles.mediaContainer,
                       { width: frameRenderWidth, aspectRatio: 4 / 5 },
-                      isStaticFrame && { overflow: 'visible' as const },
+                      useFrameChromeOverflow && { overflow: 'visible' as const },
                     ]}
                   >
                     <View style={styles.mediaDragWrapper}>
                       {item && typeof item === 'string' ? (
-                        <CachedMediaImage kind="daily" url={item} style={styles.fullMedia} contentFit="contain" />
+                        <CachedFrameMedia kind="daily" url={item} style={styles.fullMedia} contentFit="contain" />
                       ) : (
                         <View style={[styles.fullMedia, { backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }]}>
                           <ActivityIndicator size="small" color="#FFF" />
                         </View>
                       )}
                     </View>
-                    {isStaticFrame && (
-                      <View style={styles.frameOverlay}>
-                        <View
-                          style={[
-                            styles.frameTextBand,
-                            { minHeight: FRAME_TEXT_BAND_MIN_HEIGHT },
-                            !avatarUrl && styles.frameTextBandFullBleed,
-                          ]}
-                        >
-                          <View
-                            style={[
-                              styles.frameTextBandInner,
-                              avatarUrl
-                                ? (isAvatarRight ? { marginRight: TEXT_SAFE_MARGIN } : { marginLeft: TEXT_SAFE_MARGIN })
-                                : null,
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.userName,
-                                getFontForLang(userInfo?.language, true),
-                                { fontSize: NAME_SIZE, lineHeight: Math.round(NAME_SIZE * 1.2) },
-                              ]}
-                            >
-                              {displayName}
-                            </Text>
-                            {filledDesignations.map((line, idx) => (
-                              <Text
-                                key={`d-${idx}-${line.slice(0, 32)}`}
-                                style={[
-                                  styles.userDesignation,
-                                  getFontForLang(userInfo?.language, false),
-                                  idx > 0 ? styles.userDesignationStacked : null,
-                                  { fontSize: DESIGNATION_SIZE, lineHeight: Math.round(DESIGNATION_SIZE * 1.2) },
-                                ]}
-                              >
-                                {line}
-                              </Text>
-                            ))}
-                          </View>
-                        </View>
-
-                        <View
-                          style={[
-                            styles.framePartySocialStrip,
-                            { height: STRIP_HEIGHT, backgroundColor: partySocialStripPalette.bg },
-                          ]}
-                        >
-                          <View style={[styles.framePartySocialRow, { justifyContent: socialStripJustifyContent }]}>
-                            {socialStripItems.map((it) => (
-                              <View key={it.key} style={styles.framePartySocialItem}>
-                                <Ionicons name={it.icon as any} size={CONTENT_SIZE} color={partySocialStripPalette.fg} />
-                                <Text
-                                  style={[
-                                    styles.framePartySocialText,
-                                    { color: partySocialStripPalette.fg, fontSize: CONTENT_SIZE },
-                                  ]}
-                                  numberOfLines={1}
-                                >
-                                  {it.value}
-                                </Text>
-                              </View>
-                            ))}
-                          </View>
-                        </View>
-
-                        <View
-                          style={[
-                            styles.avatarDock,
-                            isAvatarRight ? styles.avatarDockRight : styles.avatarDockLeft,
-                            { bottom: STRIP_HEIGHT },
-                          ]}
-                        >
-                          {avatarUrl ? (
-                            <View style={styles.userPhotoActual}>
-                              {frameAvatarSlotMode === 'original' ? (
-                                <ExpoImage
-                                  source={{ uri: avatarUrl }}
-                                  style={[StyleSheet.absoluteFillObject, styles.frameAvatarImage]}
-                                  contentFit="cover"
-                                  cachePolicy="disk"
-                                  recyclingKey={avatarUrl}
-                                />
-                              ) : frameCutoutUri ? (
-                                <ExpoImage
-                                  key={frameCutoutUri}
-                                  source={{ uri: frameCutoutUri }}
-                                  style={[
-                                    StyleSheet.absoluteFillObject,
-                                    styles.frameAvatarImage,
-                                    frameAvatarSlotMode === 'loading' ? { opacity: 0 } : null,
-                                  ]}
-                                  contentFit="contain"
-                                  cachePolicy="disk"
-                                  recyclingKey={frameCutoutUri}
-                                  onLoad={() => {
-                                    if (isMountedRef.current) setFrameAvatarSlotMode('cutout');
-                                  }}
-                                  onLoadEnd={() => {
-                                    if (isMountedRef.current) setFrameAvatarSlotMode('cutout');
-                                  }}
-                                  onError={() => {
-                                    if (isMountedRef.current) {
-                                      setFrameCutoutUri(null);
-                                      setFrameAvatarSlotMode('original');
-                                    }
-                                  }}
-                                />
-                              ) : null}
-                            </View>
-                          ) : null}
-                        </View>
-                      </View>
-                    )}
-                    {overlayUrl ? (
-                      <View style={styles.frameOverlayImageWrap}>
-                        <CachedMediaImage kind="frame" url={overlayUrl} style={styles.frameOverlayImage} contentFit="contain" />
-                      </View>
-                    ) : null}
+                    <FrameEngine
+                      frameId={safeSelectedFrame}
+                      mountComposer={index === activeIndex}
+                      staticChromeSide={staticChromeSide}
+                      overlayPngUrl={overlayUrl}
+                      displayName={displayName}
+                      filledDesignations={filledDesignations}
+                      userLanguage={userInfo?.language}
+                      partyName={userInfo?.partyName}
+                      userForSocial={userInfo}
+                      avatarUrl={avatarUrl}
+                      frameCutoutUri={frameCutoutUri}
+                      frameAvatarSlotMode={frameAvatarSlotMode}
+                      onCutoutDisplayed={() => {
+                        if (isMountedRef.current) setFrameAvatarSlotMode('cutout');
+                      }}
+                      onCutoutFailed={() => {
+                        if (isMountedRef.current) {
+                          setFrameCutoutUri(null);
+                          setFrameAvatarSlotMode('original');
+                        }
+                      }}
+                      isMounted={() => isMountedRef.current}
+                      nameSize={NAME_SIZE}
+                      designationSize={DESIGNATION_SIZE}
+                      stripHeight={STRIP_HEIGHT}
+                      contentSize={CONTENT_SIZE}
+                    />
                   </View>
                 </ViewShot>
               </View>
@@ -1369,33 +785,24 @@ export default function PostDetailScreen() {
           </ScrollView>
         </View>
 
-        <Text style={styles.sectionTitle}>{t('select_frame')}</Text>
-        <View style={styles.framesGrid}>
-          {visibleFrames.map((f) => (
-            <TouchableOpacity key={f.id} onPress={() => setSelectedFrame(Number(f.id))} style={styles.frameCard}>
-              {f.id === 1 || f.id === 2 ? (
-                <View style={[styles.miniFrameUI, selectedFrame === f.id && { borderColor: Colors.accent, borderWidth: 3 }]}>
-                  <View style={styles.variantPreviewOuter}>
-                    <View style={styles.variantPreviewTextBand} />
-                    <View style={[styles.variantPreviewAvatar, f.id === 1 ? styles.variantPreviewAvatarRight : styles.variantPreviewAvatarLeft]} />
-                    <View style={styles.variantPreviewStrip} />
-                  </View>
-                </View>
-              ) : (
-                <View style={[styles.miniFrameUI, selectedFrame === f.id && { borderColor: f.color, borderWidth: 3 }, { overflow: 'hidden' }]}>
-                  {f.url ? (
-                    <CachedMediaImage
-                      kind="frame"
-                      url={String(f.url)}
-                      style={StyleSheet.absoluteFillObject}
-                      contentFit="contain"
-                    />
-                  ) : null}
-                </View>
-              )}
-            </TouchableOpacity>
-          ))}
-        </View>
+        <FrameSelector
+          items={visibleFrames}
+          selectedFrame={selectedFrame}
+          onSelectFrame={setSelectedFrame}
+          sectionTitle={t('select_frame')}
+          styles={{
+            sectionTitle: styles.sectionTitle,
+            framesGrid: styles.framesGrid,
+            frameCard: styles.frameCard,
+            miniFrameUI: styles.miniFrameUI,
+            variantPreviewOuter: styles.variantPreviewOuter,
+            variantPreviewTextBand: styles.variantPreviewTextBand,
+            variantPreviewStrip: styles.variantPreviewStrip,
+            variantPreviewAvatar: styles.variantPreviewAvatar,
+            variantPreviewAvatarRight: styles.variantPreviewAvatarRight,
+            variantPreviewAvatarLeft: styles.variantPreviewAvatarLeft,
+          }}
+        />
 
         <Text style={styles.sectionTitle}>{t('copy_caption')}</Text>
         <View style={styles.captionList}>
@@ -1448,115 +855,6 @@ const styles = StyleSheet.create({
   mediaContainer: { backgroundColor: '#000', borderRadius: 0, overflow: 'hidden', position: 'relative' },
   mediaDragWrapper: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
   fullMedia: { width: '100%', height: '100%' },
-  frameOverlayImageWrap: { position: 'absolute', bottom: 0, left: 0, right: 0, top: 0, justifyContent: 'flex-end', backgroundColor: 'transparent' },
-  frameOverlayImage: { width: '100%', aspectRatio: 4 / 5 },
-  frameOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'column',
-    justifyContent: 'flex-end',
-    alignItems: 'stretch',
-    backgroundColor: 'transparent',
-    borderTopWidth: 0,
-    overflow: 'visible',
-    padding: 0,
-    margin: 0,
-  },
-  /** Off-white name + designations; height grows with lines (minHeight from constant in JSX). */
-  frameTextBand: {
-    backgroundColor: '#FCFCFC',
-    paddingTop: 2,
-    paddingBottom: 2,
-    paddingHorizontal: 10,
-    zIndex: 0,
-    justifyContent: 'flex-end',
-  },
-  frameTextBandFullBleed: {
-    paddingHorizontal: 10,
-  },
-  frameTextBandInner: {
-    flexGrow: 1,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-  },
-  frameTextBandInnerWithAvatarRight: { marginRight: 0 },
-  frameTextBandInnerWithAvatarLeft: { marginLeft: 0 },
-  framePartySocialStrip: {
-    width: '100%',
-    zIndex: 3,
-    justifyContent: 'center',
-    alignItems: 'stretch',
-  },
-  framePartySocialRow: {
-    flex: 1,
-    flexDirection: 'row',
-    flexWrap: 'nowrap',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    width: '100%',
-    paddingHorizontal: 4,
-    paddingVertical: 0,
-  },
-  framePartySocialItem: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 2,
-  },
-  framePartySocialText: {
-    marginLeft: 3,
-    fontFamily: 'Poppins-Bold',
-    fontWeight: '700',
-    flexShrink: 1,
-  },
-  userPhotoActual: {
-    width: 135,
-    height: 135,
-    borderRadius: 0,
-    borderWidth: 0,
-    margin: 0,
-    padding: 0,
-    overflow: 'hidden',
-    backgroundColor: 'transparent',
-  },
-  frameAvatarImage: {
-    backgroundColor: 'transparent',
-  },
-  avatarDock: {
-    position: 'absolute',
-    zIndex: 4,
-    width: 135,
-    height: 135,
-    margin: 0,
-    padding: 0,
-    justifyContent: 'flex-end',
-  },
-  // Explicitly clear the opposite side when switching variants (prevents stale absolute offsets).
-  avatarDockRight: { right: 0, left: null as any, alignItems: 'flex-end' },
-  avatarDockLeft: { left: 0, right: null as any, alignItems: 'flex-start' },
-  userName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0F172A',
-    textAlign: 'center',
-    marginBottom: 0,
-    paddingBottom: 0,
-    lineHeight: 18,
-  },
-  userDesignation: {
-    fontSize: 13,
-    color: '#64748B',
-    fontWeight: '600',
-    textAlign: 'center',
-    marginVertical: 0,
-    paddingVertical: 0,
-    lineHeight: 14,
-  },
-  userDesignationStacked: { marginTop: 0 },
   sectionTitle: { fontSize: 16, fontWeight: '700', margin: 20 },
   variantPreviewOuter: { flex: 1, backgroundColor: '#F5F5F5' },
   variantPreviewTextBand: { position: 'absolute', left: 0, right: 0, bottom: 12, height: 16, backgroundColor: '#FCFCFC' },

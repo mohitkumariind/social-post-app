@@ -81,7 +81,7 @@ export async function GET(request: NextRequest) {
     db
       .from('user_frames')
       // `file_name` is optional across projects; keep response typing loose.
-      .select('id,url,created_at,file_name')
+      .select('id,url,overlay_url,created_at,file_name')
       .eq('user_id', userId)
       .order('id', { ascending: true })
       .range(offset, offset + limit - 1) as any;
