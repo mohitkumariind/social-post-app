@@ -4,10 +4,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { downloadMediaToCache } from '../../lib/mediaCache';
 import {
   ActivityIndicator,
   BackHandler,
+  FlatList,
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -19,6 +19,12 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { useBoundedDailyUrlMap } from '../../hooks/useBoundedDailyUrlMap';
+import { useDashboardRealtime } from '../../hooks/useDashboardRealtime';
+import { fetchDashboardEvents } from '../../services/eventsService';
+import { fetchDashboardPosts } from '../../services/postsService';
+import { gfxLogCapped } from '../../utils/dashboardDebug';
+import { hasUsableProfileForVisibility } from '../../utils/visibility';
 import { Colors } from '../../constants/Colors';
 import { normalizePartyId } from '../../constants/Parties';
 import { useLang } from '../../context/LanguageContext';
@@ -33,11 +39,25 @@ const EDIT_PROFILE_GATE_DELAY_MS = 30_000;
 /** Solid skeleton while graphics thumbnails load (no blurhash). */
 const IMAGE_SKELETON_BG = '#E8E8E8';
 
+const TRENDING_ITEM_STRIDE = 140 + 15;
+
 interface Category {
   id: string;
   name: string;
   images: { url: string; shares: string; captions?: string; postId?: string }[];
 }
+
+type TrendingFlatItem = {
+  url: string;
+  shares: string;
+  captions?: string;
+  postId?: string;
+  catSource: Category;
+};
+
+type CarouselFlatItem =
+  | { key: string; type: 'home' }
+  | { key: string; type: 'category'; cat: Category; index: number };
 
 type PostRow = {
   id: string;
@@ -74,53 +94,6 @@ type EventRow = {
   profile_ids?: string[] | string | null;
 };
 
-function parseUtcMs(input: unknown): number | null {
-  const s = String(input ?? '').trim();
-  if (!s) return null;
-  const ms = Date.parse(s);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-function normalizeForCompare(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function toStrArr(v: unknown): string[] {
-  if (!v) return [];
-  if (Array.isArray(v)) return v.map((x) => String(x)).filter(Boolean);
-  const s = String(v).trim();
-  return s ? [s] : [];
-}
-
-function toNumArr(v: unknown): number[] {
-  if (v == null) return [];
-  if (Array.isArray(v)) return v.map((x) => Number(x)).filter((n) => Number.isFinite(n));
-  const n = Number(v);
-  return Number.isFinite(n) ? [n] : [];
-}
-
-function hasUsableProfileForVisibility(u: any): boolean {
-  // If we already have a hydrated profile in memory, keep it valid during background refreshes.
-  // Cold boot remains default-deny because these fields will be missing/empty.
-  const profileId = String(u?.profile_id ?? '').trim();
-  const partyId = typeof u?.party_id === 'number' ? u.party_id : u?.party_id != null ? Number(u.party_id) : null;
-  const stateId = typeof u?.state_id === 'number' ? u.state_id : u?.state_id != null ? Number(u.state_id) : null;
-  return !!profileId && Number.isFinite(partyId as number) && Number.isFinite(stateId as number);
-}
-
-function gfxLogCapped(key: string, payload: unknown, cap = 8) {
-  const g: any = globalThis as any;
-  const k = `__gfx_${key}`;
-  g[k] = typeof g[k] === 'number' ? g[k] : 0;
-  if (g[k] >= cap) return;
-  try {
-    console.log(`[gfx] ${key}`, JSON.stringify(payload));
-  } catch {
-    console.log(`[gfx] ${key}`, String(payload));
-  }
-  g[k] += 1;
-}
-
 /** Align with edit-profile mandatory fields + party selection */
 function isProfileIncomplete(info: { name: string; phone: string; state: string; partyName: string }): boolean {
   const nameOk = (info.name ?? '').trim().length > 0;
@@ -142,12 +115,14 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
 
-  const categoryCarouselRef = useRef<ScrollView>(null);
-  const trendingRef = useRef<ScrollView>(null);
   const hasFetchedProfileRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
+  const rtVersion = useDashboardRealtime({ enabled: authReady && !!profileLoaded });
+  const { dailyLocalByUrl, ensureDailyCached } = useBoundedDailyUrlMap();
+
+  const categoryCarouselRef = useRef<FlatList<CarouselFlatItem>>(null);
+  const trendingRef = useRef<FlatList<TrendingFlatItem>>(null);
   const [dashboardProfileLoaded, setDashboardProfileLoaded] = useState(false);
   const [editProfileDelayedVisible, setEditProfileDelayedVisible] = useState(false);
   const userInfoRef = useRef(userInfo);
@@ -156,14 +131,11 @@ export default function DashboardScreen() {
   userInfoRef.current = userInfo;
   postsRef.current = posts;
 
-  const [dailyLocalByUrl, setDailyLocalByUrl] = useState<Record<string, string>>({});
-  const dailyInFlightRef = useRef<Set<string>>(new Set());
   const fetchPostsReqIdRef = useRef(0);
   const postsSchemaOkRef = useRef<boolean | null>(null);
   const eventsSchemaOkRef = useRef<boolean | null>(null);
   const profileLoadedRef = useRef<boolean>(false);
   const safeUserInfo = userInfo ?? { name: '', phone: '', state: '', partyName: '' };
-  const realtimeChannelRef = useRef<any>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(true);
 
   // Core rule: never render content until profile is fetched from server.
@@ -220,25 +192,6 @@ export default function DashboardScreen() {
       r.setParams({ expandCategory: undefined, expandTab: undefined });
     }
   }, [router]);
-
-  const ensureDailyCached = React.useCallback(
-    async (url: string) => {
-      const u = String(url ?? '').trim();
-      if (!u) return;
-      if (dailyLocalByUrl[u]) return;
-      if (dailyInFlightRef.current.has(u)) return;
-      dailyInFlightRef.current.add(u);
-      try {
-        const local = await downloadMediaToCache({ kind: 'daily', url: u });
-        if (local) {
-          setDailyLocalByUrl((prev) => (prev[u] ? prev : { ...prev, [u]: local }));
-        }
-      } finally {
-        dailyInFlightRef.current.delete(u);
-      }
-    },
-    [dailyLocalByUrl]
-  );
 
   /** Fetch authenticated user profile from profiles table. */
   const fetchUserProfile = React.useCallback(async () => {
@@ -363,145 +316,6 @@ export default function DashboardScreen() {
     return { state: '', party: '' };
   }, [setUserInfo, setProfileLoaded]);
 
-  function normalizeStrictId(v: unknown): number | null {
-    if (v == null) return null;
-    const n = typeof v === 'number' ? v : Number(v);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  function explainVisibility(user: any, content: any) {
-    const result: any = {
-      ok: false,
-      reason: 'unknown',
-    };
-    if (!profileLoadedRef.current && !hasUsableProfileForVisibility(user)) {
-      result.reason = 'profile_not_loaded';
-      return result;
-    }
-
-    const uParty = normalizeStrictId(Number(user?.party_id));
-    const uState = normalizeStrictId(Number(user?.state_id));
-    const uLok = normalizeStrictId(Number(user?.loksabha_id));
-    const uAsm = normalizeStrictId(Number(user?.assembly_id));
-    const uGroup = normalizeStrictId(user?.group_id);
-    const uProfileId = String(user?.profile_id ?? '').trim();
-
-    const partyIds = toNumArr(content?.party_id);
-    const stateIds = toNumArr(content?.state_id);
-    const lokIds = toNumArr(content?.loksabha_id);
-    const asmIds = toNumArr(content?.assembly_id);
-    const groupIds = toNumArr(content?.group_id);
-    const profileIds = toStrArr(content?.profile_ids).map((x) => String(x).trim()).filter(Boolean);
-
-    Object.assign(result, {
-      u: { uParty, uState, uLok, uAsm, uGroup, uProfileId },
-      c: { partyIds, stateIds, lokIds, asmIds, groupIds, profileIds },
-    });
-
-    if (!uProfileId) {
-      result.reason = 'missing_user_profile_id';
-      return result;
-    }
-    if (uParty == null || uState == null) {
-      result.reason = 'missing_user_party_or_state';
-      return result;
-    }
-
-    // Empty arrays mean "no restriction" and are valid.
-    // Only treat as invalid when the raw array is non-empty but parsing yields empty.
-    if (Array.isArray(content?.party_id) && content.party_id.length > 0 && partyIds.length === 0) {
-      result.reason = 'invalid_party_id_array';
-      return result;
-    }
-    if (Array.isArray(content?.state_id) && content.state_id.length > 0 && stateIds.length === 0) {
-      result.reason = 'invalid_state_id_array';
-      return result;
-    }
-    if (Array.isArray(content?.loksabha_id) && content.loksabha_id.length > 0 && lokIds.length === 0) {
-      result.reason = 'invalid_loksabha_id_array';
-      return result;
-    }
-    if (Array.isArray(content?.assembly_id) && content.assembly_id.length > 0 && asmIds.length === 0) {
-      result.reason = 'invalid_assembly_id_array';
-      return result;
-    }
-    if (Array.isArray(content?.group_id) && content.group_id.length > 0 && groupIds.length === 0) {
-      result.reason = 'invalid_group_id_array';
-      return result;
-    }
-    if (Array.isArray(content?.profile_ids) && content.profile_ids.length > 0 && profileIds.length === 0) {
-      result.reason = 'invalid_profile_ids_array';
-      return result;
-    }
-
-    const isGlobal =
-      partyIds.length === 0 &&
-      stateIds.length === 0 &&
-      lokIds.length === 0 &&
-      asmIds.length === 0 &&
-      groupIds.length === 0 &&
-      profileIds.length === 0;
-    if (isGlobal) {
-      result.ok = true;
-      result.reason = 'global';
-      return result;
-    }
-
-    const stateMatch = stateIds.length === 0 ? true : stateIds.includes(0) || stateIds.includes(uState);
-    if (!stateMatch) {
-      result.reason = 'state_mismatch';
-      return result;
-    }
-    const partyMatch = partyIds.length === 0 ? true : partyIds.includes(0) || partyIds.includes(uParty);
-    if (!partyMatch) {
-      result.reason = 'party_mismatch';
-      return result;
-    }
-
-    if (lokIds.length > 0 && !lokIds.includes(0)) {
-      if (uLok == null) {
-        result.reason = 'missing_user_loksabha_id';
-        return result;
-      }
-      if (!lokIds.includes(uLok)) {
-        result.reason = 'loksabha_mismatch';
-        return result;
-      }
-    }
-    if (asmIds.length > 0 && !asmIds.includes(0)) {
-      if (uAsm == null) {
-        result.reason = 'missing_user_assembly_id';
-        return result;
-      }
-      if (!asmIds.includes(uAsm)) {
-        result.reason = 'assembly_mismatch';
-        return result;
-      }
-    }
-    if (groupIds.length > 0) {
-      if (uGroup == null) {
-        result.reason = 'missing_user_group_id';
-        return result;
-      }
-      if (!groupIds.includes(0) && !groupIds.includes(uGroup)) {
-        result.reason = 'group_mismatch';
-        return result;
-      }
-    }
-    if (profileIds.length > 0 && !profileIds.includes(uProfileId)) {
-      result.reason = 'profile_id_mismatch';
-      return result;
-    }
-
-    result.ok = true;
-    result.reason = 'ok';
-    return result;
-  }
-
-  function canUserSeeContent(user: any, content: any): boolean {
-    return explainVisibility(user, content).ok;
-  }
-
   const fetchPosts = React.useCallback(async (_userState: string, _userParty: string, silent = false) => {
     const reqId = ++fetchPostsReqIdRef.current;
     try {
@@ -528,53 +342,10 @@ export default function DashboardScreen() {
       const workerGroupId = userProfile?.group_id ?? null;
       const workerProfileId = String(userProfile?.profile_id ?? '').trim();
 
-      // Graphics only: not a reel (`is_video` true). Uses false OR NULL so legacy image rows (unset flag) still show.
-      // NOTE: We intentionally avoid DB-side `contains(state/party, ...)` here because NULL/empty targeting
-      // should be treated as "global" on the client. DB-side filters can accidentally exclude global rows.
-      // Strict numeric-ID mode: no legacy fallback (default deny if schema isn't migrated).
-      const runNumeric = async () =>
-        await (async () => {
-          const nowIso = new Date().toISOString();
-          const q = supabase
-            .from('posts')
-            .select(
-              'id,title,image_url,category,event_date,created_at,captions,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids,status,deleted_at,scheduled_at'
-            )
-            .or('is_video.eq.false,is_video.is.null')
-            .eq('status', 'published')
-            .is('deleted_at', null)
-            .or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`)
-            .order('created_at', { ascending: false })
-            .limit(300) as any;
-
-          const r = await q;
-          if ((r as any)?.error && String((r as any).error.message ?? '').includes('does not exist')) {
-            // Backward-compatible fallback: old schema (no status/deleted_at/scheduled_at)
-            return await supabase
-              .from('posts')
-              .select(
-                'id,title,image_url,category,event_date,created_at,captions,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids'
-              )
-              .or('is_video.eq.false,is_video.is.null')
-              .order('created_at', { ascending: false })
-              .limit(300);
-          }
-          return r;
-        })();
-
-      // If we already detected missing columns, skip querying to avoid repeated errors.
       if (postsSchemaOkRef.current === false) {
         setPosts([]);
         setLoading(false);
         return;
-      }
-
-      let data: any[] | null = null;
-      let error: any = null;
-      {
-        const r = await runNumeric();
-        data = (r as any)?.data ?? null;
-        error = (r as any)?.error ?? null;
       }
 
       gfxLogCapped('userGeo', {
@@ -586,9 +357,19 @@ export default function DashboardScreen() {
         profile_id: workerProfileId,
       });
 
+      const result = await fetchDashboardPosts({
+        profileLoaded: !!profileLoadedRef.current,
+        userSnapshot: userInfoRef.current as unknown as Record<string, unknown>,
+        postsSchemaOk: postsSchemaOkRef.current,
+        onPostsSchemaMissing: () => {
+          postsSchemaOkRef.current = false;
+        },
+      });
+
       if (reqId !== fetchPostsReqIdRef.current) return;
-      if (error) {
-        const msg = String(error.message ?? 'Failed to load posts');
+
+      if (result.error) {
+        const msg = result.error;
         if (msg.includes('does not exist')) {
           postsSchemaOkRef.current = false;
           setFetchError('DB schema missing required numeric columns for posts. Please add posts.state_id/loksabha_id/assembly_id/party_id.');
@@ -596,44 +377,13 @@ export default function DashboardScreen() {
           setFetchError(msg);
         }
         if (__DEV__) {
-          console.warn('[Dashboard fetchPosts] Supabase error:', {
-            message: error.message,
-            code: error.code,
-            details: error.details,
-            hint: error.hint,
-          });
+          console.warn('[Dashboard fetchPosts] Supabase error:', msg);
         }
-        if (__DEV__) console.warn('[Dashboard fetchPosts] raw error object:', error);
         setPosts([]);
         return;
       }
-      const raw = (data || []) as PostRow[];
-      let rejectedLogged = false;
-      const filtered = raw.filter((p) => {
-        const ex = explainVisibility(userInfoRef.current, p);
-        const ok = ex.ok;
-        if (!ok && !rejectedLogged) {
-          rejectedLogged = true;
-          gfxLogCapped('rejectSample', {
-            postId: (p as any)?.id ?? null,
-            party_id: (p as any)?.party_id ?? null,
-            state_id: (p as any)?.state_id ?? null,
-            loksabha_id: (p as any)?.loksabha_id ?? null,
-            assembly_id: (p as any)?.assembly_id ?? null,
-            user: {
-              state_id: (userInfoRef.current as any)?.state_id ?? null,
-              party_id: (userInfoRef.current as any)?.party_id ?? null,
-              loksabha_id: (userInfoRef.current as any)?.loksabha_id ?? null,
-              assembly_id: (userInfoRef.current as any)?.assembly_id ?? null,
-              profile_id: (userInfoRef.current as any)?.profile_id ?? '',
-            },
-          });
-          gfxLogCapped('rejectReason', ex, 5);
-        }
-        return ok;
-      });
-      gfxLogCapped('filterCounts', { raw: raw.length, kept: filtered.length });
-      setPosts(filtered);
+
+      setPosts((result.rows || []) as PostRow[]);
     } catch (err) {
       if (reqId !== fetchPostsReqIdRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
@@ -641,47 +391,28 @@ export default function DashboardScreen() {
       if (__DEV__) console.warn('[Dashboard fetchPosts] exception:', err);
       setPosts([]);
     } finally {
-      // Always clear loading for the latest request.
-      // Otherwise a silent refetch can supersede a non-silent one and prevent the spinner from ever clearing.
       if (reqId === fetchPostsReqIdRef.current) setLoading(false);
     }
   }, []);
 
-  const fetchEvents = async () => {
+  const fetchEvents = React.useCallback(async () => {
     try {
-      const userProfile = userInfoRef.current as any;
-      const workerStateId = userProfile?.state_id ?? null;
-      const workerLoksabhaId = userProfile?.loksabha_id ?? null;
-      const workerAssemblyId = userProfile?.assembly_id ?? null;
-      const workerPartyId = userProfile?.party_id ?? null;
-      const workerGroupId = userProfile?.group_id ?? null;
-      const workerProfileId = String(userProfile?.profile_id ?? '').trim();
-
-      const runNumeric = async () =>
-        await supabase
-          .from('events')
-          .select('name,start,end,status,deleted_at,scheduled_at,state_id,loksabha_id,assembly_id,party_id,group_id,profile_ids')
-          .eq('status', 'published')
-          .is('deleted_at', null)
-          .or(`scheduled_at.is.null,scheduled_at.lte.${new Date().toISOString()}`)
-          .order('end', { ascending: true })
-          .limit(500);
-
-      // If we already detected missing columns, skip querying to avoid repeated errors.
       if (eventsSchemaOkRef.current === false) {
         setEvents([]);
         return;
       }
 
-      let data: any[] | null = null;
-      let error: any = null;
-      {
-        const r = await runNumeric();
-        data = (r as any)?.data ?? null;
-        error = (r as any)?.error ?? null;
-      }
-      if (error) {
-        const msg = String(error.message ?? 'Failed to load events');
+      const result = await fetchDashboardEvents({
+        profileLoaded: !!profileLoadedRef.current,
+        userSnapshot: userInfoRef.current as unknown as Record<string, unknown>,
+        eventsSchemaOk: eventsSchemaOkRef.current,
+        onEventsSchemaMissing: () => {
+          eventsSchemaOkRef.current = false;
+        },
+      });
+
+      if (result.error) {
+        const msg = result.error;
         if (msg.includes('does not exist')) {
           eventsSchemaOkRef.current = false;
           setFetchError((prev) => prev ?? 'DB schema missing required numeric columns for events. Please add events.state_id/loksabha_id/assembly_id/party_id.');
@@ -691,26 +422,14 @@ export default function DashboardScreen() {
         setEvents([]);
         return;
       }
-      const raw = ((data ?? []) as any[]).filter(Boolean);
-      const nowUtcMs = Date.now();
-      const filteredEvents = raw
-        .filter((ev) => {
-          return canUserSeeContent(userInfoRef.current, ev);
-        })
-        .filter((ev) => {
-          const startMs = parseUtcMs((ev as any).start);
-          const endMs = parseUtcMs((ev as any).end);
-          // Default-deny for malformed/missing lifecycle bounds.
-          if (startMs == null || endMs == null) return false;
-          return nowUtcMs >= startMs && nowUtcMs <= endMs;
-        });
-      setEvents(filteredEvents);
+
+      setEvents((result.rows || []) as EventRow[]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err ?? 'Failed to load events');
       setFetchError((prev) => prev ?? msg);
       setEvents([]);
     }
-  };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -735,7 +454,7 @@ export default function DashboardScreen() {
     if (!authReady) return;
     let cancelled = false;
     (async () => {
-      if (refreshKey === 0 && !hasFetchedProfileRef.current) {
+      if (rtVersion === 0 && !hasFetchedProfileRef.current) {
         hasFetchedProfileRef.current = true;
         setIsProfileLoading(true);
         await fetchUserProfile();
@@ -766,7 +485,7 @@ export default function DashboardScreen() {
     };
   }, [
     authReady,
-    refreshKey,
+    rtVersion,
     profileLoaded,
     fetchUserProfile,
     fetchPosts,
@@ -780,7 +499,7 @@ export default function DashboardScreen() {
       await fetchPosts('', '', true);
       await fetchEvents();
     })();
-  }, [authReady, profileLoaded, profileRefreshSeq, fetchPosts]);
+  }, [authReady, profileLoaded, profileRefreshSeq, fetchPosts, fetchEvents]);
 
   useEffect(() => {
     if (!authReady || !profileLoaded || !dashboardProfileLoaded) {
@@ -816,44 +535,8 @@ export default function DashboardScreen() {
   }, [fetchUserProfile]);
 
   useEffect(() => {
-    if (!authReady) return;
-    if (!profileLoaded) return;
-    fetchEvents();
-    try {
-      // IMPORTANT: Do not reuse a fixed channel name here.
-      // Dashboard can mount more than once (router.replace/back, tab stack behavior),
-      // and Supabase will return the existing subscribed channel for the same name.
-      // Adding callbacks after subscribe throws and can blank-screen the app.
-      if (realtimeChannelRef.current) {
-        try {
-          supabase.removeChannel(realtimeChannelRef.current);
-        } catch {
-          // ignore
-        }
-        realtimeChannelRef.current = null;
-      }
-
-      const channelName = `realtime-any-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const channel = supabase
-        .channel(channelName)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'events' }, () => setRefreshKey((p) => p + 1))
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => setRefreshKey((p) => p + 1))
-        .subscribe();
-      realtimeChannelRef.current = channel;
-    } catch (e) {
-      if (__DEV__) console.warn('[Dashboard] realtime subscribe failed:', e);
-    }
-    return () => {
-      const ch = realtimeChannelRef.current;
-      realtimeChannelRef.current = null;
-      if (ch) {
-        try {
-          supabase.removeChannel(ch);
-        } catch {
-          // ignore
-        }
-      }
-    };
+    if (!authReady || !profileLoaded) return;
+    void fetchEvents();
   }, [authReady, profileLoaded, fetchEvents]);
 
   const safePosts = Array.isArray(posts) ? posts : [];
@@ -877,7 +560,7 @@ export default function DashboardScreen() {
       });
     }
     return Array.from(map.values());
-  }, [filteredPosts, refreshKey]);
+  }, [filteredPosts]);
 
   const graphicsData = React.useMemo(() => {
     const today = new Date();
@@ -916,33 +599,42 @@ export default function DashboardScreen() {
             return new Date(endA).getTime() - new Date(endB).getTime();
           });
     return result.length > 0 ? result : postsByCategory;
-  }, [postsByCategory, safeEvents, refreshKey]);
+  }, [postsByCategory, safeEvents]);
 
   const CURRENT_DATA = graphicsData;
 
   useEffect(() => {
-    const itemWidth = 140 + 15;
-    const initialOffset = itemWidth * CURRENT_DATA.length;
-    trendingRef.current?.scrollTo({ x: initialOffset, animated: false });
+    const initialOffset = TRENDING_ITEM_STRIDE * CURRENT_DATA.length;
+    trendingRef.current?.scrollToOffset({ offset: initialOffset, animated: false });
   }, [CURRENT_DATA.length, lang]);
 
   const allTrending = useMemo(() => {
     return CURRENT_DATA.filter((cat) => cat.images.length > 0).map((cat) => ({ ...cat.images[0], catSource: cat }));
   }, [CURRENT_DATA, lang]);
 
-  const infiniteTrendingData = useMemo(() => {
+  const infiniteTrendingData = useMemo((): TrendingFlatItem[] => {
     return [...allTrending, ...allTrending, ...allTrending];
   }, [allTrending, lang]);
 
+  const carouselFlatData = useMemo((): CarouselFlatItem[] => {
+    const home: CarouselFlatItem = { key: '__carousel_home__', type: 'home' };
+    const pages: CarouselFlatItem[] = CURRENT_DATA.map((cat, index) => ({
+      key: cat.id,
+      type: 'category',
+      cat,
+      index,
+    }));
+    return [home, ...pages];
+  }, [CURRENT_DATA]);
+
   const handleTrendingScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const offsetX = e.nativeEvent.contentOffset.x;
-    const itemWidth = 140 + 15;
-    const totalSetWidth = itemWidth * allTrending.length;
+    const totalSetWidth = TRENDING_ITEM_STRIDE * allTrending.length;
     if (totalSetWidth === 0) return;
     if (offsetX >= totalSetWidth * 2) {
-      trendingRef.current?.scrollTo({ x: offsetX - totalSetWidth, animated: false });
+      trendingRef.current?.scrollToOffset({ offset: offsetX - totalSetWidth, animated: false });
     } else if (offsetX <= 5) {
-      trendingRef.current?.scrollTo({ x: offsetX + totalSetWidth, animated: false });
+      trendingRef.current?.scrollToOffset({ offset: offsetX + totalSetWidth, animated: false });
     }
   };
 
@@ -952,7 +644,7 @@ export default function DashboardScreen() {
     } else {
       setActiveCategory(cat);
       setTimeout(() => {
-        categoryCarouselRef.current?.scrollTo({ x: (index + 1) * width, animated: false });
+        categoryCarouselRef.current?.scrollToOffset({ offset: (index + 1) * width, animated: false });
       }, 50);
     }
   };
@@ -1011,17 +703,13 @@ export default function DashboardScreen() {
           </TouchableOpacity>
         )}
       </View>
-      <ScrollView
+      <FlatList
         ref={trendingRef}
         horizontal
-        showsHorizontalScrollIndicator={false}
-        onScroll={handleTrendingScroll}
-        scrollEventThrottle={16}
-        contentContainerStyle={{ paddingLeft: 20 }}
-      >
-        {infiniteTrendingData.map((item, index) => (
+        data={infiniteTrendingData}
+        keyExtractor={(_, index) => `trend-${index}`}
+        renderItem={({ item, index }) => (
           <TouchableOpacity
-            key={index}
             style={[styles.trendingItem, { height: Math.round(140 * 5 / 4) }]}
             onPress={() => switchCategory(item.catSource, index % allTrending.length)}
           >
@@ -1036,8 +724,18 @@ export default function DashboardScreen() {
               <Text style={styles.catLabelText}>{item.catSource.name}</Text>
             </View>
           </TouchableOpacity>
-        ))}
-      </ScrollView>
+        )}
+        getItemLayout={(_, index) => ({
+          length: TRENDING_ITEM_STRIDE,
+          offset: TRENDING_ITEM_STRIDE * index,
+          index,
+        })}
+        showsHorizontalScrollIndicator={false}
+        onScroll={handleTrendingScroll}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ paddingLeft: 20 }}
+        nestedScrollEnabled
+      />
     </View>
   );
 
@@ -1077,72 +775,86 @@ export default function DashboardScreen() {
   const renderSlidingGrids = () => (
     <View style={{ marginTop: 10, paddingBottom: 30 }}>
       {renderTrendingSection()}
-      <ScrollView
+      <FlatList
         ref={categoryCarouselRef}
         horizontal
         pagingEnabled
+        data={carouselFlatData}
+        keyExtractor={(item) => item.key}
+        renderItem={({ item }) => {
+          if (item.type === 'home') {
+            return (
+              <View style={{ width: width, justifyContent: 'center', alignItems: 'center' }}>
+                <TouchableOpacity style={[styles.allTrendingBackCard, { width: width - 80 }]} onPress={() => setActiveCategory(null)}>
+                  <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.allTrendingGradient}>
+                    <Ionicons name="apps" size={50} color="#FFF" />
+                    <Text style={styles.allTrendingTitle}>{t('graphics')}</Text>
+                    <Text style={styles.allTrendingSub}>{t('tap_see_categories')}</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            );
+          }
+          const { cat } = item;
+          return (
+            <View style={{ width: width }}>
+              <View style={styles.gridSectionHeader}>
+                <Text style={styles.gridSectionTitle}>{cat.name}</Text>
+                <Text style={styles.gridSectionSub}>{t('swipe_left_back')}</Text>
+              </View>
+              <View style={styles.staggeredContainer}>
+                {cat.images.map((img, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    style={[
+                      styles.modernGridItem,
+                      {
+                        width: (width - 50) / 2,
+                        height: Math.round(((width - 50) / 2) * 5 / 4),
+                        marginTop: idx % 2 === 0 ? 0 : 25,
+                      },
+                    ]}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/(auth)/post-detail',
+                        params: {
+                          image: img.url,
+                          images: JSON.stringify(cat.images.map((i) => i.url)),
+                          currentIndex: idx,
+                          category: cat.name,
+                          captions: img.captions || '',
+                          postId: img.postId ?? '',
+                        },
+                      })
+                    }
+                  >
+                    <ExpoImage
+                      source={{ uri: dailyLocalByUrl[img.url] || img.url }}
+                      style={styles.modernGridImg}
+                      contentFit="contain"
+                      cachePolicy="disk"
+                      onLoadStart={() => void ensureDailyCached(img.url)}
+                    />
+                    <View style={styles.modernShareLabel}>
+                      <Ionicons name="flame" size={10} color="#FFD700" />
+                      <Text style={styles.modernShareText}>{img.shares}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          );
+        }}
+        getItemLayout={(_, index) => ({
+          length: width,
+          offset: width * index,
+          index,
+        })}
         showsHorizontalScrollIndicator={false}
         onScroll={handleGridScroll}
         scrollEventThrottle={16}
-      >
-        <View style={{ width: width, justifyContent: 'center', alignItems: 'center' }}>
-          <TouchableOpacity style={[styles.allTrendingBackCard, { width: width - 80 }]} onPress={() => setActiveCategory(null)}>
-            <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.allTrendingGradient}>
-              <Ionicons name="apps" size={50} color="#FFF" />
-              <Text style={styles.allTrendingTitle}>{t('graphics')}</Text>
-              <Text style={styles.allTrendingSub}>{t('tap_see_categories')}</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-        </View>
-        {CURRENT_DATA.map((cat) => (
-          <View key={cat.id} style={{ width: width }}>
-            <View style={styles.gridSectionHeader}>
-              <Text style={styles.gridSectionTitle}>{cat.name}</Text>
-              <Text style={styles.gridSectionSub}>{t('swipe_left_back')}</Text>
-            </View>
-            <View style={styles.staggeredContainer}>
-              {cat.images.map((img, idx) => (
-                <TouchableOpacity
-                  key={idx}
-                  style={[
-                    styles.modernGridItem,
-                    {
-                      width: (width - 50) / 2,
-                      height: Math.round(((width - 50) / 2) * 5 / 4),
-                      marginTop: idx % 2 === 0 ? 0 : 25,
-                    },
-                  ]}
-                  onPress={() =>
-                    router.push({
-                      pathname: '/(auth)/post-detail',
-                      params: {
-                        image: img.url,
-                        images: JSON.stringify(cat.images.map((i) => i.url)),
-                        currentIndex: idx,
-                        category: cat.name,
-                        captions: img.captions || '',
-                        postId: img.postId ?? '',
-                      },
-                    })
-                  }
-                >
-                  <ExpoImage
-                    source={{ uri: dailyLocalByUrl[img.url] || img.url }}
-                    style={styles.modernGridImg}
-                    contentFit="contain"
-                    cachePolicy="disk"
-                    onLoadStart={() => void ensureDailyCached(img.url)}
-                  />
-                  <View style={styles.modernShareLabel}>
-                    <Ionicons name="flame" size={10} color="#FFD700" />
-                    <Text style={styles.modernShareText}>{img.shares}</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        ))}
-      </ScrollView>
+        nestedScrollEnabled
+      />
     </View>
   );
 
