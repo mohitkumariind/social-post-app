@@ -1,4 +1,9 @@
-import type { BroadcastPayload, BroadcastFilters } from '@/lib/broadcast-send';
+import {
+  remergeLockedEventCampaignAttribution,
+  snapshotEventCampaignEventIdForAttribution,
+  type BroadcastFilters,
+  type BroadcastPayload,
+} from '@/lib/broadcast-send';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { canAccessResource, type UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import { parseGroupIds, RbacError } from '@/lib/rbac/require';
@@ -22,23 +27,33 @@ function toGroupIdNums(groupIds: string[]): number[] {
 /**
  * Canonical notification target shaping for send/schedule flows.
  * Ensures moderator/campaign_manager payload scope is normalized and fail-closed.
+ *
+ * Event campaign `event_id` / `data.type` are snapshotted and re-merged after filter changes so
+ * audience selection never drops event linkage.
  */
 export function applyCanonicalNotificationTargeting(
   auth: NotificationAuth,
   payload: BroadcastPayload,
   auditAction: 'notifications.scope.validate' | 'notifications.schedule.scope.validate'
 ): BroadcastPayload {
-  if (auth.role === 'admin') return payload;
+  const lockedEventCampaignId = snapshotEventCampaignEventIdForAttribution(payload);
+
+  if (auth.role === 'admin') {
+    return remergeLockedEventCampaignAttribution(payload, lockedEventCampaignId);
+  }
 
   if (auth.role === 'moderator') {
-    return {
-      ...payload,
-      all_workers: false,
-      filters: {
-        ...(payload.filters ?? {}),
-        assigned_state_ids: auth.assigned_state_ids,
-      } as BroadcastFilters,
-    };
+    return remergeLockedEventCampaignAttribution(
+      {
+        ...payload,
+        all_workers: false,
+        filters: {
+          ...(payload.filters ?? {}),
+          assigned_state_ids: auth.assigned_state_ids,
+        } as BroadcastFilters,
+      },
+      lockedEventCampaignId
+    );
   }
 
   // campaign_manager: groups-only targeting with canonical numeric group ids.
@@ -53,14 +68,17 @@ export function applyCanonicalNotificationTargeting(
   );
   if (!ok) throw new RbacError('Forbidden', 403);
 
-  return {
-    ...payload,
-    all_workers: false,
-    filters: {
-      ...(payload.filters ?? {}),
-      group_ids: groupIds,
-    } as BroadcastFilters,
-  };
+  return remergeLockedEventCampaignAttribution(
+    {
+      ...payload,
+      all_workers: false,
+      filters: {
+        ...(payload.filters ?? {}),
+        group_ids: groupIds,
+      } as BroadcastFilters,
+    },
+    lockedEventCampaignId
+  );
 }
 
 const MAX_EXPLICIT_NOTIFICATION_RECIPIENTS = 5000;

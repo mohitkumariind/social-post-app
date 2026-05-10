@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, isCampaignManager, isModerator, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import type { BroadcastPayload } from '@/lib/broadcast-send';
+import { stripEventIdUnlessEventCampaign, type BroadcastPayload } from '@/lib/broadcast-send';
+import { normalizeBroadcastIncomingRequest } from '@/lib/broadcast-api-request';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { RbacError, requireStandardRbacContext } from '@/lib/rbac/require';
 import { withAudit } from '@/lib/audit/withAudit';
@@ -32,6 +33,12 @@ export const POST = withAudit(
     if (!scheduled_at) return json({ error: 'scheduled_at is required' }, 400);
     if (!idempotency_key) return json({ error: 'idempotency_key is required' }, 400);
     if (!payload) return json({ error: 'payload is required' }, 400);
+
+    const normalized = normalizeBroadcastIncomingRequest(payload);
+    if (!normalized.ok) return json({ error: normalized.error }, normalized.status ?? 400);
+    payload = normalized.payload;
+
+    payload = stripEventIdUnlessEventCampaign(payload);
 
     try {
       requireStandardRbacContext(auth, ['admin', 'moderator', 'campaign_manager']);

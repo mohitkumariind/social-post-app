@@ -1,18 +1,26 @@
 'use client';
 /* eslint-disable react-hooks/set-state-in-effect -- Supabase fetch on mount and geo dropdown cascades */
 
-import { Bell, ImageIcon, Loader2, Send, Upload, X } from 'lucide-react';
+import { Bell, Eye, ImageIcon, Loader2, Send, Upload, X } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 import { getStateVisibility } from '@/lib/admin/state-filter';
+import { BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG } from '@/lib/broadcast-send';
+import { BroadcastEventSelector, type BroadcastMode } from './BroadcastEventSelector';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
 
 const ACCENT = '#25D366';
 const BODY_MAX = 2000;
 const HISTORY_PAGE_SIZE = 10;
+
+/** UX-only: suggested message body prefix in event campaign mode (applied only when body is empty). */
+const EVENT_CAMPAIGN_BODY_SUGGEST_PREFIX = 'Campaign Update: ';
+
+const EVENT_ID_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type GeoRow = { id: string; name: string; state_id?: string; loksabha_id?: string };
 
@@ -59,7 +67,57 @@ function formatSentTo(filters: unknown): string {
   return parts.length ? parts.join(' · ') : 'Filtered segment';
 }
 
+function buildBroadcastSendV2(args: {
+  preview_only?: boolean;
+  title: string;
+  message: string;
+  broadcastMode: BroadcastMode;
+  selected_event_id: string;
+  all_workers: boolean;
+  filters: {
+    party?: string | null;
+    state?: string | null;
+    loksabha_id?: number | null;
+    assembly_id?: number | null;
+    group_ids?: number[];
+  };
+  filter_labels?: {
+    party: string | null;
+    state: string | null;
+    loksabha: string | null;
+    assembly: string | null;
+  };
+  image_url?: string | null;
+}): Record<string, unknown> {
+  const broadcast_mode = args.broadcastMode === 'event' ? 'event' : 'global';
+  const out: Record<string, unknown> = {
+    ...(args.preview_only ? { preview_only: true } : {}),
+    title: args.title,
+    message: args.message,
+    broadcast_mode,
+    event_id: broadcast_mode === 'event' ? args.selected_event_id.trim() || null : null,
+    audience_filters: {
+      all_workers: args.all_workers,
+      ...args.filters,
+    },
+  };
+  if (args.filter_labels) out.filter_labels = args.filter_labels;
+  if (args.image_url != null && String(args.image_url).trim() !== '') {
+    out.image_url = String(args.image_url).trim();
+  }
+  return out;
+}
+
+function formatReachUsers(n: number | null): string {
+  if (n === null) return '—';
+  return `~${new Intl.NumberFormat().format(n)} users`;
+}
+
 export default function NotificationBroadcastCenterPage() {
+  const [broadcastMode, setBroadcastMode] = useState<BroadcastMode>('global');
+  const [selected_event_id, setSelected_event_id] = useState('');
+  const [selected_event_display_name, setSelected_event_display_name] = useState('');
+
   const [allWorkers, setAllWorkers] = useState(true);
   const [partyId, setPartyId] = useState('');
   const [stateId, setStateId] = useState('');
@@ -126,6 +184,8 @@ export default function NotificationBroadcastCenterPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewCount, setPreviewCount] = useState<number | null>(null);
   const [previewTokens, setPreviewTokens] = useState<number | null>(null);
+  const [panelReachCount, setPanelReachCount] = useState<number | null>(null);
+  const [panelReachLoading, setPanelReachLoading] = useState(false);
   const [sendLoading, setSendLoading] = useState(false);
 
   const [broadcasts, setBroadcasts] = useState<BroadcastRow[]>([]);
@@ -254,6 +314,14 @@ export default function NotificationBroadcastCenterPage() {
     }
   };
 
+  const suggestBodyPrefixForEventCampaign = useCallback((eventDisplayName: string) => {
+    const name = eventDisplayName.trim() || 'Untitled event';
+    setBody((prev) => {
+      if (prev.trim() !== '') return prev;
+      return `${EVENT_CAMPAIGN_BODY_SUGGEST_PREFIX}${name}`;
+    });
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -351,6 +419,41 @@ export default function NotificationBroadcastCenterPage() {
     void run();
   }, [loksabhaId]);
 
+  const audiencePreviewLabel = useMemo(() => {
+    if (isCampaignManager) {
+      const picked = groups.filter((g) => groupIds.includes(String(g.tag)));
+      if (picked.length === 0) return 'Target groups (none selected)';
+      if (picked.length === 1) return picked[0].name || picked[0].tag;
+      const head = picked
+        .slice(0, 2)
+        .map((g) => g.name || g.tag)
+        .join(', ');
+      return picked.length > 2 ? `${head} +${picked.length - 2} more` : head;
+    }
+    if (allWorkers) return 'All workers';
+    const stateName = selectedState?.name?.trim() ?? '';
+    const partyLabel = partyId ? getPartyLabel(partyId) : '';
+    const lok = selectedLoksabha?.name?.trim();
+    const asm = selectedAssembly?.name?.trim();
+    if (stateName && !partyLabel && !lok && !asm) return `${stateName} Users`;
+    const parts: string[] = [];
+    if (partyLabel) parts.push(partyLabel);
+    if (stateName) parts.push(stateName);
+    if (lok) parts.push(lok);
+    if (asm) parts.push(asm);
+    if (parts.length > 0) return parts.join(' · ');
+    return 'Filtered workers (set filters or choose All workers)';
+  }, [
+    isCampaignManager,
+    groups,
+    groupIds,
+    allWorkers,
+    selectedState?.name,
+    partyId,
+    selectedLoksabha?.name,
+    selectedAssembly?.name,
+  ]);
+
   const runPreview = useCallback(async () => {
     setPreviewLoading(true);
     setPreviewCount(null);
@@ -371,11 +474,17 @@ export default function NotificationBroadcastCenterPage() {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          preview_only: true,
-          all_workers: isCampaignManager ? false : allWorkers,
-          filters,
-        }),
+        body: JSON.stringify(
+          buildBroadcastSendV2({
+            preview_only: true,
+            title: '',
+            message: '',
+            broadcastMode,
+            selected_event_id,
+            all_workers: isCampaignManager ? false : allWorkers,
+            filters,
+          })
+        ),
       });
       const d = (await res.json()) as {
         profile_count?: number;
@@ -398,7 +507,89 @@ export default function NotificationBroadcastCenterPage() {
     } finally {
       setPreviewLoading(false);
     }
-  }, [isCampaignManager, allWorkers, partyId, selectedState?.name, loksabhaId, assemblyId, groupIds]);
+  }, [isCampaignManager, allWorkers, partyId, selectedState?.name, loksabhaId, assemblyId, groupIds, broadcastMode, selected_event_id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const eventReachOk =
+      broadcastMode === 'global' ||
+      (broadcastMode === 'event' && EVENT_ID_UUID_RE.test(selected_event_id.trim()));
+    if (!eventReachOk) {
+      setPanelReachCount(null);
+      setPanelReachLoading(false);
+      return;
+    }
+    if (isCampaignManager && groupIds.length === 0) {
+      setPanelReachCount(null);
+      setPanelReachLoading(false);
+      return;
+    }
+
+    const debounceMs = 450;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        if (cancelled) return;
+        setPanelReachLoading(true);
+        const stateName = selectedState?.name?.trim() || '';
+        const filters = isCampaignManager
+          ? {
+              group_ids: groupIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)),
+            }
+          : {
+              party: partyId ? normalizePartyId(partyId) : null,
+              state: stateName || null,
+              loksabha_id: loksabhaId ? Number(loksabhaId) : null,
+              assembly_id: assemblyId ? Number(assemblyId) : null,
+            };
+        try {
+          const res = await fetch('/api/notifications/send', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(
+              buildBroadcastSendV2({
+                preview_only: true,
+                title: '',
+                message: '',
+                broadcastMode,
+                selected_event_id,
+                all_workers: isCampaignManager ? false : allWorkers,
+                filters,
+              })
+            ),
+          });
+          const d = (await res.json()) as { profile_count?: number; error?: string };
+          if (cancelled) return;
+          if (!res.ok) {
+            if (__DEV__) console.error('panel reach preview:', d.error ?? res.status);
+            setPanelReachCount(0);
+            return;
+          }
+          if (!cancelled) setPanelReachCount(typeof d.profile_count === 'number' ? d.profile_count : 0);
+        } catch (e) {
+          if (__DEV__) console.error('panel reach preview:', e);
+          if (!cancelled) setPanelReachCount(0);
+        } finally {
+          if (!cancelled) setPanelReachLoading(false);
+        }
+      })();
+    }, debounceMs);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    broadcastMode,
+    selected_event_id,
+    isCampaignManager,
+    allWorkers,
+    partyId,
+    selectedState?.name,
+    loksabhaId,
+    assemblyId,
+    groupIds,
+  ]);
 
   useEffect(() => {
     if (!confirmOpen) return;
@@ -416,10 +607,32 @@ export default function NotificationBroadcastCenterPage() {
       alert(`Message body must be at most ${BODY_MAX} characters.`);
       return;
     }
+    if (broadcastMode === 'event') {
+      const eid = selected_event_id.trim();
+      if (!eid) {
+        alert(BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG);
+        return;
+      }
+      if (!EVENT_ID_UUID_RE.test(eid)) {
+        alert('Please select a valid event.');
+        return;
+      }
+    }
     setConfirmOpen(true);
   };
 
   const confirmSend = async () => {
+    if (broadcastMode === 'event') {
+      const eid = selected_event_id.trim();
+      if (!eid) {
+        alert(BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG);
+        return;
+      }
+      if (!EVENT_ID_UUID_RE.test(eid)) {
+        alert('Please select a valid event.');
+        return;
+      }
+    }
     setSendLoading(true);
     const stateName = selectedState?.name?.trim() || '';
     const filters = isCampaignManager
@@ -446,15 +659,18 @@ export default function NotificationBroadcastCenterPage() {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: title.trim(),
-          body: body.trim(),
-          image_url: imageUrl.trim() || null,
-          all_workers: isCampaignManager ? false : allWorkers,
-          filters,
-          filter_labels,
-          data: { type: 'broadcast' },
-        }),
+        body: JSON.stringify(
+          buildBroadcastSendV2({
+            title: title.trim(),
+            message: body.trim(),
+            broadcastMode,
+            selected_event_id,
+            all_workers: isCampaignManager ? false : allWorkers,
+            filters,
+            filter_labels,
+            image_url: imageUrl.trim() || null,
+          })
+        ),
       });
       const data = (await res.json()) as { error?: string; ok?: boolean };
       if (!res.ok) {
@@ -474,6 +690,10 @@ export default function NotificationBroadcastCenterPage() {
     }
     if (!sendOk) return;
     setConfirmOpen(false);
+    if (broadcastMode === 'event') {
+      setSelected_event_id('');
+      setSelected_event_display_name('');
+    }
     setTitle('');
     setBody('');
     setImageUrl('');
@@ -500,6 +720,53 @@ export default function NotificationBroadcastCenterPage() {
           </p>
         </div>
       </div>
+
+      <section className="mb-8 rounded-2xl border border-slate-100 bg-white p-6 shadow-md shadow-slate-200/50">
+        <h2 className="mb-1 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Broadcast mode</h2>
+        <p className="mb-4 text-sm font-semibold text-slate-600">
+          Event Campaign ties this send to an event for analytics. Global Broadcast does not require an event.
+        </p>
+        <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+          <button
+            type="button"
+            onClick={() => {
+              setBroadcastMode('event');
+            }}
+            className={`rounded-lg px-4 py-2 text-xs font-black uppercase tracking-wide transition ${
+              broadcastMode === 'event'
+                ? 'bg-white text-emerald-800 shadow-sm ring-1 ring-slate-200/80'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Event Campaign
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setBroadcastMode('global');
+              setSelected_event_id('');
+              setSelected_event_display_name('');
+            }}
+            className={`rounded-lg px-4 py-2 text-xs font-black uppercase tracking-wide transition ${
+              broadcastMode === 'global'
+                ? 'bg-white text-emerald-800 shadow-sm ring-1 ring-slate-200/80'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Global Broadcast
+          </button>
+        </div>
+        {broadcastMode === 'event' ? (
+          <BroadcastEventSelector
+            broadcast_mode={broadcastMode}
+            selected_event_id={selected_event_id}
+            onSelected_event_idChange={setSelected_event_id}
+            onEventSelectedForComposer={suggestBodyPrefixForEventCampaign}
+            onSelectedEventDisplayNameChange={setSelected_event_display_name}
+            states={states}
+          />
+        ) : null}
+      </section>
 
       {toast ? (
         <div
@@ -634,6 +901,50 @@ export default function NotificationBroadcastCenterPage() {
             </div>
           </>
         )}
+      </section>
+
+      <section className="mb-8 rounded-2xl border border-slate-100 bg-white p-6 shadow-md shadow-slate-200/50">
+        <h2 className="mb-1 flex items-center gap-2 text-xs font-black uppercase tracking-[0.2em] text-slate-400">
+          <Eye className="h-4 w-4 text-slate-400" aria-hidden />
+          Preview
+        </h2>
+        <p className="mb-5 text-sm font-semibold text-slate-600">
+          Summary of mode, campaign event, audience, and estimated reach (updates as you change targeting).
+        </p>
+        <dl className="space-y-3 text-sm">
+          <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-4">
+            <dt className="shrink-0 font-black uppercase tracking-wider text-slate-400 sm:w-32">Mode</dt>
+            <dd className="font-bold text-slate-900">
+              {broadcastMode === 'event' ? 'Event Campaign' : 'Global Broadcast'}
+            </dd>
+          </div>
+          {broadcastMode === 'event' ? (
+            <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-4">
+              <dt className="shrink-0 font-black uppercase tracking-wider text-slate-400 sm:w-32">Event</dt>
+              <dd className="font-bold text-slate-900">
+                {selected_event_display_name.trim() ||
+                  (selected_event_id.trim() ? 'Loading event…' : '—')}
+              </dd>
+            </div>
+          ) : null}
+          <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-4">
+            <dt className="shrink-0 font-black uppercase tracking-wider text-slate-400 sm:w-32">Audience</dt>
+            <dd className="font-bold text-slate-900">{audiencePreviewLabel}</dd>
+          </div>
+          <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-4">
+            <dt className="shrink-0 font-black uppercase tracking-wider text-slate-400 sm:w-32">Reach</dt>
+            <dd className="flex items-center gap-2 font-bold text-slate-900">
+              {panelReachLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin text-emerald-600" aria-hidden />
+                  <span className="text-slate-500">Estimating…</span>
+                </>
+              ) : (
+                formatReachUsers(panelReachCount)
+              )}
+            </dd>
+          </div>
+        </dl>
       </section>
 
       {/* Section 2 — Composer */}

@@ -328,11 +328,14 @@ export default function AdminAnalyticsPage() {
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          all_workers: false,
           title,
-          body,
+          message: body,
+          broadcast_mode: drillEventId ? 'event' : 'global',
+          event_id: drillEventId ? drillEventId : null,
+          audience_filters: {
+            all_workers: false,
+          },
           target_user_ids: Array.from(selectedIds),
-          ...(drillEventId ? { event_id: drillEventId } : {}),
         }),
       });
       const d = (await res.json().catch(() => ({}))) as { error?: string; ok?: boolean; target_user_count?: number };

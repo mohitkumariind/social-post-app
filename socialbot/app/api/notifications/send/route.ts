@@ -1,12 +1,22 @@
 import Expo from 'expo-server-sdk';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
-import { optionalEventIdFromPayload, runBroadcast, type BroadcastPayload } from '@/lib/broadcast-send';
+import {
+  BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG,
+  optionalEventIdFromPayload,
+  remergeLockedEventCampaignAttribution,
+  resolveBroadcastEventIdForIntegrity,
+  runBroadcast,
+  snapshotEventCampaignEventIdForAttribution,
+  stripEventIdUnlessEventCampaign,
+  type BroadcastPayload,
+} from '@/lib/broadcast-send';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import type { UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireStandardRbacContext } from '@/lib/rbac/require';
 import { applyCanonicalNotificationTargeting, filterRecipientProfileIdsForAdmin, type NotificationAuth } from '@/lib/rbac/notification-targeting';
+import { normalizeBroadcastIncomingRequest } from '@/lib/broadcast-api-request';
 
 export const runtime = 'nodejs';
 
@@ -32,17 +42,41 @@ function json(body: unknown, status = 200) {
  * Admin broadcast: preview (counts) or send via Expo Push API (expo-server-sdk).
  * Tokens come from `public.push_tokens` (Expo tokens from the mobile app — not profiles.expo_push_token).
  *
- * Optional **`event_id`** (UUID): when `data.type` is **`"event_campaign"`**, it is required and is stored on
- * `notification_broadcasts.event_id` and copied into push **`data.event_id`**. For any other `data.type` (including
- * omitted), `event_id` is not persisted and `data.event_id` is stripped from the outbound payload.
+ * **Request body (v2, preferred):**
+ * ```json
+ * {
+ *   "title": "...",
+ *   "message": "...",
+ *   "broadcast_mode": "event" | "global",
+ *   "event_id": "<uuid> | null",
+ *   "audience_filters": { "all_workers": true, "party": null, "state": null, ... },
+ *   "preview_only": false,
+ *   "image_url": null,
+ *   "filter_labels": {},
+ *   "target_user_ids": []
+ * }
+ * ```
+ * - **`broadcast_mode === "event"`** → `event_id` **required** (valid UUID). Maps to `data.type: "event_campaign"`.
+ * - **`broadcast_mode === "global"`** → `event_id` **must be null or omitted**. Maps to `data.type: "broadcast"`.
+ *
+ * Legacy **`BroadcastPayload`** (`body`, `filters`, `data.type`, …) is still accepted for older clients.
+ *
+ * **Persistence & push:** On successful send, `event_id` is stored on **`notification_broadcasts.event_id`**
+ * and included in each Expo message’s **`data.event_id`** when present.
  */
 export async function POST(request: Request) {
-  let payload: BroadcastPayload;
+  let raw: unknown;
   try {
-    payload = (await request.json()) as BroadcastPayload;
+    raw = await request.json();
   } catch {
     return json({ error: 'Invalid JSON body' }, 400);
   }
+
+  const norm = normalizeBroadcastIncomingRequest(raw);
+  if (!norm.ok) return json({ error: norm.error }, norm.status ?? 400);
+  let payload = norm.payload;
+
+  payload = stripEventIdUnlessEventCampaign(payload);
 
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
@@ -68,6 +102,8 @@ export async function POST(request: Request) {
     payload = { ...payload, event_id: normalized };
   }
 
+  const lockedEventCampaignId = snapshotEventCampaignEventIdForAttribution(payload);
+
   const admin = createServiceRoleClient();
   if (!admin) {
     return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
@@ -90,6 +126,8 @@ export async function POST(request: Request) {
       payload = { ...payload, target_user_ids: filtered.ids, all_workers: false };
     }
 
+    payload = remergeLockedEventCampaignAttribution(payload, lockedEventCampaignId);
+
     {
       const mutationUser: UnifiedUser = {
         id: auth.user.id,
@@ -107,9 +145,17 @@ export async function POST(request: Request) {
       if (!decision.ok) return json({ error: decision.reason }, 403);
     }
 
+    const integrity = resolveBroadcastEventIdForIntegrity(payload);
+    if (!integrity.ok) {
+      return json({ error: integrity.error }, 400);
+    }
+
     const result = await runBroadcast(admin, expo, payload);
     if (!result.ok) {
-      const status = result.error.includes('required') ? 400 : 500;
+      const clientErr =
+        result.error === BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG ||
+        /required|please select an event|invalid event_id|title and body are required/i.test(result.error);
+      const status = clientErr ? 400 : 500;
       return json(
         {
           error: result.error,

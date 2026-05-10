@@ -35,6 +35,33 @@ describe('notification targeting canonicalization', () => {
     expect(payload.all_workers).toBe(false);
   });
 
+  it('preserves event_campaign event_id across moderator audience canonicalization', () => {
+    const eventId = '11111111-1111-4111-8111-111111111111';
+    const payload = applyCanonicalNotificationTargeting(
+      {
+        user: { id: 'u1' },
+        role: 'moderator',
+        assigned_state_ids: [11, 12],
+        assigned_group_ids: [],
+      },
+      {
+        title: 't',
+        body: 'b',
+        all_workers: true,
+        event_id: eventId,
+        data: { type: 'event_campaign', foo: 1 },
+        filters: { state: 'Karnataka' },
+      },
+      'notifications.scope.validate'
+    );
+
+    expect(payload.event_id).toBe(eventId);
+    expect((payload.data as any)?.type).toBe('event_campaign');
+    expect((payload.data as any)?.foo).toBe(1);
+    expect(payload.all_workers).toBe(false);
+    expect((payload.filters as any)?.assigned_state_ids).toEqual([11, 12]);
+  });
+
   it('denies malformed campaign manager assignments', () => {
     expect(() =>
       applyCanonicalNotificationTargeting(

@@ -72,7 +72,7 @@ function resolveLegacyNotifyEventAttribution(body: RequestBody):
     if (parsedTopLevel == null) {
       return {
         ok: false,
-        error: 'event_id is required and must be a valid UUID when data.type is "event_campaign"',
+        error: 'Please select an event for event campaign',
       };
     }
     delete sanitizedData.event_id;

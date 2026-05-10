@@ -36,12 +36,15 @@ export type BroadcastPayload = {
    * Skips geographic `filters` expansion (still subject to `/api/notifications/send` scope checks).
    */
   target_user_ids?: string[] | null;
-  /** Optional `public.events.id` (top-level UUID). Required when `data.type` is `"event_campaign"`; ignored (stored as NULL) for other types. */
+  /** Optional `public.events.id` (top-level UUID). Required when `data.type` is `"event_campaign"` (event broadcast mode); omitted for global broadcasts. Stored on `notification_broadcasts` and copied into push `data.event_id` when present. */
   event_id?: string | null;
 };
 
 /** Push `data.type` value that requires a persisted `notification_broadcasts.event_id`. */
 export const NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN = 'event_campaign' as const;
+
+/** Admin UI + API when `data.type` is `event_campaign` but `event_id` is missing or invalid. */
+export const BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG = 'Please select an event for event campaign';
 
 /** Optional campaign/event linkage (validated UUID or null). */
 export function optionalEventIdFromPayload(payload: BroadcastPayload): string | null {
@@ -52,6 +55,50 @@ export function optionalEventIdFromPayload(payload: BroadcastPayload): string | 
   const EVENT_ID_UUID_RE =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return EVENT_ID_UUID_RE.test(s) ? s : null;
+}
+
+/** Forces top-level `event_id` to null whenever `data.type` is not `event_campaign` (global / other broadcasts). */
+export function stripEventIdUnlessEventCampaign(payload: BroadcastPayload): BroadcastPayload {
+  const raw = payload.data;
+  const notificationType =
+    raw != null && typeof raw === 'object' && !Array.isArray(raw)
+      ? String((raw as Record<string, unknown>).type ?? '').trim()
+      : '';
+  if (notificationType === NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN) {
+    return payload;
+  }
+  return { ...payload, event_id: null };
+}
+
+/** UUID for `event_campaign` before audience targeting runs (independent of `filters`). */
+export function snapshotEventCampaignEventIdForAttribution(payload: BroadcastPayload): string | null {
+  const raw = payload.data;
+  const notificationType =
+    raw != null && typeof raw === 'object' && !Array.isArray(raw)
+      ? String((raw as Record<string, unknown>).type ?? '').trim()
+      : '';
+  if (notificationType !== NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN) return null;
+  return optionalEventIdFromPayload(payload);
+}
+
+/**
+ * Re-applies top-level `event_id` and `data.type` after audience/RBAC reshaping.
+ * Event campaign linkage must not depend on filter shape (`all_workers`, geo, groups, explicit ids).
+ */
+export function remergeLockedEventCampaignAttribution(
+  payload: BroadcastPayload,
+  lockedEventId: string | null
+): BroadcastPayload {
+  if (lockedEventId == null) return payload;
+  const baseData =
+    payload.data != null && typeof payload.data === 'object' && !Array.isArray(payload.data)
+      ? { ...(payload.data as Record<string, unknown>) }
+      : {};
+  return {
+    ...payload,
+    event_id: lockedEventId,
+    data: { ...baseData, type: NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN },
+  };
 }
 
 export type BroadcastEventAttribution =
@@ -77,7 +124,7 @@ export function resolveBroadcastEventIdForIntegrity(payload: BroadcastPayload): 
     if (parsedTopLevel == null) {
       return {
         ok: false,
-        error: 'event_id is required and must be a valid UUID when data.type is "event_campaign"',
+        error: BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG,
       };
     }
     delete sanitizedData.event_id;
@@ -229,6 +276,7 @@ export async function runBroadcast(
       ? explicitTargets
       : await fetchFilteredProfileIds(admin, allWorkers, filters);
 
+  // `event_id` for event_campaign is resolved from the payload only — never from geographic/group filters.
   const attribution = resolveBroadcastEventIdForIntegrity(payload);
   if (!attribution.ok) {
     return { ok: false, error: attribution.error };

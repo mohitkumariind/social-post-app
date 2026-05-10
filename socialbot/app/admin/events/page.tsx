@@ -1147,9 +1147,13 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: 'Naya Graphic Aaya!',
-          body: targetCategory,
+          message: targetCategory,
+          broadcast_mode: 'global',
+          event_id: null,
+          audience_filters: {
+            all_workers: true,
+          },
           data: { id: String(editingEvent.id) },
-          all_workers: true,
         }),
       });
       const payload = (await res.json()) as { error?: string };
