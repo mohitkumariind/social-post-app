@@ -105,6 +105,16 @@ const en = {
   save_all_changes: "Save All Changes",
   profile_updated_title: "Success",
   profile_updated_message: "Profile Updated!",
+  leaderboard_state_heading: "Top Social Media Performer For State",
+  leaderboard_national_heading: "National Top Social Media Warrior",
+  leaderboard_points_suffix: "Points",
+  leaderboard_total_points: "Total Points",
+  leaderboard_rank: "Rank",
+  leaderboard_empty_state: "No rankings yet in your state for your party. Save or share graphics to earn Points!",
+  leaderboard_empty_national: "No national party rankings yet.",
+  leaderboard_error: "Could not load leaderboard.",
+  leaderboard_loading: "Loading rankings...",
+  leaderboard_retry: "Retry",
 };
 
 const hi = {
