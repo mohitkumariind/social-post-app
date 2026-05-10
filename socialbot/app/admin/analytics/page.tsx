@@ -1,7 +1,7 @@
 'use client';
 
-import { Download, LineChart, Loader2, Send } from 'lucide-react';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Download, LineChart, Loader2, Send, X } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
 
 type KpisResponse = {
   all_time: { total_points: number };
@@ -14,29 +14,27 @@ type KpisResponse = {
   };
 };
 
-type EventRow = {
+type CiEventRow = {
   event_id: string;
-  download_count: number;
   title: string;
+  downloads: number;
+  sent: number;
+  delivered: number;
+  opened: number;
+  not_downloaded: number;
+  open_rate: number | null;
 };
 
-type EventsPageResponse = {
-  rows: EventRow[];
-  pagination: { total: number; offset: number; limit: number };
-};
-
-type NotDlUser = {
-  profile_id: string;
+type DrillUser = {
+  user_id: string;
   name: string | null;
   phone: string | null;
+  state: string;
+  group: string;
+  last_active: string | null;
 };
 
-type NotDlPageResponse = {
-  rows: NotDlUser[];
-  pagination: { total: number; offset: number; limit: number };
-};
-
-const EVENTS_PAGE_SIZE = 50;
+const CI_PAGE_SIZE = 50;
 const USERS_PAGE_SIZE = 50;
 
 function fmtInputDate(d: Date): string {
@@ -53,6 +51,18 @@ function num(n: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(n);
 }
 
+function fmtOpenRatePct(rate: number | null | undefined): string {
+  if (rate == null || Number.isNaN(Number(rate))) return '—';
+  return `${(Number(rate) * 100).toFixed(1)}%`;
+}
+
+function fmtLastActive(iso: string | null | undefined): string {
+  if (iso == null || String(iso).trim() === '') return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+}
+
 export default function AdminAnalyticsPage() {
   const [kpis, setKpis] = useState<KpisResponse | null>(null);
   const [kpisLoading, setKpisLoading] = useState(true);
@@ -62,22 +72,28 @@ export default function AdminAnalyticsPage() {
   const [dateTo, setDateTo] = useState(() => fmtInputDate(new Date()));
   const [monthPick, setMonthPick] = useState(() => String(new Date().getUTCMonth() + 1).padStart(2, '0'));
   const [yearPick, setYearPick] = useState(() => String(new Date().getUTCFullYear()));
+  /** Draft search in the filter bar; applied to campaign API only after Apply (avoids N+1 requests while typing). */
   const [filterSearch, setFilterSearch] = useState('');
+  /** Last-applied event search sent to `/campaign-intelligence` (server-side only). */
+  const [ciSearchApplied, setCiSearchApplied] = useState('');
 
-  const [events, setEvents] = useState<EventRow[]>([]);
-  const [eventsTotal, setEventsTotal] = useState(0);
-  const [eventsOffset, setEventsOffset] = useState(0);
-  const [eventsLoading, setEventsLoading] = useState(false);
-  const [eventsError, setEventsError] = useState<string | null>(null);
+  const [ciEvents, setCiEvents] = useState<CiEventRow[]>([]);
+  const [ciTotal, setCiTotal] = useState(0);
+  const [ciOffset, setCiOffset] = useState(0);
+  const [ciLoading, setCiLoading] = useState(false);
+  const [ciError, setCiError] = useState<string | null>(null);
 
-  const [notDlByEvent, setNotDlByEvent] = useState<Record<string, number | null>>({});
-
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [users, setUsers] = useState<NotDlUser[]>([]);
-  const [usersTotal, setUsersTotal] = useState(0);
-  const [usersOffset, setUsersOffset] = useState(0);
-  const [usersLoading, setUsersLoading] = useState(false);
-  const [usersError, setUsersError] = useState<string | null>(null);
+  const [drillOpen, setDrillOpen] = useState(false);
+  const [drillEventId, setDrillEventId] = useState<string | null>(null);
+  const [drillEventTitle, setDrillEventTitle] = useState('');
+  const [drillQuery, setDrillQuery] = useState('');
+  const [drillQuerySent, setDrillQuerySent] = useState('');
+  const [drillUsers, setDrillUsers] = useState<DrillUser[]>([]);
+  const [drillTotal, setDrillTotal] = useState(0);
+  const [drillOffset, setDrillOffset] = useState(0);
+  const [drillNonce, setDrillNonce] = useState(0);
+  const [drillLoading, setDrillLoading] = useState(false);
+  const [drillError, setDrillError] = useState<string | null>(null);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -115,114 +131,114 @@ export default function AdminAnalyticsPage() {
     }
   }, [dateFrom, dateTo]);
 
-  const loadEvents = useCallback(
+  const loadCi = useCallback(
     async (offset: number) => {
-      setEventsLoading(true);
-      setEventsError(null);
+      setCiLoading(true);
+      setCiError(null);
       try {
         const sp = new URLSearchParams();
+        sp.set('date_from', new Date(`${dateFrom}T00:00:00.000Z`).toISOString());
+        sp.set('date_to', new Date(`${dateTo}T23:59:59.999Z`).toISOString());
         sp.set('offset', String(offset));
-        sp.set('limit', String(EVENTS_PAGE_SIZE));
-        if (filterSearch.trim()) sp.set('search', filterSearch.trim());
-        const res = await fetch(`/api/admin/analytics/events?${sp}`, { credentials: 'same-origin' });
-        const d = (await res.json().catch(() => ({}))) as { error?: string } & Partial<EventsPageResponse>;
-        if (!res.ok) throw new Error(d?.error || 'Failed to load events');
-        setEvents(Array.isArray(d.rows) ? d.rows : []);
-        const p = d.pagination;
-        setEventsTotal(Number(p?.total ?? 0));
-        setEventsOffset(Number(p?.offset ?? offset));
+        sp.set('limit', String(CI_PAGE_SIZE));
+        if (ciSearchApplied.trim()) sp.set('search', ciSearchApplied.trim());
+        const res = await fetch(`/api/admin/analytics/campaign-intelligence?${sp}`, { credentials: 'same-origin' });
+        const d = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          events?: CiEventRow[];
+          total?: number;
+        };
+        if (!res.ok) throw new Error(d?.error || 'Failed to load campaign intelligence');
+        setCiEvents(Array.isArray(d.events) ? d.events : []);
+        setCiTotal(Number(d.total ?? 0));
+        setCiOffset(offset);
       } catch (e) {
-        setEventsError(e instanceof Error ? e.message : 'Failed to load events');
-        setEvents([]);
-        setEventsTotal(0);
+        setCiError(e instanceof Error ? e.message : 'Failed to load campaign intelligence');
+        setCiEvents([]);
+        setCiTotal(0);
       } finally {
-        setEventsLoading(false);
+        setCiLoading(false);
       }
     },
-    [filterSearch]
+    [dateFrom, dateTo, ciSearchApplied]
   );
-
-  const fetchNotDlTotal = useCallback(async (eventId: string): Promise<number> => {
-    const sp = new URLSearchParams();
-    sp.set('event_id', eventId);
-    sp.set('offset', '0');
-    sp.set('limit', '1');
-    const res = await fetch(`/api/admin/analytics/users/not-downloaded?${sp}`, { credentials: 'same-origin' });
-    const d = (await res.json().catch(() => ({}))) as { error?: string; pagination?: { total: number } };
-    if (!res.ok) return 0;
-    return Number(d.pagination?.total ?? 0);
-  }, []);
 
   useEffect(() => {
     void loadKpis();
   }, [loadKpis]);
 
   useEffect(() => {
-    void loadEvents(0);
-  }, [loadEvents]);
+    void loadCi(0);
+  }, [dateFrom, dateTo, ciSearchApplied, loadCi]);
 
   useEffect(() => {
-    if (events.length === 0) {
-      setNotDlByEvent({});
+    if (!drillOpen || !drillEventId) {
+      setDrillUsers([]);
+      setDrillTotal(0);
+      setDrillLoading(false);
       return;
     }
     let cancelled = false;
-    const ids = events.map((e) => e.event_id);
-    setNotDlByEvent((prev) => {
-      const o = { ...prev };
-      for (const id of ids) o[id] = null;
-      return o;
-    });
-    void (async () => {
-      for (const r of events) {
+    const run = async () => {
+      setDrillLoading(true);
+      setDrillError(null);
+      try {
+        const sp = new URLSearchParams();
+        sp.set('event_id', drillEventId);
+        sp.set('offset', String(drillOffset));
+        sp.set('limit', String(USERS_PAGE_SIZE));
+        if (drillQuerySent.trim()) sp.set('search', drillQuerySent.trim());
+        const res = await fetch(`/api/admin/analytics/event-users/not-downloaded?${sp}`, { credentials: 'same-origin' });
+        const d = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          users?: DrillUser[];
+          total?: number;
+          offset?: number;
+        };
         if (cancelled) return;
-        const t = await fetchNotDlTotal(r.event_id);
-        if (cancelled) return;
-        setNotDlByEvent((prev) => ({ ...prev, [r.event_id]: t }));
+        if (!res.ok) throw new Error(d?.error || 'Failed to load users');
+        setDrillUsers(Array.isArray(d.users) ? d.users : []);
+        setDrillTotal(Number(d.total ?? 0));
+        if (d.offset != null) setDrillOffset(Number(d.offset));
+      } catch (e) {
+        if (!cancelled) {
+          setDrillError(e instanceof Error ? e.message : 'Failed to load users');
+          setDrillUsers([]);
+          setDrillTotal(0);
+        }
+      } finally {
+        if (!cancelled) setDrillLoading(false);
       }
-    })();
+    };
+    void run();
     return () => {
       cancelled = true;
     };
-  }, [events, fetchNotDlTotal]);
+  }, [drillOpen, drillEventId, drillOffset, drillQuerySent, drillNonce]);
 
-  const loadUsers = useCallback(
-    async (eventId: string, offset: number) => {
-      setUsersLoading(true);
-      setUsersError(null);
-      try {
-        const sp = new URLSearchParams();
-        sp.set('event_id', eventId);
-        sp.set('offset', String(offset));
-        sp.set('limit', String(USERS_PAGE_SIZE));
-        if (filterSearch.trim()) sp.set('search', filterSearch.trim());
-        const res = await fetch(`/api/admin/analytics/users/not-downloaded?${sp}`, { credentials: 'same-origin' });
-        const d = (await res.json().catch(() => ({}))) as { error?: string } & Partial<NotDlPageResponse>;
-        if (!res.ok) throw new Error(d?.error || 'Failed to load users');
-        setUsers(Array.isArray(d.rows) ? d.rows : []);
-        const p = d.pagination;
-        setUsersTotal(Number(p?.total ?? 0));
-        setUsersOffset(Number(p?.offset ?? offset));
-      } catch (e) {
-        setUsersError(e instanceof Error ? e.message : 'Failed to load users');
-        setUsers([]);
-        setUsersTotal(0);
-      } finally {
-        setUsersLoading(false);
-      }
-    },
-    [filterSearch]
-  );
-
-  useEffect(() => {
+  const openDrill = (row: CiEventRow) => {
+    setDrillEventId(row.event_id);
+    setDrillEventTitle(row.title);
+    setDrillQuery('');
+    setDrillQuerySent('');
+    setDrillOffset(0);
     setSelectedIds(new Set());
-    if (!selectedEventId) {
-      setUsers([]);
-      setUsersTotal(0);
-      return;
-    }
-    void loadUsers(selectedEventId, 0);
-  }, [selectedEventId, loadUsers]);
+    setDrillError(null);
+    setDrillOpen(true);
+  };
+
+  const closeDrill = () => {
+    setDrillOpen(false);
+    setDrillEventId(null);
+    setDrillEventTitle('');
+    setDrillQuery('');
+    setDrillQuerySent('');
+    setDrillOffset(0);
+    setSelectedIds(new Set());
+    setDrillUsers([]);
+    setDrillTotal(0);
+    setDrillError(null);
+  };
 
   const onApplyMonth = () => {
     const m = Number(monthPick);
@@ -234,29 +250,23 @@ export default function AdminAnalyticsPage() {
   };
 
   const onApplyFilters = () => {
+    setCiSearchApplied(filterSearch.trim());
     void loadKpis();
-    void loadEvents(0);
-    if (selectedEventId) void loadUsers(selectedEventId, 0);
   };
 
-  const maxDownloadsOnPage = useMemo(() => {
-    if (events.length === 0) return 1;
-    return Math.max(1, ...events.map((e) => e.download_count));
-  }, [events]);
-
-  const allPageSelected =
-    users.length > 0 && users.every((u) => selectedIds.has(u.profile_id));
-  const toggleSelectAllPage = () => {
-    if (allPageSelected) {
+  const allDrillPageSelected =
+    drillUsers.length > 0 && drillUsers.every((u) => selectedIds.has(u.user_id));
+  const toggleSelectAllDrillPage = () => {
+    if (allDrillPageSelected) {
       setSelectedIds((prev) => {
         const n = new Set(prev);
-        for (const u of users) n.delete(u.profile_id);
+        for (const u of drillUsers) n.delete(u.user_id);
         return n;
       });
     } else {
       setSelectedIds((prev) => {
         const n = new Set(prev);
-        for (const u of users) n.add(u.profile_id);
+        for (const u of drillUsers) n.add(u.user_id);
         return n;
       });
     }
@@ -271,13 +281,13 @@ export default function AdminAnalyticsPage() {
     });
   };
 
-  const downloadExport = async (kind: 'kpis' | 'events' | 'not_downloaded') => {
+  const downloadExport = async (kind: 'kpis' | 'not_downloaded') => {
     const sp = new URLSearchParams();
     sp.set('kind', kind);
     sp.set('date_from', new Date(`${dateFrom}T00:00:00.000Z`).toISOString());
     sp.set('date_to', new Date(`${dateTo}T23:59:59.999Z`).toISOString());
     if (filterSearch.trim()) sp.set('search', filterSearch.trim());
-    if (kind === 'not_downloaded' && selectedEventId) sp.set('event_id', selectedEventId);
+    if (kind === 'not_downloaded' && drillEventId) sp.set('event_id', drillEventId);
     const res = await fetch(`/api/admin/analytics/export?${sp}`, { credentials: 'same-origin' });
     if (!res.ok) {
       const j = (await res.json().catch(() => ({}))) as { error?: string };
@@ -316,7 +326,7 @@ export default function AdminAnalyticsPage() {
           title,
           body,
           target_user_ids: Array.from(selectedIds),
-          ...(selectedEventId ? { event_id: selectedEventId } : {}),
+          ...(drillEventId ? { event_id: drillEventId } : {}),
         }),
       });
       const d = (await res.json().catch(() => ({}))) as { error?: string; ok?: boolean; target_user_count?: number };
@@ -326,8 +336,8 @@ export default function AdminAnalyticsPage() {
       setNotifyTitle('');
       setNotifyBody('');
       setSelectedIds(new Set());
-      if (selectedEventId) void loadUsers(selectedEventId, usersOffset);
-      void loadEvents(eventsOffset);
+      void loadCi(ciOffset);
+      if (drillOpen && drillEventId) setDrillNonce((n) => n + 1);
     } catch (e) {
       setNotifyErr(e instanceof Error ? e.message : 'Send failed');
     } finally {
@@ -355,14 +365,6 @@ export default function AdminAnalyticsPage() {
           >
             <Download className="h-3.5 w-3.5" />
             Export KPIs
-          </button>
-          <button
-            type="button"
-            onClick={() => void downloadExport('events')}
-            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800"
-          >
-            <Download className="h-3.5 w-3.5" />
-            Export events
           </button>
         </div>
       </div>
@@ -460,12 +462,12 @@ export default function AdminAnalyticsPage() {
             </button>
           </div>
           <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-xs font-medium text-zinc-400">
-            Search (event title / name / phone)
+            Search events (title / name)
             <input
               value={filterSearch}
               onChange={(e) => setFilterSearch(e.target.value)}
               className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-sm text-white"
-              placeholder="Filter…"
+              placeholder="Applied to campaign table on Apply…"
             />
           </label>
           <button
@@ -478,113 +480,148 @@ export default function AdminAnalyticsPage() {
         </div>
       </section>
 
-      <div className="grid gap-8 lg:grid-cols-5">
-        {/* Events */}
-        <section className="lg:col-span-3">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Event performance</h2>
-            {eventsLoading ? <Loader2 className="h-4 w-4 animate-spin text-zinc-500" /> : null}
+      {/* Campaign Intelligence */}
+      <section>
+        <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Campaign Intelligence</h2>
+            <p className="mt-0.5 text-xs text-zinc-600">
+              Events and metrics are scoped by your role on the server (admin / moderator / campaign manager). Click a
+              row to drill into users who have not downloaded that event.
+            </p>
           </div>
-          {eventsError ? <div className="text-sm text-red-400">{eventsError}</div> : null}
-          <div className="overflow-hidden rounded-lg border border-zinc-800">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-zinc-800 bg-zinc-900/80 text-xs uppercase text-zinc-500">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Event</th>
-                  <th className="px-3 py-2 font-medium tabular-nums">Downloads</th>
-                  <th className="px-3 py-2 font-medium tabular-nums">Not DL</th>
-                  <th className="min-w-[120px] px-3 py-2 font-medium">Activity</th>
+          {ciLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-zinc-500" /> : null}
+        </div>
+        {ciError ? <div className="mb-2 text-sm text-red-400">{ciError}</div> : null}
+        <div className="overflow-x-auto overflow-hidden rounded-lg border border-zinc-800">
+          <table className="w-full min-w-[880px] text-left text-sm">
+            <thead className="border-b border-zinc-800 bg-zinc-900/80 text-xs uppercase text-zinc-500">
+              <tr>
+                <th className="px-3 py-2 font-medium">Event</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Downloads</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Sent</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Delivered</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Opened</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Not DL</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Open rate</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/80">
+              {ciEvents.map((row) => (
+                <tr
+                  key={row.event_id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openDrill(row)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      openDrill(row);
+                    }
+                  }}
+                  className="cursor-pointer transition-colors hover:bg-zinc-900/50"
+                >
+                  <td className="max-w-[220px] truncate px-3 py-2.5 text-zinc-200" title={row.title}>
+                    {row.title}
+                  </td>
+                  <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.downloads)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.sent)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.delivered)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.opened)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-zinc-400">{num(row.not_downloaded)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-zinc-400">{fmtOpenRatePct(row.open_rate)}</td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800/80">
-                {events.map((row) => {
-                  const notDl = notDlByEvent[row.event_id];
-                  const denom = row.download_count + (typeof notDl === 'number' ? notDl : 0);
-                  const pct = denom > 0 ? Math.round((row.download_count / denom) * 100) : 0;
-                  const rel = Math.round((row.download_count / maxDownloadsOnPage) * 100);
-                  return (
-                    <tr
-                      key={row.event_id}
-                      className={`cursor-pointer transition-colors hover:bg-zinc-900/50 ${
-                        selectedEventId === row.event_id ? 'bg-zinc-800/40 ring-1 ring-inset ring-zinc-600' : ''
-                      }`}
-                      onClick={() => setSelectedEventId(row.event_id)}
-                    >
-                      <td className="max-w-[220px] truncate px-3 py-2.5 text-zinc-200" title={row.title}>
-                        {row.title}
-                      </td>
-                      <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.download_count)}</td>
-                      <td className="px-3 py-2.5 tabular-nums text-zinc-400">
-                        {notDl === null ? '…' : num(notDl ?? 0)}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <div className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-800">
-                            <div
-                              className="h-full rounded-full bg-zinc-400"
-                              style={{ width: `${rel}%` }}
-                              title={`${pct}% reached (downloads / downloads + not downloaded)`}
-                            />
-                          </div>
-                          <span className="w-8 text-right text-[10px] tabular-nums text-zinc-500">{pct}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {events.length === 0 && !eventsLoading ? (
-                  <tr>
-                    <td colSpan={4} className="px-3 py-8 text-center text-zinc-500">
-                      No events in scope.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+              ))}
+              {ciEvents.length === 0 && !ciLoading ? (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-zinc-500">
+                    No events in scope.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-3 flex items-center justify-between text-xs text-zinc-500">
+          <span>
+            {ciTotal > 0 ? (
+              <>
+                Showing {ciOffset + 1}–{Math.min(ciOffset + ciEvents.length, ciTotal)} of {ciTotal}
+              </>
+            ) : (
+              'No rows'
+            )}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={ciOffset <= 0 || ciLoading}
+              onClick={() => void loadCi(Math.max(0, ciOffset - CI_PAGE_SIZE))}
+              className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              disabled={ciOffset + ciEvents.length >= ciTotal || ciLoading}
+              onClick={() => void loadCi(ciOffset + CI_PAGE_SIZE)}
+              className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              Next
+            </button>
           </div>
-          <div className="mt-3 flex items-center justify-between text-xs text-zinc-500">
-            <span>
-              {eventsTotal > 0 ? (
-                <>
-                  Showing {eventsOffset + 1}–{Math.min(eventsOffset + events.length, eventsTotal)} of {eventsTotal}
-                </>
-              ) : (
-                'No rows'
-              )}
-            </span>
-            <div className="flex gap-2">
+        </div>
+      </section>
+
+      {/* Drilldown: not downloaded users */}
+      {drillOpen && drillEventId ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div
+            className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="drill-title"
+          >
+            <div className="flex shrink-0 items-start justify-between gap-2 border-b border-zinc-800 p-4">
+              <div className="min-w-0">
+                <h3 id="drill-title" className="text-lg font-semibold text-white">
+                  Not downloaded
+                </h3>
+                <p className="mt-0.5 truncate text-sm text-zinc-400" title={drillEventTitle}>
+                  {drillEventTitle}
+                </p>
+              </div>
               <button
                 type="button"
-                disabled={eventsOffset <= 0 || eventsLoading}
-                onClick={() => void loadEvents(Math.max(0, eventsOffset - EVENTS_PAGE_SIZE))}
-                className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                onClick={() => closeDrill()}
+                className="rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                aria-label="Close"
               >
-                Previous
-              </button>
-              <button
-                type="button"
-                disabled={eventsOffset + events.length >= eventsTotal || eventsLoading}
-                onClick={() => void loadEvents(eventsOffset + EVENTS_PAGE_SIZE)}
-                className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
-              >
-                Next
+                <X className="h-5 w-5" />
               </button>
             </div>
-          </div>
-        </section>
-
-        {/* Users */}
-        <section className="lg:col-span-2">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Not downloaded</h2>
-            {usersLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-zinc-500" /> : null}
-          </div>
-          {!selectedEventId ? (
-            <p className="text-sm text-zinc-500">Select an event to list users who have not downloaded its posts.</p>
-          ) : (
-            <>
-              {usersError ? <div className="mb-2 text-sm text-red-400">{usersError}</div> : null}
-              <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="shrink-0 space-y-2 border-b border-zinc-800 p-4">
+              {drillError ? <div className="text-sm text-red-400">{drillError}</div> : null}
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="flex min-w-[160px] flex-1 flex-col gap-1 text-xs font-medium text-zinc-400">
+                  Search users (server-side)
+                  <input
+                    value={drillQuery}
+                    onChange={(e) => setDrillQuery(e.target.value)}
+                    className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-sm text-white"
+                    placeholder="Name / id…"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDrillOffset(0);
+                    setDrillQuerySent(drillQuery.trim());
+                  }}
+                  className="rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700"
+                >
+                  Apply search
+                </button>
                 <button
                   type="button"
                   disabled={selectedIds.size === 0}
@@ -592,100 +629,108 @@ export default function AdminAnalyticsPage() {
                   className="inline-flex items-center gap-1.5 rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Send className="h-3.5 w-3.5" />
-                  Send notification to selected ({selectedIds.size})
+                  Notify selected ({selectedIds.size})
                 </button>
-                {selectedEventId ? (
-                  <button
-                    type="button"
-                    onClick={() => void downloadExport('not_downloaded')}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    Export list
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void downloadExport('not_downloaded')}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Export CSV
+                </button>
               </div>
-              <div className="overflow-hidden rounded-lg border border-zinc-800">
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto p-4 pt-0">
+              {drillLoading ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
+                </div>
+              ) : (
                 <table className="w-full text-left text-sm">
-                  <thead className="border-b border-zinc-800 bg-zinc-900/80 text-xs uppercase text-zinc-500">
+                  <thead className="sticky top-0 border-b border-zinc-800 bg-zinc-900/95 text-xs uppercase text-zinc-500">
                     <tr>
-                      <th className="w-10 px-2 py-2">
+                      <th className="w-10 py-2 pr-2">
                         <input
                           type="checkbox"
-                          checked={allPageSelected}
-                          onChange={toggleSelectAllPage}
+                          checked={allDrillPageSelected}
+                          onChange={toggleSelectAllDrillPage}
                           className="rounded border-zinc-600 bg-zinc-900"
                           aria-label="Select all on page"
                         />
                       </th>
-                      <th className="px-2 py-2 font-medium">Name</th>
-                      <th className="px-2 py-2 font-medium">Phone</th>
+                      <th className="py-2 pr-2 font-medium">Name</th>
+                      <th className="py-2 pr-2 font-medium">Phone</th>
+                      <th className="py-2 pr-2 font-medium">State</th>
+                      <th className="py-2 pr-2 font-medium">Group</th>
+                      <th className="py-2 font-medium">Last active</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/80">
-                    {users.map((u) => (
-                      <tr key={u.profile_id} className="hover:bg-zinc-900/40">
-                        <td className="px-2 py-2">
+                    {drillUsers.map((u) => (
+                      <tr key={u.user_id} className="hover:bg-zinc-900/40">
+                        <td className="py-2 pr-2">
                           <input
                             type="checkbox"
-                            checked={selectedIds.has(u.profile_id)}
-                            onChange={() => toggleRow(u.profile_id)}
+                            checked={selectedIds.has(u.user_id)}
+                            onChange={() => toggleRow(u.user_id)}
                             className="rounded border-zinc-600 bg-zinc-900"
-                            aria-label={`Select ${u.name ?? u.profile_id}`}
+                            aria-label={`Select ${u.name ?? u.user_id}`}
                           />
                         </td>
-                        <td className="max-w-[120px] truncate px-2 py-2 text-zinc-200">{u.name ?? '—'}</td>
-                        <td className="truncate px-2 py-2 text-zinc-400">{u.phone ?? '—'}</td>
+                        <td className="max-w-[140px] truncate py-2 pr-2 text-zinc-200">{u.name ?? '—'}</td>
+                        <td className="max-w-[120px] truncate py-2 pr-2 text-zinc-400">{u.phone ?? '—'}</td>
+                        <td className="max-w-[100px] truncate py-2 pr-2 text-zinc-400">{u.state || '—'}</td>
+                        <td className="max-w-[120px] truncate py-2 pr-2 text-zinc-400">{u.group || '—'}</td>
+                        <td className="whitespace-nowrap py-2 text-zinc-500">{fmtLastActive(u.last_active)}</td>
                       </tr>
                     ))}
-                    {users.length === 0 && !usersLoading ? (
+                    {drillUsers.length === 0 && !drillLoading ? (
                       <tr>
-                        <td colSpan={3} className="px-2 py-6 text-center text-zinc-500">
+                        <td colSpan={6} className="py-8 text-center text-zinc-500">
                           No matching users.
                         </td>
                       </tr>
                     ) : null}
                   </tbody>
                 </table>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center justify-between border-t border-zinc-800 p-4 text-xs text-zinc-500">
+              <span>
+                {drillTotal > 0 ? (
+                  <>
+                    {drillOffset + 1}–{Math.min(drillOffset + drillUsers.length, drillTotal)} of {drillTotal}
+                  </>
+                ) : (
+                  '—'
+                )}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={drillOffset <= 0 || drillLoading}
+                  onClick={() => setDrillOffset(Math.max(0, drillOffset - USERS_PAGE_SIZE))}
+                  className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                >
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  disabled={drillOffset + drillUsers.length >= drillTotal || drillLoading}
+                  onClick={() => setDrillOffset(drillOffset + USERS_PAGE_SIZE)}
+                  className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                >
+                  Next
+                </button>
               </div>
-              <div className="mt-3 flex items-center justify-between text-xs text-zinc-500">
-                <span>
-                  {usersTotal > 0 ? (
-                    <>
-                      {usersOffset + 1}–{Math.min(usersOffset + users.length, usersTotal)} of {usersTotal}
-                    </>
-                  ) : (
-                    '—'
-                  )}
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={usersOffset <= 0 || usersLoading}
-                    onClick={() => selectedEventId && void loadUsers(selectedEventId, Math.max(0, usersOffset - USERS_PAGE_SIZE))}
-                    className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
-                  >
-                    Prev
-                  </button>
-                  <button
-                    type="button"
-                    disabled={usersOffset + users.length >= usersTotal || usersLoading}
-                    onClick={() =>
-                      selectedEventId && void loadUsers(selectedEventId, usersOffset + USERS_PAGE_SIZE)
-                    }
-                    className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </section>
-      </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {notifyOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-md rounded-lg border border-zinc-700 bg-zinc-900 p-4 shadow-xl">
             <h3 className="text-lg font-semibold text-white">Send push notification</h3>
             <p className="mt-1 text-xs text-zinc-500">{selectedIds.size} recipient(s) in scope.</p>

@@ -93,6 +93,21 @@ export function scopeDeniesAllRows(scope: AdminAnalyticsScope): boolean {
   return scope.malformed || scope.profileGroupIds.length === 0 || !UUID_RE.test(scope.viewerId);
 }
 
+/**
+ * Stable, non-secret fingerprint for server-side cache keys (e.g. Campaign Intelligence metrics).
+ * Must change when {@link AdminAnalyticsScope} semantics change for the same role.
+ */
+export function adminAnalyticsScopeCacheKey(scope: AdminAnalyticsScope): string {
+  if (scope.kind === 'unrestricted') return 'all';
+  if (scope.kind === 'moderator') {
+    return `mod:${scope.malformed ? 'x' : 'ok'}:${[...scope.stateIds].join(',')}`;
+  }
+  const sortedTargets = [...scope.groupIdsText].map(String).sort().join('|');
+  return `cm:${scope.viewerId}:pg:${[...scope.profileGroupIds].join(',')}:tg:${sortedTargets}:${
+    scope.malformed ? 'x' : 'ok'
+  }`;
+}
+
 /** Map validateAdminSession output + optional CM effective groups into analytics context. */
 export function toAdminAnalyticsUserContext(
   auth: VerifiedAdminAuth,

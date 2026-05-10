@@ -12,7 +12,12 @@ import {
   resolveAllowedProfileIdsForCampaignManager,
   resolveEffectiveGroupIdsForCampaignManager,
 } from '@/lib/rbac/scoped-query-builder';
-import { RbacError, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
+import {
+  RbacError,
+  requireCampaignManagerHasAssignedGroups,
+  requireModeratorHasAssignedStates,
+  requireRole,
+} from '@/lib/rbac/require';
 
 function isMissingColumnErr(err: { message?: string } | null | undefined, columnName: string) {
   const msg = String(err?.message ?? '').toLowerCase();
@@ -43,6 +48,7 @@ export async function GET() {
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

@@ -3,12 +3,15 @@ import type { VerifiedAdminAuth } from '@/lib/admin-gate';
 import { isCampaignManager } from '@/lib/admin-gate';
 import type { AdminAnalyticsScope } from '@/lib/admin/rbac';
 import { getScopedFilters, toAdminAnalyticsUserContext } from '@/lib/admin/rbac';
+import { getEventCampaignMetrics } from '@/lib/admin/campaign-intelligence';
 import {
+  getEventNotDownloadedUsersPage,
   getEventStats,
   getNotDownloadedUsers,
   getTimeBasedStats,
   getTotalPoints,
   type CampaignTimeBucketStats,
+  type EventNotDownloadedUserRow,
 } from '@/lib/admin/analyticsService';
 import { resolveEffectiveGroupIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { API_DEFAULT_LIMIT, API_MAX_LIMIT, clampLimit } from '@/lib/perf-defaults';
@@ -52,6 +55,31 @@ export type AnalyticsNotDownloadedRow = {
 export type AnalyticsNotDownloadedResponse = {
   rows: AnalyticsNotDownloadedRow[];
   pagination: PaginatedMeta;
+};
+
+/** Event-level campaign intelligence row (API / export shape). */
+export type CampaignIntelligenceApiEventRow = {
+  event_id: string;
+  title: string;
+  downloads: number;
+  sent: number;
+  delivered: number;
+  opened: number;
+  not_downloaded: number;
+  open_rate: number | null;
+  download_rate: number | null;
+};
+
+export type CampaignIntelligenceApiPayload = {
+  events: CampaignIntelligenceApiEventRow[];
+  total: number;
+};
+
+export type EventUsersNotDownloadedResponse = {
+  users: EventNotDownloadedUserRow[];
+  total: number;
+  offset: number;
+  limit: number;
 };
 
 function csvEscapeCell(v: string): string {
@@ -136,6 +164,71 @@ export async function fetchAnalyticsKpis(
       all_time: { total_points: allTime.count },
       range,
       time_buckets: buckets.stats,
+    },
+  };
+}
+
+/**
+ * Per-event downloads + notification metrics with RBAC from {@link getScopedFilters} / `ctx.scope`
+ * (resolved in {@link resolveAdminAnalyticsScope}). Date filters apply server-side to downloads and
+ * notification_broadcasts; search and optional `event_id` are enforced in SQL only (no client-side filtering).
+ */
+export async function fetchCampaignIntelligencePage(
+  admin: SupabaseClient,
+  scope: AdminAnalyticsScope,
+  opts: {
+    dateFrom: Date | null;
+    dateTo: Date | null;
+    eventId?: string | null;
+    search?: string | null;
+    offset: number;
+    limit: number;
+  }
+): Promise<{ ok: true; data: CampaignIntelligenceApiPayload } | { ok: false; error: string }> {
+  const result = await getEventCampaignMetrics(admin, scope, {
+    downloadDateFrom: opts.dateFrom,
+    downloadDateTo: opts.dateTo,
+    notificationDateFrom: opts.dateFrom,
+    notificationDateTo: opts.dateTo,
+    search: opts.search != null && String(opts.search).trim() !== '' ? String(opts.search).trim() : null,
+    eventId: opts.eventId ?? null,
+    limit: opts.limit,
+    offset: opts.offset,
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+  const events: CampaignIntelligenceApiEventRow[] = result.rows.map((r) => ({
+    event_id: r.event_id,
+    title: r.event_title,
+    downloads: r.total_downloads,
+    sent: r.total_notifications_sent,
+    delivered: r.total_notifications_delivered,
+    opened: r.total_notifications_opened,
+    not_downloaded: r.not_downloaded_count,
+    open_rate: r.open_rate,
+    download_rate: r.download_rate,
+  }));
+  return { ok: true, data: { events, total: result.total } };
+}
+
+/**
+ * Event drilldown: users in RBAC audience for `event_id` who did not download that event's posts.
+ * Phone is present only for admin scope; moderator / campaign_manager receive `null` (see RPC).
+ */
+export async function fetchEventUsersNotDownloadedPage(
+  admin: SupabaseClient,
+  scope: AdminAnalyticsScope,
+  eventId: string,
+  opts: { search?: string | null; offset: number; limit: number }
+): Promise<{ ok: true; data: EventUsersNotDownloadedResponse } | { ok: false; error: string }> {
+  const res = await getEventNotDownloadedUsersPage(admin, eventId, scope, opts);
+  if (!res.ok) return { ok: false, error: res.error };
+  return {
+    ok: true,
+    data: {
+      users: res.users,
+      total: res.total,
+      offset: opts.offset,
+      limit: opts.limit,
     },
   };
 }

@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchAnalyticsNotDownloadedPage, parseAnalyticsPagination } from '@/lib/admin/analyticsApi';
+import { fetchEventUsersNotDownloadedPage, parseAnalyticsPagination } from '@/lib/admin/analyticsApi';
 import { assertEventReadableForAdminAnalytics } from '@/lib/admin/assert-event-analytics-scope';
 import { requireAdminAnalyticsContext } from '../../_lib';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/**
+ * GET /api/admin/analytics/event-users/not-downloaded
+ *
+ * Query: event_id (required), search, offset, limit.
+ * RBAC scope is resolved in {@link requireAdminAnalyticsContext} before the drilldown RPC.
+ */
 export async function GET(request: NextRequest) {
   const ctx = await requireAdminAnalyticsContext();
   if (!ctx.ok) return ctx.response;
@@ -21,13 +27,23 @@ export async function GET(request: NextRequest) {
   }
 
   const { offset, limit } = parseAnalyticsPagination(sp);
-  const search = (sp.get('search') ?? '').trim();
+  const searchRaw = sp.get('search');
 
-  const result = await fetchAnalyticsNotDownloadedPage(ctx.admin, ctx.scope, eventId, { search, offset, limit });
+  const result = await fetchEventUsersNotDownloadedPage(ctx.admin, ctx.scope, eventId, {
+    search: searchRaw != null ? String(searchRaw) : null,
+    offset,
+    limit,
+  });
   if (!result.ok) {
     const st = /invalid event_id/i.test(result.error) ? 400 : 500;
     return NextResponse.json({ error: result.error }, { status: st });
   }
 
-  return NextResponse.json(result.data, { headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json(result.data, {
+    headers: {
+      // Short private cache: reduces repeat drilldown load; RBAC is enforced before this response is built.
+      'Cache-Control': 'private, max-age=20, stale-while-revalidate=40',
+      Vary: 'Cookie',
+    },
+  });
 }

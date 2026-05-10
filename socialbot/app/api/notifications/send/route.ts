@@ -1,6 +1,6 @@
 import Expo from 'expo-server-sdk';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
-import { runBroadcast, type BroadcastPayload } from '@/lib/broadcast-send';
+import { optionalEventIdFromPayload, runBroadcast, type BroadcastPayload } from '@/lib/broadcast-send';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
@@ -31,6 +31,9 @@ function json(body: unknown, status = 200) {
 /**
  * Admin broadcast: preview (counts) or send via Expo Push API (expo-server-sdk).
  * Tokens come from `public.push_tokens` (Expo tokens from the mobile app — not profiles.expo_push_token).
+ *
+ * Optional body field **`event_id`** (UUID): when valid, stored on `notification_broadcasts.event_id` and
+ * copied into each push message **`data.event_id`** for downstream analytics; omitted clients are unchanged.
  */
 export async function POST(request: Request) {
   let payload: BroadcastPayload;
@@ -53,6 +56,15 @@ export async function POST(request: Request) {
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
+  }
+
+  const rawEventId = (payload as { event_id?: unknown }).event_id;
+  if (rawEventId != null && String(rawEventId).trim() !== '') {
+    const normalized = optionalEventIdFromPayload({ ...payload, event_id: String(rawEventId) });
+    if (normalized == null) {
+      return json({ error: 'Invalid event_id: expected a UUID' }, 400);
+    }
+    payload = { ...payload, event_id: normalized };
   }
 
   const admin = createServiceRoleClient();

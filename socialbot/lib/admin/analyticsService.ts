@@ -36,6 +36,16 @@ export type NotDownloadedProfileRow = {
   phone: string | null;
 };
 
+/** Event drilldown: not-downloaded users with labels (RPC `admin_event_users_not_downloaded_page`). */
+export type EventNotDownloadedUserRow = {
+  user_id: string;
+  name: string | null;
+  phone: string | null;
+  state: string;
+  group: string;
+  last_active: string | null;
+};
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** Maps AdminAnalyticsScope → RPC arguments (same contract as SQL CASE in migration). */
@@ -216,4 +226,58 @@ export async function getNotDownloadedUsers(
     phone: r.phone == null ? null : String(r.phone),
   }));
   return { ok: true, rows };
+}
+
+/**
+ * Profiles in RBAC scope for `event_id` who never downloaded that event's posts.
+ * Search and pagination are enforced in SQL. Phone is returned only for admin (`p_scope_mode = all`).
+ */
+export async function getEventNotDownloadedUsersPage(
+  admin: SupabaseClient,
+  eventId: string,
+  scope: AdminAnalyticsScope,
+  opts: { search?: string | null; offset: number; limit: number }
+): Promise<{ ok: true; users: EventNotDownloadedUserRow[]; total: number } | { ok: false; error: string }> {
+  const eid = String(eventId ?? '').trim();
+  if (!UUID_RE.test(eid)) return { ok: false, error: 'Invalid event_id' };
+  if (scopeDeniesAllRows(scope)) return { ok: true, users: [], total: 0 };
+  const rpc = campaignAnalyticsRpcScope(scope);
+  const lim = Math.min(200, Math.max(1, Math.trunc(Number(opts.limit)) || 50));
+  const off = Math.min(50_000, Math.max(0, Math.trunc(Number(opts.offset)) || 0));
+  const search = opts.search != null && String(opts.search).trim() !== '' ? String(opts.search).trim() : null;
+
+  const { data, error } = await admin.rpc('admin_event_users_not_downloaded_page', {
+    p_event_id: eid,
+    p_scope_mode: rpc.p_scope_mode,
+    p_moderator_state_ids: rpc.p_moderator_state_ids,
+    p_cm_viewer: rpc.p_cm_viewer,
+    p_cm_profile_group_ids: rpc.p_cm_profile_group_ids,
+    p_cm_event_group_text: rpc.p_cm_event_group_text,
+    p_search: search,
+    p_offset: off,
+    p_limit: lim,
+  });
+  if (error) return { ok: false, error: error.message };
+
+  if (data != null && typeof data === 'object' && !Array.isArray(data) && 'rows' in data) {
+    const payload = data as { total?: unknown; rows?: unknown };
+    const total = Number(payload.total ?? 0);
+    const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
+    const users: EventNotDownloadedUserRow[] = (rawRows as Record<string, unknown>[]).map((r) => ({
+      user_id: String(r.user_id ?? ''),
+      name: r.name == null ? null : String(r.name),
+      phone: r.phone == null ? null : String(r.phone),
+      state: r.state == null ? '' : String(r.state),
+      group: r.group == null ? '' : String(r.group),
+      last_active:
+        r.last_active == null || r.last_active === ''
+          ? null
+          : typeof r.last_active === 'string'
+            ? r.last_active
+            : String(r.last_active),
+    }));
+    return { ok: true, users, total: Number.isFinite(total) ? total : 0 };
+  }
+
+  return { ok: true, users: [], total: 0 };
 }

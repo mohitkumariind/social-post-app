@@ -12,6 +12,10 @@ import {
   requireRole,
 } from '@/lib/rbac/require';
 
+/**
+ * Validates the session, assignment integrity, and **server-resolved** analytics scope
+ * before any analytics RPC or scoped query runs. Call this first in every `/api/admin/analytics/*` route.
+ */
 export async function requireAdminAnalyticsContext(): Promise<
   | { ok: true; admin: SupabaseClient; scope: AdminAnalyticsScope }
   | { ok: false; response: NextResponse }

@@ -4,6 +4,7 @@ import {
   parseAnalyticsDateRange,
   type AnalyticsExportKind,
 } from '@/lib/admin/analyticsApi';
+import { assertEventReadableForAdminAnalytics } from '@/lib/admin/assert-event-analytics-scope';
 import { requireAdminAnalyticsContext } from '../_lib';
 
 const KINDS = new Set<AnalyticsExportKind>(['kpis', 'events', 'not_downloaded']);
@@ -34,6 +35,10 @@ export async function GET(request: NextRequest) {
   if (kind === 'not_downloaded') {
     if (!UUID_RE.test(eventId)) {
       return NextResponse.json({ error: 'event_id is required and must be a UUID for not_downloaded export' }, { status: 400 });
+    }
+    const evOk = await assertEventReadableForAdminAnalytics(ctx.admin, ctx.scope, eventId);
+    if (!evOk.ok) {
+      return NextResponse.json({ error: evOk.error }, { status: evOk.status });
     }
   }
 

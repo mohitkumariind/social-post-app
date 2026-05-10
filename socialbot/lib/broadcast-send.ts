@@ -41,7 +41,7 @@ export type BroadcastPayload = {
 };
 
 /** Optional campaign/event linkage (validated UUID or null). */
-function optionalEventIdFromPayload(payload: BroadcastPayload): string | null {
+export function optionalEventIdFromPayload(payload: BroadcastPayload): string | null {
   const raw = payload.event_id;
   if (raw == null) return null;
   const s = String(raw).trim();
@@ -375,6 +375,10 @@ export async function runBroadcast(
     ...(payload.data ?? {}),
     broadcast_id: broadcastId,
   };
+  if (eventIdForBroadcast) {
+    // Push `data` metadata for analytics / deep links; clients may ignore unknown keys.
+    dataPayload.event_id = eventIdForBroadcast;
+  }
   if (imageUrl) {
     // Common keys used by client-side push handlers / image renderers.
     dataPayload.image = imageUrl;

@@ -3,7 +3,7 @@ import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate'
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { resolveScope } from '@/lib/rbac/unified-scope-engine';
-import { toNumArray, toStrArray } from '@/lib/rbac/require';
+import { RbacError, requireStandardRbacContext, toNumArray, toStrArray } from '@/lib/rbac/require';
 import { trackRbacEvent } from '@/lib/rbac/rbac-observability-engine';
 
 function json(body: unknown, status = 200) {
@@ -47,6 +47,12 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ logId: st
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
+  try {
+    requireStandardRbacContext(auth, ['admin', 'moderator', 'campaign_manager']);
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message }, e.status);
+    return json({ error: 'Forbidden' }, 403);
+  }
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
