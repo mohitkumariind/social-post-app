@@ -36,9 +36,12 @@ export type BroadcastPayload = {
    * Skips geographic `filters` expansion (still subject to `/api/notifications/send` scope checks).
    */
   target_user_ids?: string[] | null;
-  /** Optional `public.events.id` stored on `notification_broadcasts` for campaign analytics. */
+  /** Optional `public.events.id` (top-level UUID). Required when `data.type` is `"event_campaign"`; ignored (stored as NULL) for other types. */
   event_id?: string | null;
 };
+
+/** Push `data.type` value that requires a persisted `notification_broadcasts.event_id`. */
+export const NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN = 'event_campaign' as const;
 
 /** Optional campaign/event linkage (validated UUID or null). */
 export function optionalEventIdFromPayload(payload: BroadcastPayload): string | null {
@@ -49,6 +52,40 @@ export function optionalEventIdFromPayload(payload: BroadcastPayload): string | 
   const EVENT_ID_UUID_RE =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return EVENT_ID_UUID_RE.test(s) ? s : null;
+}
+
+export type BroadcastEventAttribution =
+  | { ok: true; eventIdForBroadcast: string | null; sanitizedData: Record<string, unknown> }
+  | { ok: false; error: string };
+
+/**
+ * Data integrity: `data.type === "event_campaign"` requires a valid top-level `event_id` (UUID).
+ * All other notification types force `event_id` unset on the broadcast row and strip `data.event_id` from the push payload.
+ */
+export function resolveBroadcastEventIdForIntegrity(payload: BroadcastPayload): BroadcastEventAttribution {
+  const raw = payload.data;
+  const sanitizedData =
+    raw != null && typeof raw === 'object' && !Array.isArray(raw)
+      ? { ...(raw as Record<string, unknown>) }
+      : {};
+
+  const notificationType = typeof sanitizedData.type === 'string' ? sanitizedData.type.trim() : '';
+  const isEventCampaign = notificationType === NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN;
+  const parsedTopLevel = optionalEventIdFromPayload(payload);
+
+  if (isEventCampaign) {
+    if (parsedTopLevel == null) {
+      return {
+        ok: false,
+        error: 'event_id is required and must be a valid UUID when data.type is "event_campaign"',
+      };
+    }
+    delete sanitizedData.event_id;
+    return { ok: true, eventIdForBroadcast: parsedTopLevel, sanitizedData };
+  }
+
+  delete sanitizedData.event_id;
+  return { ok: true, eventIdForBroadcast: null, sanitizedData };
 }
 
 export type BroadcastRunOptions = {
@@ -192,6 +229,12 @@ export async function runBroadcast(
       ? explicitTargets
       : await fetchFilteredProfileIds(admin, allWorkers, filters);
 
+  const attribution = resolveBroadcastEventIdForIntegrity(payload);
+  if (!attribution.ok) {
+    return { ok: false, error: attribution.error };
+  }
+  const { eventIdForBroadcast, sanitizedData } = attribution;
+
   if (payload.preview_only === true) {
     const previewTokenRows = await fetchTokensForUsers(admin, baseProfileIds);
     const previewUnique = new Set(
@@ -229,8 +272,6 @@ export async function runBroadcast(
     recipient_mode: explicitTargets.length > 0 ? 'explicit_user_ids' : 'filters',
     explicit_recipient_count: explicitTargets.length > 0 ? explicitTargets.length : null,
   };
-
-  const eventIdForBroadcast = optionalEventIdFromPayload(payload);
 
   const existingBroadcastId = String(options.existing_broadcast_id ?? '').trim();
   const scheduledNotificationId = String(options.scheduled_notification_id ?? '').trim();
@@ -343,6 +384,8 @@ export async function runBroadcast(
     tokensByProject.set(key, arr);
   }
 
+  const historyIdByUserId = new Map<string, string>();
+
   if (!options.skip_history_insert && profileIds.length > 0) {
     const historyRows = profileIds.map((user_id) => ({
       user_id,
@@ -352,58 +395,58 @@ export async function runBroadcast(
       is_read: false,
       broadcast_id: broadcastId,
       delivery_status: 'pending',
+      event_id: eventIdForBroadcast,
     }));
 
     for (let i = 0; i < historyRows.length; i += HISTORY_INSERT_CHUNK) {
       const chunk = historyRows.slice(i, i + HISTORY_INSERT_CHUNK);
-      let { error: histErr } = await admin.from('notifications_history').insert(chunk);
-      if (histErr && String(histErr.message ?? '').toLowerCase().includes('delivery_status')) {
+      let ins = await admin.from('notifications_history').insert(chunk).select('id, user_id');
+      if (ins.error && String(ins.error.message ?? '').toLowerCase().includes('delivery_status')) {
         const fallbackChunk = chunk.map(({ delivery_status: _delivery_status, ...rest }) => rest);
-        const fallback = await admin.from('notifications_history').insert(fallbackChunk);
-        histErr = fallback.error ?? null;
+        ins = await admin.from('notifications_history').insert(fallbackChunk).select('id, user_id');
       }
-      if (histErr) {
+      if (ins.error) {
         if (!existingBroadcastId) {
           await admin.from('notification_broadcasts').delete().eq('id', broadcastId);
         }
-        return { ok: false, error: `notifications_history: ${histErr.message}`, broadcast_id: broadcastId };
+        return { ok: false, error: `notifications_history: ${ins.error.message}`, broadcast_id: broadcastId };
+      }
+      for (const row of (ins.data ?? []) as Array<{ id: string; user_id: string }>) {
+        const uid = String(row.user_id ?? '').trim();
+        const hid = String(row.id ?? '').trim();
+        if (uid && hid) historyIdByUserId.set(uid, hid);
+      }
+    }
+  } else if (broadcastId && profileIds.length > 0) {
+    const { data: histRows, error: histLookupErr } = await admin
+      .from('notifications_history')
+      .select('id, user_id')
+      .eq('broadcast_id', broadcastId)
+      .in('user_id', profileIds);
+    if (!histLookupErr) {
+      for (const row of (histRows ?? []) as Array<{ id: string; user_id: string }>) {
+        const uid = String(row.user_id ?? '').trim();
+        const hid = String(row.id ?? '').trim();
+        if (uid && hid) historyIdByUserId.set(uid, hid);
       }
     }
   }
 
-  const dataPayload: Record<string, unknown> = {
-    ...(payload.data ?? {}),
+  const basePushData: Record<string, unknown> = {
+    ...sanitizedData,
     broadcast_id: broadcastId,
   };
   if (eventIdForBroadcast) {
     // Push `data` metadata for analytics / deep links; clients may ignore unknown keys.
-    dataPayload.event_id = eventIdForBroadcast;
+    basePushData.event_id = eventIdForBroadcast;
   }
   if (imageUrl) {
     // Common keys used by client-side push handlers / image renderers.
-    dataPayload.image = imageUrl;
-    dataPayload.url = imageUrl;
+    basePushData.image = imageUrl;
+    basePushData.url = imageUrl;
     // Back-compat with older payload consumers.
-    dataPayload.image_url = imageUrl;
+    basePushData.image_url = imageUrl;
   }
-
-  const messages: ExpoPushMessage[] = uniqueTokens.map((to) => {
-    const msg: ExpoPushMessage = {
-      to,
-      title,
-      body,
-      sound: 'default',
-      priority: 'high',
-      channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
-      // Required by iOS rich notifications; harmless on Android.
-      mutableContent: true,
-      data: dataPayload,
-    };
-    if (imageUrl) {
-      msg.richContent = { image: imageUrl };
-    }
-    return msg;
-  });
 
   let deliveredTotal = 0;
   let failedTotal = 0;
@@ -505,6 +548,10 @@ export async function runBroadcast(
     console.log('[push] projectGroup', { project: groupLabel, tokens: toks.length });
 
     const groupMessages: ExpoPushMessage[] = toks.map((to) => {
+      const uid = String(tokenToUser.get(to) ?? '').trim();
+      const dataForToken: Record<string, unknown> = { ...basePushData };
+      const nhId = uid ? historyIdByUserId.get(uid) : undefined;
+      if (nhId) dataForToken.notification_id = nhId;
       const msg: ExpoPushMessage = {
         to,
         title,
@@ -513,7 +560,7 @@ export async function runBroadcast(
         priority: 'high',
         channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
         mutableContent: true,
-        data: dataPayload,
+        data: dataForToken,
       };
       if (imageUrl) msg.richContent = { image: imageUrl };
       return msg;

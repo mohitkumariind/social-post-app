@@ -205,23 +205,43 @@ export async function saveTokenToSupabase(token: string): Promise<boolean> {
   return false;
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function parseUuidDataField(data: Record<string, unknown>, key: string): string | null {
+  if (!Object.prototype.hasOwnProperty.call(data, key)) return null;
+  const raw = data[key];
+  if (raw == null) return null;
+  const s = typeof raw === 'string' ? raw.trim() : String(raw).trim();
+  if (!s) return null;
+  return UUID_RE.test(s) ? s : null;
+}
+
+function parseBroadcastId(data: Record<string, unknown>): string | null {
+  const raw = data.broadcast_id;
+  if (typeof raw === 'string' && raw.trim().length > 0) return raw.trim();
+  if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
+  return null;
+}
+
 /**
- * If the user opened a push whose `data` includes `broadcast_id`, inserts `public.notification_open`
- * (unique per user + broadcast → admin `opened_count` via trigger).
+ * Records a push open in `public.notification_open` (bumps broadcast `opened_count` via trigger).
+ * Call from **notification response** handlers (tap / cold start) only when `data` is present.
+ *
+ * - **broadcast_id** (required): from push `data`.
+ * - **notification_id**: `notifications_history.id` when present in `data` (no client-side guess).
+ * - **event_id**: only if the key exists in `data` and the value is a valid UUID — never inferred from other fields.
  */
-export async function recordBroadcastOpenFromNotificationResponse(
-  response: Notifications.NotificationResponse
-): Promise<void> {
+export async function recordNotificationOpen(response: Notifications.NotificationResponse): Promise<void> {
   const data = response.notification?.request?.content?.data;
-  if (!data || typeof data !== 'object') return;
-  const raw = (data as Record<string, unknown>).broadcast_id;
-  const broadcastId =
-    typeof raw === 'string' && raw.trim().length > 0
-      ? raw.trim()
-      : typeof raw === 'number' && Number.isFinite(raw)
-        ? String(raw)
-        : null;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+  const rec = data as Record<string, unknown>;
+
+  const broadcastId = parseBroadcastId(rec);
   if (!broadcastId) return;
+
+  const notificationId = parseUuidDataField(rec, 'notification_id');
+  const eventId = parseUuidDataField(rec, 'event_id');
 
   const {
     data: { user },
@@ -229,13 +249,25 @@ export async function recordBroadcastOpenFromNotificationResponse(
   } = await supabase.auth.getUser();
   if (userError || !user?.id) return;
 
-  const { error } = await supabase.from('notification_open').insert({
+  const row: {
+    broadcast_id: string;
+    user_id: string;
+    notifications_history_id?: string;
+    event_id?: string;
+  } = {
     broadcast_id: broadcastId,
     user_id: user.id,
-  });
+  };
+  if (notificationId) row.notifications_history_id = notificationId;
+  if (eventId) row.event_id = eventId;
+
+  const { error } = await supabase.from('notification_open').insert(row);
 
   if (error) {
     if (error.code === '23505') return;
     if (__DEV__) console.warn('[notifications] notification_open insert:', error.message);
   }
 }
+
+/** @deprecated Use {@link recordNotificationOpen} (same behavior). */
+export const recordBroadcastOpenFromNotificationResponse = recordNotificationOpen;

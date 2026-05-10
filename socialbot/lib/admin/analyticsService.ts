@@ -3,7 +3,7 @@ import type { AdminAnalyticsScope } from '@/lib/admin/rbac';
 import { scopeDeniesAllRows } from '@/lib/admin/rbac';
 
 /**
- * RPC payload aligned with public.admin_campaign_analytics_* (see supabase migration).
+ * RPC payload aligned with public.admin_campaign_analytics_* and admin_get_campaign_analytics (see migrations).
  * Keep in sync with lib/admin/rbac.ts scope semantics.
  */
 export type CampaignAnalyticsRpcScope = {

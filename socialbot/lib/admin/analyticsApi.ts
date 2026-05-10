@@ -59,7 +59,8 @@ export type AnalyticsNotDownloadedResponse = {
 
 /** Event-level campaign intelligence row (API / export shape). */
 export type CampaignIntelligenceApiEventRow = {
-  event_id: string;
+  /** `null` = global bucket from SQL; any other value = event-linked row. */
+  event_id: string | null;
   title: string;
   downloads: number;
   sent: number;

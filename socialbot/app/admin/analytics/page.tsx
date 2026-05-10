@@ -15,7 +15,7 @@ type KpisResponse = {
 };
 
 type CiEventRow = {
-  event_id: string;
+  event_id: string | null;
   title: string;
   downloads: number;
   sent: number;
@@ -54,6 +54,11 @@ function num(n: number): string {
 function fmtOpenRatePct(rate: number | null | undefined): string {
   if (rate == null || Number.isNaN(Number(rate))) return '—';
   return `${(Number(rate) * 100).toFixed(1)}%`;
+}
+
+/** From server `event_id` only: JSON `null` ⇒ Global; anything else ⇒ Event-linked. */
+function campaignIntelligenceScopeLabel(eventId: string | null): 'Global' | 'Event-linked' {
+  return eventId === null ? 'Global' : 'Event-linked';
 }
 
 function fmtLastActive(iso: string | null | undefined): string {
@@ -217,6 +222,7 @@ export default function AdminAnalyticsPage() {
   }, [drillOpen, drillEventId, drillOffset, drillQuerySent, drillNonce]);
 
   const openDrill = (row: CiEventRow) => {
+    if (row.event_id === null) return;
     setDrillEventId(row.event_id);
     setDrillEventTitle(row.title);
     setDrillQuery('');
@@ -485,27 +491,33 @@ export default function AdminAnalyticsPage() {
         <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Campaign Intelligence</h2>
+            <p className="mt-1 max-w-3xl text-xs font-medium leading-snug text-zinc-500">
+              Legacy broadcasts are not event-linked. Rows with no{' '}
+              <code className="text-zinc-400">event_id</code> stay in the Global bucket only; we do not infer or remap old
+              sends to events.
+            </p>
           </div>
           {ciLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-zinc-500" /> : null}
         </div>
         {ciError ? <div className="mb-2 text-sm text-red-400">{ciError}</div> : null}
         <div className="overflow-x-auto overflow-hidden rounded-lg border border-zinc-800">
-          <table className="w-full min-w-[880px] text-left text-sm">
+          <table className="w-full min-w-[960px] text-left text-sm">
             <thead className="border-b border-zinc-800 bg-zinc-900/80 text-xs uppercase text-zinc-500">
               <tr>
-                <th className="px-3 py-2 font-medium">Event</th>
-                <th className="px-3 py-2 font-medium tabular-nums">Downloads</th>
+                <th className="px-3 py-2 font-medium">Event name</th>
+                <th className="px-3 py-2 font-medium">Link</th>
                 <th className="px-3 py-2 font-medium tabular-nums">Sent</th>
                 <th className="px-3 py-2 font-medium tabular-nums">Delivered</th>
                 <th className="px-3 py-2 font-medium tabular-nums">Opened</th>
-                <th className="px-3 py-2 font-medium tabular-nums">Not DL</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Downloads</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Not downloaded</th>
                 <th className="px-3 py-2 font-medium tabular-nums">Open rate</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/80">
               {ciEvents.map((row) => (
                 <tr
-                  key={row.event_id}
+                  key={row.event_id ?? 'global'}
                   role="button"
                   tabIndex={0}
                   onClick={() => openDrill(row)}
@@ -517,20 +529,23 @@ export default function AdminAnalyticsPage() {
                   }}
                   className="cursor-pointer transition-colors hover:bg-zinc-900/50"
                 >
-                  <td className="max-w-[220px] truncate px-3 py-2.5 text-zinc-200" title={row.title}>
+                  <td className="max-w-[200px] truncate px-3 py-2.5 text-zinc-200" title={row.title}>
                     {row.title}
                   </td>
-                  <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.downloads)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-xs font-medium text-zinc-400">
+                    {campaignIntelligenceScopeLabel(row.event_id)}
+                  </td>
                   <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.sent)}</td>
                   <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.delivered)}</td>
                   <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.opened)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.downloads)}</td>
                   <td className="px-3 py-2.5 tabular-nums text-zinc-400">{num(row.not_downloaded)}</td>
                   <td className="px-3 py-2.5 tabular-nums text-zinc-400">{fmtOpenRatePct(row.open_rate)}</td>
                 </tr>
               ))}
               {ciEvents.length === 0 && !ciLoading ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-zinc-500">
+                  <td colSpan={8} className="px-3 py-8 text-center text-zinc-500">
                     No events in scope.
                   </td>
                 </tr>

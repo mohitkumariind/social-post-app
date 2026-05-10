@@ -53,6 +53,36 @@ function parseOptionalEventId(body: RequestBody): string | null {
   return re.test(s) ? s : null;
 }
 
+const NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN = 'event_campaign';
+
+function resolveLegacyNotifyEventAttribution(body: RequestBody):
+  | { ok: true; eventIdForBroadcast: string | null; sanitizedData: Record<string, unknown> }
+  | { ok: false; error: string } {
+  const raw = body.data;
+  const sanitizedData =
+    raw != null && typeof raw === 'object' && !Array.isArray(raw)
+      ? { ...(raw as Record<string, unknown>) }
+      : {};
+
+  const notificationType = typeof sanitizedData.type === 'string' ? sanitizedData.type.trim() : '';
+  const isEventCampaign = notificationType === NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN;
+  const parsedTopLevel = parseOptionalEventId(body);
+
+  if (isEventCampaign) {
+    if (parsedTopLevel == null) {
+      return {
+        ok: false,
+        error: 'event_id is required and must be a valid UUID when data.type is "event_campaign"',
+      };
+    }
+    delete sanitizedData.event_id;
+    return { ok: true, eventIdForBroadcast: parsedTopLevel, sanitizedData };
+  }
+
+  delete sanitizedData.event_id;
+  return { ok: true, eventIdForBroadcast: null, sanitizedData };
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -211,6 +241,13 @@ Deno.serve(async (req) => {
     });
 
     const profileIds = await fetchFilteredProfileIds(admin, allWorkers, filters);
+
+    const attribution = resolveLegacyNotifyEventAttribution(payload);
+    if (!attribution.ok) {
+      return json({ error: attribution.error }, 400);
+    }
+    const { eventIdForBroadcast, sanitizedData } = attribution;
+
     const tokenRows = await fetchTokensForUsers(admin, profileIds);
     const tokenToUser = new Map<string, string>();
     const tokenToProject = new Map<string, string | null>();
@@ -252,8 +289,6 @@ Deno.serve(async (req) => {
       labels: payload.filter_labels ?? {},
     };
 
-    const eventIdForBroadcast = parseOptionalEventId(payload);
-
     const { data: bcIns, error: bcErr } = await admin
       .from('notification_broadcasts')
       .insert({
@@ -284,6 +319,8 @@ Deno.serve(async (req) => {
 
     const broadcastId = String(bcIns.id);
 
+    const historyIdByUserId = new Map<string, string>();
+
     if (profileIds.length > 0) {
       const historyRows = profileIds.map((user_id) => ({
         user_id,
@@ -292,14 +329,25 @@ Deno.serve(async (req) => {
         image_url: imageUrl,
         is_read: false,
         broadcast_id: broadcastId,
+        event_id: eventIdForBroadcast,
+        delivery_status: 'pending',
       }));
 
       for (let i = 0; i < historyRows.length; i += HISTORY_INSERT_CHUNK) {
         const chunk = historyRows.slice(i, i + HISTORY_INSERT_CHUNK);
-        const { error: histErr } = await admin.from('notifications_history').insert(chunk);
-        if (histErr) {
+        let ins = await admin.from('notifications_history').insert(chunk).select('id, user_id');
+        if (ins.error && String(ins.error.message ?? '').toLowerCase().includes('delivery_status')) {
+          const fallbackChunk = chunk.map(({ delivery_status: _ds, ...rest }) => rest);
+          ins = await admin.from('notifications_history').insert(fallbackChunk).select('id, user_id');
+        }
+        if (ins.error) {
           await admin.from('notification_broadcasts').delete().eq('id', broadcastId);
-          return json({ error: `notifications_history: ${histErr.message}` }, 500);
+          return json({ error: `notifications_history: ${ins.error.message}` }, 500);
+        }
+        for (const row of ins.data ?? []) {
+          const uid = String((row as { user_id?: string }).user_id ?? '').trim();
+          const hid = String((row as { id?: string }).id ?? '').trim();
+          if (uid && hid) historyIdByUserId.set(uid, hid);
         }
       }
     }
@@ -307,11 +355,14 @@ Deno.serve(async (req) => {
     let deliveredTotal = 0;
     let failedTotal = 0;
     let sentAttemptedTotal = 0;
-    const dataPayload: Record<string, unknown> = {
-      ...(payload.data ?? {}),
+    const basePushData: Record<string, unknown> = {
+      ...sanitizedData,
       broadcast_id: broadcastId,
     };
-    if (imageUrl) dataPayload.image_url = imageUrl;
+    if (eventIdForBroadcast) {
+      basePushData.event_id = eventIdForBroadcast;
+    }
+    if (imageUrl) basePushData.image_url = imageUrl;
 
     const messageBase: Record<string, unknown> = {
       title,
@@ -319,7 +370,6 @@ Deno.serve(async (req) => {
       sound: 'default',
       priority: 'high',
       channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
-      data: dataPayload,
     };
 
     if (imageUrl) {
@@ -339,7 +389,13 @@ Deno.serve(async (req) => {
 
     const messagesByProject = new Map<string, any[]>();
     for (const [pid, toks] of tokensByProject.entries()) {
-      const msgs = toks.map((to) => ({ ...messageBase, to }));
+      const msgs = toks.map((to) => {
+        const uid = String(tokenToUser.get(to) ?? '').trim();
+        const dataForToken: Record<string, unknown> = { ...basePushData };
+        const nhId = uid ? historyIdByUserId.get(uid) : undefined;
+        if (nhId) dataForToken.notification_id = nhId;
+        return { ...messageBase, to, data: dataForToken };
+      });
       messagesByProject.set(pid, msgs);
     }
 

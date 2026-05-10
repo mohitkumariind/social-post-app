@@ -14,7 +14,7 @@ import { cleanupDailyContentCache } from '../lib/mediaCache';
 import { FRAME_FONT_ASSETS } from '../lib/frameFonts';
 import {
   ANDROID_NOTIFICATION_CHANNEL_ID,
-  recordBroadcastOpenFromNotificationResponse,
+  recordNotificationOpen,
   registerForPushNotificationsAsync,
   saveTokenToSupabase,
 } from '../lib/notifications';
@@ -178,7 +178,7 @@ function PushNotificationLayer() {
   useEffect(() => {
     if (!isLoggedIn) return;
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      void recordBroadcastOpenFromNotificationResponse(response);
+      void recordNotificationOpen(response);
     });
     return () => sub.remove();
   }, [isLoggedIn]);
@@ -187,7 +187,7 @@ function PushNotificationLayer() {
     if (!isLoggedIn) return;
     void (async () => {
       const last = await Notifications.getLastNotificationResponseAsync();
-      if (last) await recordBroadcastOpenFromNotificationResponse(last);
+      if (last) await recordNotificationOpen(last);
     })();
   }, [isLoggedIn]);
 

@@ -32,8 +32,9 @@ function json(body: unknown, status = 200) {
  * Admin broadcast: preview (counts) or send via Expo Push API (expo-server-sdk).
  * Tokens come from `public.push_tokens` (Expo tokens from the mobile app — not profiles.expo_push_token).
  *
- * Optional body field **`event_id`** (UUID): when valid, stored on `notification_broadcasts.event_id` and
- * copied into each push message **`data.event_id`** for downstream analytics; omitted clients are unchanged.
+ * Optional **`event_id`** (UUID): when `data.type` is **`"event_campaign"`**, it is required and is stored on
+ * `notification_broadcasts.event_id` and copied into push **`data.event_id`**. For any other `data.type` (including
+ * omitted), `event_id` is not persisted and `data.event_id` is stripped from the outbound payload.
  */
 export async function POST(request: Request) {
   let payload: BroadcastPayload;
