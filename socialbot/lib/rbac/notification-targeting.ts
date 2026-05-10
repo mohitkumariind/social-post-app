@@ -1,8 +1,14 @@
-import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import type { BroadcastPayload, BroadcastFilters } from '@/lib/broadcast-send';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { canAccessResource, type UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import { parseGroupIds, RbacError } from '@/lib/rbac/require';
-import type { BroadcastPayload } from '@/lib/broadcast-send';
+import {
+  buildScopedAnalyticsQuery,
+  resolveAllowedProfileIdsForCampaignManager,
+  resolveEffectiveGroupIdsForCampaignManager,
+} from '@/lib/rbac/scoped-query-builder';
 
-type NotificationAuth = {
+export type NotificationAuth = {
   user: { id: string };
   role: 'admin' | 'moderator' | 'campaign_manager';
   assigned_state_ids: number[];
@@ -31,7 +37,7 @@ export function applyCanonicalNotificationTargeting(
       filters: {
         ...(payload.filters ?? {}),
         assigned_state_ids: auth.assigned_state_ids,
-      } as any,
+      } as BroadcastFilters,
     };
   }
 
@@ -53,6 +59,60 @@ export function applyCanonicalNotificationTargeting(
     filters: {
       ...(payload.filters ?? {}),
       group_ids: groupIds,
-    } as any,
+    } as BroadcastFilters,
   };
+}
+
+const MAX_EXPLICIT_NOTIFICATION_RECIPIENTS = 5000;
+
+/**
+ * Intersects candidate profile ids with profiles visible to the admin actor (analytics-aligned scoping).
+ */
+export async function filterRecipientProfileIdsForAdmin(
+  admin: SupabaseClient,
+  auth: NotificationAuth,
+  candidateIds: string[]
+): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
+  const unique = [...new Set(candidateIds.map((x) => String(x ?? '').trim()).filter(Boolean))];
+  if (unique.length === 0) return { ok: false, error: 'No recipient user ids' };
+  if (unique.length > MAX_EXPLICIT_NOTIFICATION_RECIPIENTS) {
+    return { ok: false, error: `Too many recipients (max ${MAX_EXPLICIT_NOTIFICATION_RECIPIENTS})` };
+  }
+
+  if (auth.role === 'admin') {
+    const { data, error } = await admin.from('profiles').select('id').in('id', unique);
+    if (error) return { ok: false, error: error.message };
+    const ids = (data ?? []).map((r: { id: string }) => String(r.id)).filter(Boolean);
+    return { ok: true, ids };
+  }
+
+  const user: UnifiedUser = {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids ?? [],
+  };
+
+  let ctx: { effective_group_ids?: string[]; allowed_profile_ids?: string[] } = {};
+  if (auth.role === 'campaign_manager') {
+    const eff = await resolveEffectiveGroupIdsForCampaignManager(admin, auth.user.id, auth.assigned_group_ids ?? []);
+    if (eff === null) return { ok: false, error: 'Unable to resolve group assignments' };
+    const allowed = await resolveAllowedProfileIdsForCampaignManager(admin, auth.assigned_group_ids ?? []);
+    ctx = { effective_group_ids: eff, allowed_profile_ids: allowed ?? undefined };
+  }
+
+  const chunk = 200;
+  const out = new Set<string>();
+  for (let i = 0; i < unique.length; i += chunk) {
+    const slice = unique.slice(i, i + chunk);
+    let q = admin.from('profiles').select('id').in('id', slice);
+    q = buildScopedAnalyticsQuery(user, q as never, 'profiles', ctx) as typeof q;
+    const { data, error } = await q;
+    if (error) return { ok: false, error: error.message };
+    for (const r of data ?? []) {
+      const id = String((r as { id?: string }).id ?? '').trim();
+      if (id) out.add(id);
+    }
+  }
+  return { ok: true, ids: Array.from(out) };
 }

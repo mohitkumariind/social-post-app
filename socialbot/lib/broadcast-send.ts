@@ -31,6 +31,11 @@ export type BroadcastPayload = {
   all_workers?: boolean;
   filters?: BroadcastFilters;
   filter_labels?: BroadcastFilterLabels;
+  /**
+   * When non-empty, send only to these profile (auth user) ids after server-side RBAC filtering.
+   * Skips geographic `filters` expansion (still subject to `/api/notifications/send` scope checks).
+   */
+  target_user_ids?: string[] | null;
 };
 
 export type BroadcastRunOptions = {
@@ -165,7 +170,14 @@ export async function runBroadcast(
         : null,
   };
 
-  const baseProfileIds = await fetchFilteredProfileIds(admin, allWorkers, filters);
+  const explicitTargets = Array.isArray((payload as { target_user_ids?: unknown }).target_user_ids)
+    ? [...new Set(((payload as { target_user_ids?: unknown }).target_user_ids as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean))]
+    : [];
+
+  const baseProfileIds =
+    explicitTargets.length > 0
+      ? explicitTargets
+      : await fetchFilteredProfileIds(admin, allWorkers, filters);
 
   if (payload.preview_only === true) {
     const previewTokenRows = await fetchTokensForUsers(admin, baseProfileIds);
@@ -193,7 +205,7 @@ export async function runBroadcast(
       : null;
 
   const filtersStored = {
-    all_workers: allWorkers,
+    all_workers: explicitTargets.length > 0 ? false : allWorkers,
     party: filters.party,
     state: filters.state,
     loksabha_id: filters.loksabha_id,
@@ -201,6 +213,8 @@ export async function runBroadcast(
     assigned_state_ids: filters.assigned_state_ids,
     group_ids: filters.group_ids,
     labels: payload.filter_labels ?? {},
+    recipient_mode: explicitTargets.length > 0 ? 'explicit_user_ids' : 'filters',
+    explicit_recipient_count: explicitTargets.length > 0 ? explicitTargets.length : null,
   };
 
   const existingBroadcastId = String(options.existing_broadcast_id ?? '').trim();

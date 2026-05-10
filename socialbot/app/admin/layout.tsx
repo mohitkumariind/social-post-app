@@ -10,6 +10,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/admin/parties': 'Parties',
   '/admin/users': 'Users',
   '/admin/leaderboard': 'Leaderboard Management',
+  '/admin/analytics': 'Analytics',
   '/admin/groups': 'Group Management',
   '/admin/notifications': 'Notification Broadcast Center',
 };
@@ -20,6 +21,7 @@ function getTitle(pathname: string): string {
   if (pathname.startsWith('/admin/groups')) return 'Group Management';
   if (pathname.startsWith('/admin/notifications')) return 'Notification Broadcast Center';
   if (pathname.startsWith('/admin/leaderboard')) return 'Leaderboard Management';
+  if (pathname.startsWith('/admin/analytics')) return 'Analytics';
   return 'Admin';
 }
 

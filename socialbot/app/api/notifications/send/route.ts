@@ -4,10 +4,22 @@ import { runBroadcast, type BroadcastPayload } from '@/lib/broadcast-send';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
+import type { UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireStandardRbacContext } from '@/lib/rbac/require';
-import { applyCanonicalNotificationTargeting } from '@/lib/rbac/notification-targeting';
+import { applyCanonicalNotificationTargeting, filterRecipientProfileIdsForAdmin, type NotificationAuth } from '@/lib/rbac/notification-targeting';
 
 export const runtime = 'nodejs';
+
+function toNotificationAuth(
+  auth: Extract<Awaited<ReturnType<typeof validateAdminSession>>, { ok: true }>
+): NotificationAuth {
+  return {
+    user: { id: auth.user.id },
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+  };
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -52,15 +64,32 @@ export async function POST(request: Request) {
   const expo = new Expo(accessToken ? { accessToken } : undefined);
 
   try {
-    payload = applyCanonicalNotificationTargeting(auth as any, payload, 'notifications.scope.validate');
+    const na = toNotificationAuth(auth);
+    payload = applyCanonicalNotificationTargeting(na, payload, 'notifications.scope.validate');
+
+    const rawTargets = (payload as { target_user_ids?: unknown }).target_user_ids;
+    if (Array.isArray(rawTargets) && rawTargets.length > 0) {
+      const filtered = await filterRecipientProfileIdsForAdmin(admin, na, rawTargets as string[]);
+      if (!filtered.ok) return json({ error: filtered.error }, 400);
+      if (filtered.ids.length === 0) {
+        return json({ error: 'No recipients remain in your scope for the selected users' }, 400);
+      }
+      payload = { ...payload, target_user_ids: filtered.ids, all_workers: false };
+    }
 
     {
+      const mutationUser: UnifiedUser = {
+        id: auth.user.id,
+        role: auth.role,
+        assigned_state_ids: auth.assigned_state_ids,
+        assigned_group_ids: auth.assigned_group_ids,
+      };
       const decision = canPerformMutation(
-        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+        mutationUser,
         'notifications.send',
         null,
-        { filters: (payload as any).filters } as any,
-        { resourceType: 'notifications', resourceName: String((payload as any)?.title ?? '') }
+        { filters: payload.filters ?? undefined } as Record<string, unknown>,
+        { resourceType: 'notifications', resourceName: String(payload.title ?? '') }
       );
       if (!decision.ok) return json({ error: decision.reason }, 403);
     }
@@ -78,7 +107,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const broadcastId = (result as any)?.broadcast_id ?? null;
+    const broadcastId =
+      result.ok && 'broadcast_id' in result && result.broadcast_id ? String(result.broadcast_id) : null;
+    const cmGroupIds = payload.filters?.group_ids;
+    const scopeGroupIds =
+      auth.role === 'campaign_manager' && Array.isArray(cmGroupIds)
+        ? cmGroupIds.map((x) => String(x))
+        : [];
     void logAdminAction({
       actor_user_id: auth.user.id,
       actor_role: auth.role,
@@ -91,7 +126,7 @@ export async function POST(request: Request) {
       severity: 'info',
       undoable: false,
       scope_state_ids: auth.role === 'moderator' ? auth.assigned_state_ids : [],
-      scope_group_ids: auth.role === 'campaign_manager' ? ((payload.filters as any)?.group_ids ?? []).map((x: any) => String(x)) : [],
+      scope_group_ids: scopeGroupIds,
     });
 
     return json(result);

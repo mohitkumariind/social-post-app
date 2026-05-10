@@ -10,6 +10,7 @@ import {
   ListOrdered,
   ShieldAlert,
   BarChart3,
+  LineChart,
 } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -22,6 +23,7 @@ const navItems = [
   { href: '/admin/parties', label: 'Parties', icon: Building2 },
   { href: '/admin/users', label: 'Users', icon: Users },
   { href: '/admin/leaderboard', label: 'Leaderboard', icon: BarChart3 },
+  { href: '/admin/analytics', label: 'Analytics', icon: LineChart },
   { href: '/admin/groups', label: 'Group Management', icon: Tags },
   { href: '/admin/notifications', label: 'Broadcast', icon: Bell },
   { href: '/admin/activity-center', label: 'Activity Center', icon: ListOrdered },
@@ -68,6 +70,7 @@ export default function Sidebar() {
           i.href === '/admin' ||
           i.href === '/admin/users' ||
           i.href === '/admin/leaderboard' ||
+          i.href === '/admin/analytics' ||
           i.href === '/admin/events' ||
           i.href === '/admin/groups' ||
           i.href === '/admin/notifications'
