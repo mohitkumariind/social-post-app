@@ -115,6 +115,7 @@ const en = {
   leaderboard_error: "Could not load leaderboard.",
   leaderboard_loading: "Loading rankings...",
   leaderboard_retry: "Retry",
+  leaderboard_view_ranks_badges: "View Your Ranks & Badges",
 };
 
 const hi = {

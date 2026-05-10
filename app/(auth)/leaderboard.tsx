@@ -216,6 +216,22 @@ export default function LeaderboardScreen() {
           <PodiumCard entry={podiumThird} place={3} width={colW} tall={false} colors={BRONZE} />
         </Animated.View>
 
+        {!loading ? (
+          <TouchableOpacity
+            style={styles.rewardsBtnWrapper}
+            activeOpacity={0.88}
+            onPress={() => router.push('/rewards')}
+          >
+            <LinearGradient colors={[Colors.primary, '#2E7D32']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.rewardsGradient}>
+              <View style={styles.rewardsBtnContent}>
+                <Ionicons name="medal-outline" size={24} color="#FFF" />
+                <Text style={styles.rewardsBtnText}>{t('leaderboard_view_ranks_badges')}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={22} color="#FFF" />
+            </LinearGradient>
+          </TouchableOpacity>
+        ) : null}
+
         <Text style={styles.listSectionTitle}>
           {t('leaderboard_rank')} · Top 50
         </Text>
@@ -224,7 +240,7 @@ export default function LeaderboardScreen() {
         ) : null}
       </View>
     ),
-    [t, colW, podiumFirst, podiumSecond, podiumThird, stateRows.length, loading]
+    [t, colW, podiumFirst, podiumSecond, podiumThird, stateRows.length, loading, router]
   );
 
   const listFooter = useMemo(
@@ -369,6 +385,33 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     marginTop: 20,
     paddingBottom: 8,
+  },
+  rewardsBtnWrapper: {
+    marginVertical: 18,
+    borderRadius: 15,
+    overflow: 'hidden',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+  },
+  rewardsGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+  },
+  rewardsBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  rewardsBtnText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '800',
+    marginLeft: 12,
   },
   podiumCol: { alignItems: 'center', paddingHorizontal: 4 },
   medalWrap: { marginBottom: 6 },
