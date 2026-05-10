@@ -1,8 +1,5 @@
--- Admin operations leaderboard: aggregates post_downloads (1 row = 1 point), scoped by caller-supplied mode + arrays.
--- Invoked only from SocialBot server (service role). NOT for mobile app leaderboard RPCs.
-
-CREATE INDEX IF NOT EXISTS idx_post_downloads_user_created_at
-  ON public.post_downloads (user_id, created_at DESC);
+-- Fix admin leaderboard RPC when public.groups has no deleted_at (older DBs / partial migrations).
+-- Replaces function body only: join groups by id without soft-delete filter.
 
 CREATE OR REPLACE FUNCTION public.admin_leaderboard_page(
   p_mode text,
@@ -171,33 +168,3 @@ BEGIN
   );
 END;
 $$;
-
-REVOKE ALL ON FUNCTION public.admin_leaderboard_page(
-  text,
-  bigint[],
-  bigint[],
-  timestamptz,
-  timestamptz,
-  text,
-  bigint,
-  text,
-  bigint,
-  boolean,
-  int,
-  int
-) FROM PUBLIC;
-
-GRANT EXECUTE ON FUNCTION public.admin_leaderboard_page(
-  text,
-  bigint[],
-  bigint[],
-  timestamptz,
-  timestamptz,
-  text,
-  bigint,
-  text,
-  bigint,
-  boolean,
-  int,
-  int
-) TO service_role;
