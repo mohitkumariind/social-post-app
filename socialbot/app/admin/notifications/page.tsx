@@ -12,6 +12,7 @@ const __DEV__ = process.env.NODE_ENV !== 'production';
 
 const ACCENT = '#25D366';
 const BODY_MAX = 2000;
+const HISTORY_PAGE_SIZE = 10;
 
 type GeoRow = { id: string; name: string; state_id?: string; loksabha_id?: string };
 
@@ -130,6 +131,9 @@ export default function NotificationBroadcastCenterPage() {
   const [broadcasts, setBroadcasts] = useState<BroadcastRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyTotal, setHistoryTotal] = useState<number | null>(null);
+  const [historyTick, setHistoryTick] = useState(0);
 
   const [toast, setToast] = useState<string | null>(null);
 
@@ -250,26 +254,33 @@ export default function NotificationBroadcastCenterPage() {
     }
   };
 
-  const loadBroadcasts = useCallback(async () => {
-    setHistoryLoading(true);
-    setHistoryError(null);
-    const { data, error } = await supabase
-      .from('notification_broadcasts')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100);
-    if (error) {
-      setHistoryError(error.message);
-      setBroadcasts([]);
-    } else {
-      setBroadcasts((data ?? []) as BroadcastRow[]);
-    }
-    setHistoryLoading(false);
-  }, []);
-
   useEffect(() => {
-    void loadBroadcasts();
-  }, [loadBroadcasts]);
+    let cancelled = false;
+    (async () => {
+      setHistoryLoading(true);
+      setHistoryError(null);
+      const from = historyPage * HISTORY_PAGE_SIZE;
+      const to = from + HISTORY_PAGE_SIZE - 1;
+      const { data, error, count } = await supabase
+        .from('notification_broadcasts')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
+      if (cancelled) return;
+      if (error) {
+        setHistoryError(error.message);
+        setBroadcasts([]);
+        setHistoryTotal(null);
+      } else {
+        setBroadcasts((data ?? []) as BroadcastRow[]);
+        setHistoryTotal(typeof count === 'number' ? count : null);
+      }
+      setHistoryLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [historyPage, historyTick]);
 
   useEffect(() => {
     const run = async () => {
@@ -468,7 +479,8 @@ export default function NotificationBroadcastCenterPage() {
     setImageUrl('');
     setToast('Broadcast sent successfully.');
     window.setTimeout(() => setToast(null), 4000);
-    void loadBroadcasts();
+    setHistoryPage(0);
+    setHistoryTick((t) => t + 1);
   };
 
   const selectClass =
@@ -802,6 +814,38 @@ export default function NotificationBroadcastCenterPage() {
             </tbody>
           </table>
         </div>
+
+        {historyTotal != null && historyTotal > HISTORY_PAGE_SIZE ? (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 text-xs font-semibold text-slate-600">
+            <span>
+              Page {historyPage + 1} of {Math.max(1, Math.ceil(historyTotal / HISTORY_PAGE_SIZE))} · Showing{' '}
+              {historyTotal === 0 ? 0 : historyPage * HISTORY_PAGE_SIZE + 1}–
+              {Math.min((historyPage + 1) * HISTORY_PAGE_SIZE, historyTotal)} of {historyTotal}
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={historyLoading || historyPage <= 0}
+                onClick={() => setHistoryPage((p) => Math.max(0, p - 1))}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 font-black uppercase tracking-wide text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                disabled={historyLoading || (historyPage + 1) * HISTORY_PAGE_SIZE >= historyTotal}
+                onClick={() => setHistoryPage((p) => p + 1)}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 font-black uppercase tracking-wide text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        ) : historyTotal != null && historyTotal > 0 && historyTotal <= HISTORY_PAGE_SIZE ? (
+          <p className="mt-3 text-xs font-medium text-slate-500">
+            Showing all {historyTotal} broadcast{historyTotal === 1 ? '' : 's'}.
+          </p>
+        ) : null}
       </section>
 
       {/* App gallery modal */}
