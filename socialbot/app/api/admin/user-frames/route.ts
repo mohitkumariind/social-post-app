@@ -24,6 +24,12 @@ export async function GET(request: NextRequest) {
   const searchQuery = (request.nextUrl.searchParams.get('search_query') ?? '').trim();
   const limit = clampLimit(request.nextUrl.searchParams.get('limit'), API_DEFAULT_FRAMES_LIMIT, API_MAX_FRAMES_LIMIT);
   const cursorCreatedAt = (request.nextUrl.searchParams.get('cursor_created_at') ?? '').trim();
+  const offsetRaw = (request.nextUrl.searchParams.get('offset') ?? '').trim();
+  let offset = 0;
+  if (offsetRaw !== '') {
+    const n = Number(offsetRaw);
+    if (Number.isFinite(n) && n >= 0) offset = Math.min(Math.trunc(n), 1_000_000);
+  }
   if (!userId) {
     return NextResponse.json({ error: 'Missing user_id' }, { status: 400 });
   }
@@ -70,23 +76,23 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Stable `id` order so `offset` / `.range()` pagination cannot skip or duplicate rows.
   const base = () =>
     db
       .from('user_frames')
       // `file_name` is optional across projects; keep response typing loose.
       .select('id,url,created_at,file_name')
       .eq('user_id', userId)
-      .order('file_name', { ascending: true })
-      .order('created_at', { ascending: false })
-      .limit(limit) as any;
+      .order('id', { ascending: true })
+      .range(offset, offset + limit - 1) as any;
 
   const baseWithoutFileName = () =>
     db
       .from('user_frames')
       .select('id,url,created_at')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(limit) as any;
+      .order('id', { ascending: true })
+      .range(offset, offset + limit - 1) as any;
 
   const isMissingColumnErr = (err: { message?: string } | null | undefined, columnName: string) => {
     const msg = String(err?.message ?? '').toLowerCase();
@@ -96,24 +102,25 @@ export async function GET(request: NextRequest) {
   // If file_name column doesn't exist in this project, fall back to URL search.
   if (!searchQuery) {
     let q = base();
-    if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
+    if (offset === 0 && cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
     let { data, error } = await q;
     if (error && isMissingColumnErr(error, 'file_name')) {
       let q2 = baseWithoutFileName();
-      if (cursorCreatedAt) q2 = q2.lt('created_at', cursorCreatedAt);
+      if (offset === 0 && cursorCreatedAt) q2 = q2.lt('created_at', cursorCreatedAt);
       ({ data, error } = await q2);
     }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     const rows = (data ?? []) as any[];
     const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
+    const has_more = rows.length === limit;
     return NextResponse.json(
-      { frames: rows, usedServiceRole: !!admin, next_cursor_created_at, limit },
+      { frames: rows, usedServiceRole: !!admin, next_cursor_created_at, limit, offset, has_more },
       { headers: { 'Cache-Control': 'no-store' } }
     );
   }
 
   let qSearch: any = base().ilike('file_name', `%${searchQuery}%`);
-  if (cursorCreatedAt) qSearch = qSearch.lt('created_at', cursorCreatedAt);
+  if (offset === 0 && cursorCreatedAt) qSearch = qSearch.lt('created_at', cursorCreatedAt);
   let res: any = await qSearch;
   if (res.error) {
     if (isMissingColumnErr(res.error, 'file_name')) {
@@ -122,9 +129,9 @@ export async function GET(request: NextRequest) {
         .select('id,url,created_at')
         .eq('user_id', userId)
         .ilike('url', `%${searchQuery}%`)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-      if (cursorCreatedAt) qFallback = qFallback.lt('created_at', cursorCreatedAt);
+        .order('id', { ascending: true })
+        .range(offset, offset + limit - 1);
+      if (offset === 0 && cursorCreatedAt) qFallback = qFallback.lt('created_at', cursorCreatedAt);
       res = (await qFallback) as any;
     }
   }
@@ -132,9 +139,10 @@ export async function GET(request: NextRequest) {
   if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
   const rows = (res.data ?? []) as any[];
   const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
+  const has_more = rows.length === limit;
   return NextResponse.json(
-    { frames: rows, usedServiceRole: !!admin, next_cursor_created_at, limit },
-    { headers: { 'Cache-Control': 'no-store' }
-  });
+    { frames: rows, usedServiceRole: !!admin, next_cursor_created_at, limit, offset, has_more },
+    { headers: { 'Cache-Control': 'no-store' } }
+  );
 }
 

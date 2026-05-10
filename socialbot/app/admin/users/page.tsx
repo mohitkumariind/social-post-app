@@ -25,6 +25,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
+import { API_MAX_FRAMES_LIMIT } from '@/lib/perf-defaults';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
 
@@ -73,6 +74,40 @@ interface AppUser {
 
 type StateRow = { id: string; name: string };
 type GroupRow = { id: string; name: string };
+
+type UserFrameRow = { id: string | number; url: string; created_at: string | null; file_name?: unknown };
+
+function sortUserFramesByFileName(rows: UserFrameRow[]): UserFrameRow[] {
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  return [...rows].sort((a, b) => collator.compare(String(a.file_name ?? '').trim(), String(b.file_name ?? '').trim()));
+}
+
+/** Loads every chunk from `/api/admin/user-frames` (server caps each chunk at `API_MAX_FRAMES_LIMIT`). */
+async function fetchAllUserFramesForAdmin(userId: string, searchQuery: string): Promise<UserFrame[]> {
+  const aggregated: UserFrameRow[] = [];
+  let offset = 0;
+  const chunk = API_MAX_FRAMES_LIMIT;
+  for (;;) {
+    const usp = new URLSearchParams({ user_id: userId, limit: String(chunk), offset: String(offset) });
+    if (searchQuery) usp.set('search_query', searchQuery);
+    const res = await fetch(`/api/admin/user-frames?${usp.toString()}`, { credentials: 'same-origin' });
+    if (!res.ok) return [];
+    const json = (await res.json().catch(() => ({}))) as { frames?: UserFrameRow[]; has_more?: boolean };
+    const batch = json.frames ?? [];
+    aggregated.push(...batch);
+    if (batch.length < chunk || !json.has_more) break;
+    offset += chunk;
+    if (offset > 500_000) break;
+  }
+  const sorted = sortUserFramesByFileName(aggregated);
+  return sorted.map((row) => ({
+    id: row.id,
+    url: row.url,
+    uploadDate: row.created_at
+      ? new Date(String(row.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })
+      : '',
+  }));
+}
 
 export default function UserManagement() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -513,18 +548,7 @@ export default function UserManagement() {
     setFramesSearchQuery('');
     setFramesSearchDebounced('');
     try {
-      const id = encodeURIComponent(String(user.id));
-      const res = await fetch(`/api/admin/user-frames?user_id=${id}`, { credentials: 'same-origin' });
-      if (!res.ok) {
-        if (__DEV__) console.warn('[users] /api/admin/user-frames failed', res.status);
-        return;
-      }
-      const json = (await res.json().catch(() => ({}))) as { frames?: Array<{ id: string | number; url: string; created_at: string | null }> };
-      const frames: UserFrame[] = (json.frames || []).map((row) => ({
-        id: row.id,
-        url: row.url,
-        uploadDate: row.created_at ? new Date(String(row.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
-      }));
+      const frames = await fetchAllUserFramesForAdmin(String(user.id), '');
       setSelectedUser((prev) => (prev ? { ...prev, personalFrames: frames } : null));
       setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, personalFrames: frames } : u)));
     } catch (e) {
@@ -537,20 +561,9 @@ export default function UserManagement() {
     let cancelled = false;
     (async () => {
       try {
-        const id = encodeURIComponent(String(selectedUser.id));
-        const q = encodeURIComponent(framesSearchDebounced);
-        const url = framesSearchDebounced
-          ? `/api/admin/user-frames?user_id=${id}&search_query=${q}`
-          : `/api/admin/user-frames?user_id=${id}`;
-        const res = await fetch(url, { credentials: 'same-origin' });
-        if (!res.ok) return;
-        const json = (await res.json().catch(() => ({}))) as { frames?: Array<{ id: string | number; url: string; created_at: string | null }> };
         if (cancelled) return;
-        const frames: UserFrame[] = (json.frames || []).map((row) => ({
-          id: row.id,
-          url: row.url,
-          uploadDate: row.created_at ? new Date(String(row.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
-        }));
+        const frames = await fetchAllUserFramesForAdmin(String(selectedUser.id), framesSearchDebounced);
+        if (cancelled) return;
         setSelectedUser((prev) => (prev ? { ...prev, personalFrames: frames } : null));
         setUsers((prev) => prev.map((u) => (u.id === selectedUser.id ? { ...u, personalFrames: frames } : u)));
       } catch (e) {

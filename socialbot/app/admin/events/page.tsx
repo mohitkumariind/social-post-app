@@ -581,11 +581,11 @@ export default function App() {
     return { data: d.event, error: null } as any;
   };
 
-  const deleteEventRowByIdOrName = async (ev: CampaignEvent) => {
+  const deleteEventRowByIdOrName = async (ev: CampaignEvent): Promise<{ ok: true } | { ok: false; error: string }> => {
     const idStr = String(ev.id ?? '').trim();
     if (!isLikelyEventUuid(idStr)) {
       devConsole.error('Events delete error: Missing stable event id.');
-      return;
+      return { ok: false, error: 'Missing stable event id. Refresh the page and try again.' };
     }
     const res = await fetch(`/api/admin/events?id=${encodeURIComponent(idStr)}`, {
       method: 'DELETE',
@@ -593,8 +593,11 @@ export default function App() {
     });
     if (!res.ok) {
       const d = (await res.json().catch(() => ({}))) as { error?: string };
-      devConsole.error('Events delete error:', d.error ?? res.status);
+      const msg = String(d.error ?? `HTTP ${res.status}`).trim() || 'Delete failed';
+      devConsole.error('Events delete error:', msg);
+      return { ok: false, error: msg };
     }
+    return { ok: true };
   };
 
   /**
@@ -891,6 +894,14 @@ export default function App() {
 
   const deleteEvent = async (ev: CampaignEvent) => {
     try {
+      // Mark event deleted on the server first. If this fails, do not remove posts or local list
+      // (otherwise the event comes back on refresh).
+      const delEv = await deleteEventRowByIdOrName(ev);
+      if (!delEv.ok) {
+        alert(delEv.error);
+        return;
+      }
+
       let postsQuery = supabase.from('posts').select('id, image_url').eq('category', ev.name);
       const { data: postsData } = await postsQuery;
       const postsToClean = postsData || [];
@@ -914,12 +925,6 @@ export default function App() {
         if (postsErr) devConsole.error('Posts delete error:', postsErr);
       } catch (postsEx) {
         devConsole.error('Posts delete exception:', postsEx);
-      }
-
-      try {
-        await deleteEventRowByIdOrName(ev);
-      } catch (eventsEx) {
-        devConsole.error('Events delete exception:', eventsEx);
       }
 
       setEvents((prev) => prev.filter((e) => e.id !== ev.id));
