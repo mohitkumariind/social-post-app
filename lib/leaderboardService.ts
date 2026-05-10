@@ -9,6 +9,19 @@ export type LeaderboardEntry = {
   points: number;
 };
 
+/** Scopes map to server-side filters derived only from `auth.uid()` profile — never from client-supplied party/state. */
+export type LeaderboardScope = 'state' | 'national';
+
+/** Profile slice for typing callers; never sent as party/state filters (server uses JWT only). */
+export type LeaderboardUserContext = {
+  profile_id: string;
+  party_id: number | null;
+  state_id: number | null;
+};
+
+const DEFAULT_STATE_LIMIT = 50;
+const DEFAULT_NATIONAL_LIMIT = 10;
+
 function mapRpcRows(data: unknown): LeaderboardEntry[] {
   if (!Array.isArray(data)) return [];
   return data.map((r: Record<string, unknown>) => ({
@@ -21,20 +34,34 @@ function mapRpcRows(data: unknown): LeaderboardEntry[] {
   }));
 }
 
-export async function fetchStatePartyLeaderboard(limit = 50): Promise<{
-  rows: LeaderboardEntry[];
-  error: string | null;
-}> {
-  const { data, error } = await supabase.rpc('get_leaderboard_state_party', { p_limit: limit });
-  if (error) return { rows: [], error: error.message };
-  return { rows: mapRpcRows(data), error: null };
+function clampLimit(scope: LeaderboardScope, limit: number): number {
+  if (scope === 'state') {
+    return Math.min(Math.max(limit, 1), 100);
+  }
+  return Math.min(Math.max(limit, 1), 50);
 }
 
-export async function fetchNationalPartyLeaderboard(limit = 10): Promise<{
-  rows: LeaderboardEntry[];
-  error: string | null;
-}> {
-  const { data, error } = await supabase.rpc('get_leaderboard_national_party', { p_limit: limit });
+/**
+ * Production leaderboard fetch: sends only `scope` and `p_limit`.
+ * Party/state scoping is enforced in `public.get_leaderboard` via `auth.uid()` — never trust client filters.
+ */
+export async function getLeaderboard(
+  scope: LeaderboardScope,
+  user: LeaderboardUserContext,
+  limit?: number
+): Promise<{ rows: LeaderboardEntry[]; error: string | null }> {
+  if (!user.profile_id?.trim()) {
+    return { rows: [], error: 'Not signed in.' };
+  }
+
+  const rawLimit =
+    scope === 'state' ? limit ?? DEFAULT_STATE_LIMIT : limit ?? DEFAULT_NATIONAL_LIMIT;
+  const p_limit = clampLimit(scope, rawLimit);
+
+  const { data, error } = await supabase.rpc('get_leaderboard', {
+    p_scope: scope,
+    p_limit,
+  });
   if (error) return { rows: [], error: error.message };
   return { rows: mapRpcRows(data), error: null };
 }

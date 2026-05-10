@@ -22,8 +22,7 @@ import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import {
   type LeaderboardEntry,
-  fetchNationalPartyLeaderboard,
-  fetchStatePartyLeaderboard,
+  getLeaderboard,
   formatPointsLabel,
   sanitizeInstagramHandle,
 } from '../../lib/leaderboardService';
@@ -160,7 +159,7 @@ export default function LeaderboardScreen() {
   const { width } = useWindowDimensions();
   const router = useRouter();
   const { t } = useLang();
-  const { profileLoaded } = useUser();
+  const { profileLoaded, userInfo } = useUser();
   const [stateRows, setStateRows] = useState<LeaderboardEntry[]>([]);
   const [nationalRows, setNationalRows] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -171,13 +170,21 @@ export default function LeaderboardScreen() {
 
   const load = useCallback(async () => {
     setError(null);
-    const [st, nat] = await Promise.all([fetchStatePartyLeaderboard(50), fetchNationalPartyLeaderboard(10)]);
+    const ctx = {
+      profile_id: userInfo.profile_id,
+      party_id: userInfo.party_id,
+      state_id: userInfo.state_id,
+    };
+    const [st, nat] = await Promise.all([
+      getLeaderboard('state', ctx, 50),
+      getLeaderboard('national', ctx, 10),
+    ]);
     if (st.error || nat.error) {
       setError(st.error || nat.error || t('leaderboard_error'));
     }
     setStateRows(st.rows);
     setNationalRows(nat.rows);
-  }, [t]);
+  }, [t, userInfo.profile_id, userInfo.party_id, userInfo.state_id]);
 
   useEffect(() => {
     if (!profileLoaded) return;
