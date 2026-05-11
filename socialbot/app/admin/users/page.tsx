@@ -634,10 +634,13 @@ export default function UserManagement() {
         frame?: { id: unknown; url?: string; created_at?: string | null };
       };
       const fr = insertJson.frame;
-      if (!fr?.id) continue;
+      if (fr?.id == null || fr.id === '') continue;
+
+      const frameId: string | number =
+        typeof fr.id === 'string' || typeof fr.id === 'number' ? fr.id : String(fr.id);
 
       const frame: UserFrame = {
-        id: fr.id,
+        id: frameId,
         url: String(fr.url ?? imageUrl),
         uploadDate: fr.created_at
           ? new Date(String(fr.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })
