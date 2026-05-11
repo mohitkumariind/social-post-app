@@ -745,7 +745,7 @@ export default function App() {
   };
 
   const openEvent = async (ev: CampaignEvent) => {
-    let postsQuery = supabase.from('posts').select('id, image_url, title, dashboard_category').eq('category', ev.name);
+    const postsQuery = supabase.from('posts').select('id, image_url, title, dashboard_category').eq('category', ev.name);
     const [eventsRes, postsRes] = await Promise.all([
       fetchEventByIdOrName(ev),
       postsQuery.order('created_at', { ascending: false }),
@@ -957,7 +957,7 @@ export default function App() {
         return;
       }
 
-      let postsQuery = supabase.from('posts').select('id, image_url').eq('category', ev.name);
+      const postsQuery = supabase.from('posts').select('id, image_url').eq('category', ev.name);
       const { data: postsData } = await postsQuery;
       const postsToClean = postsData || [];
 
@@ -1132,7 +1132,7 @@ export default function App() {
 
     const targetCategory = newName.trim();
     if (targetCategory !== originalName) {
-      let catQ = supabase.from('posts').update({ category: targetCategory }).eq('category', originalName);
+      const catQ = supabase.from('posts').update({ category: targetCategory }).eq('category', originalName);
       await catQ;
     }
     const postUpdatePayload: Record<string, unknown> = {};
@@ -1157,7 +1157,7 @@ export default function App() {
       if (assemblyIdArr.length > 0) postUpdatePayload.assembly_id = assemblyIdArr;
     }
     if (Object.keys(postUpdatePayload).length > 0) {
-      let pq = supabase.from('posts').update(postUpdatePayload).eq('category', targetCategory);
+      const pq = supabase.from('posts').update(postUpdatePayload).eq('category', targetCategory);
       await pq;
     }
 
