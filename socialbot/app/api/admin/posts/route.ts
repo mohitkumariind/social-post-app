@@ -141,13 +141,13 @@ export async function GET(request: NextRequest) {
   // Always scope in SQL (no fetch-all-then-filter).
   const base = admin
     .from('posts')
-    .select('id,title,image_url,category,created_at,scheduled_at,status,deleted_at,created_by,state_id,group_id')
+    .select('id,title,image_url,category,dashboard_category,created_at,scheduled_at,status,deleted_at,created_by,state_id,group_id')
     .order('created_at', { ascending: false })
     .limit(200) as any;
   const q = adminRole ? base : buildScopedQuery(scopedUser, base, 'posts');
   let res: any = await q;
   if (res.error && isMissingColumnErr(res.error, 'scheduled_at')) {
-    const fallback = admin.from('posts').select('id,title,image_url,category,created_at,state_id,group_id').order('created_at', { ascending: false }).limit(200) as any;
+    const fallback = admin.from('posts').select('id,title,image_url,category,dashboard_category,created_at,state_id,group_id').order('created_at', { ascending: false }).limit(200) as any;
     res = adminRole ? await fallback : await buildScopedQuery(scopedUser, fallback, 'posts');
   }
   if (res.error) return json({ error: res.error.message }, 500);

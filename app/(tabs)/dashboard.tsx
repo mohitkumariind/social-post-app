@@ -61,6 +61,19 @@ type CarouselFlatItem =
   | { key: string; type: 'home' }
   | { key: string; type: 'category'; cat: Category; index: number };
 
+type QuickCategoryChip = {
+  id: 'good_morning' | 'good_night' | 'motivation' | 'devotional' | 'birthday_wishes';
+  label: string;
+};
+
+const QUICK_CATEGORY_CHIPS: QuickCategoryChip[] = [
+  { id: 'good_morning', label: 'Good Morning' },
+  { id: 'good_night', label: 'Good Night' },
+  { id: 'motivation', label: 'Motivation' },
+  { id: 'devotional', label: 'Devotional' },
+  { id: 'birthday_wishes', label: 'Birthday Wishes' },
+];
+
 function DashboardBannerCarousel({
   width,
   banners,
@@ -196,6 +209,7 @@ export default function DashboardScreen() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [banners, setBanners] = useState<DashboardBannerRow[]>([]);
+  const [quickChipSelected, setQuickChipSelected] = useState<QuickCategoryChip['id'] | null>(null);
 
   const hasFetchedProfileRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
@@ -446,6 +460,7 @@ export default function DashboardScreen() {
         onPostsSchemaMissing: () => {
           postsSchemaOkRef.current = false;
         },
+        dashboardCategory: quickChipSelected,
       });
 
       if (reqId !== fetchPostsReqIdRef.current) return;
@@ -475,7 +490,7 @@ export default function DashboardScreen() {
     } finally {
       if (reqId === fetchPostsReqIdRef.current) setLoading(false);
     }
-  }, []);
+  }, [quickChipSelected]);
 
   const fetchEvents = React.useCallback(async () => {
     try {
@@ -779,6 +794,48 @@ export default function DashboardScreen() {
     }
   };
 
+  const onQuickChipPress = React.useCallback(
+    (chipId: QuickCategoryChip['id']) => {
+      // Toggle behavior:
+      // - If already selected, clear and return to default dashboard view.
+      // - Otherwise switch to that category (only if it exists in CURRENT_DATA).
+      if (quickChipSelected === chipId) {
+        setQuickChipSelected(null);
+        setActiveCategory(null);
+        clearDashboardExpandParams();
+        void fetchPosts('', '', true);
+        return;
+      }
+      const idx = CURRENT_DATA.findIndex((c) => String(c.name).trim().toLowerCase() === chipId);
+      if (idx === -1) {
+        // Category not present in current feed; do not change default behavior.
+        setQuickChipSelected(chipId);
+        setActiveCategory(null);
+        clearDashboardExpandParams();
+        void fetchPosts('', '', true);
+        return;
+      }
+      setQuickChipSelected(chipId);
+      switchCategory(CURRENT_DATA[idx], idx);
+      clearDashboardExpandParams();
+      void fetchPosts('', '', true);
+    },
+    [quickChipSelected, CURRENT_DATA, clearDashboardExpandParams, fetchPosts]
+  );
+
+  // Keep quick chip selection aligned with manual category navigation/swipes.
+  useEffect(() => {
+    if (!activeCategory) {
+      if (quickChipSelected !== null) setQuickChipSelected(null);
+      return;
+    }
+    const name = String(activeCategory.name ?? '').trim().toLowerCase();
+    const isQuick = QUICK_CATEGORY_CHIPS.some((c) => c.id === (name as any));
+    if (!isQuick && quickChipSelected !== null) setQuickChipSelected(null);
+    if (isQuick && quickChipSelected !== (name as any)) setQuickChipSelected(name as any);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- derived from activeCategory and quickChipSelected only
+  }, [activeCategory?.name]);
+
   const handleGridScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const offsetX = e.nativeEvent.contentOffset.x;
     const index = Math.round(offsetX / width);
@@ -1054,6 +1111,35 @@ export default function DashboardScreen() {
           {banners.length > 0 ? (
             <DashboardBannerCarousel width={width} banners={banners} onPress={onBannerPress} />
           ) : null}
+
+          {/* Quick Categories: lightweight horizontal pills (no default behavior change) */}
+          <View style={styles.quickChipsWrap}>
+            <FlatList
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              data={QUICK_CATEGORY_CHIPS}
+              keyExtractor={(c) => c.id}
+              contentContainerStyle={styles.quickChipsContent}
+              renderItem={({ item }) => {
+                const active = quickChipSelected === item.id;
+                return (
+                  <TouchableOpacity
+                    onPress={() => onQuickChipPress(item.id)}
+                    style={[styles.quickChip, active && styles.quickChipActive]}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.quickChipText, active && styles.quickChipTextActive]}>{item.label}</Text>
+                  </TouchableOpacity>
+                );
+              }}
+              initialNumToRender={QUICK_CATEGORY_CHIPS.length}
+              windowSize={3}
+              maxToRenderPerBatch={10}
+              updateCellsBatchingPeriod={50}
+              removeClippedSubviews={Platform.OS === 'android'}
+            />
+          </View>
+
           <View style={styles.gradientHeaderWrapper}>
             <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.eclipseGradient}>
               <Text style={styles.modernCenterTitle}>
@@ -1167,6 +1253,26 @@ const styles = StyleSheet.create({
   bannerDotsRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 8, gap: 6 },
   bannerDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(0,0,0,0.18)' },
   bannerDotActive: { backgroundColor: Colors.primary },
+
+  quickChipsWrap: { marginTop: 2, marginBottom: 6 },
+  quickChipsContent: { paddingHorizontal: 20, gap: 10 },
+  quickChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+  },
+  quickChipActive: {
+    backgroundColor: 'rgba(138, 43, 226, 0.16)',
+  },
+  quickChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textMuted,
+  },
+  quickChipTextActive: {
+    color: Colors.primary,
+  },
   eclipseGradient: { height: 50, width: '100%', borderRadius: 15, justifyContent: 'center', alignItems: 'center' },
   modernCenterTitle: { fontSize: 17, fontWeight: '800', color: '#FFF' },
   sectionContainer: { marginTop: 25 },

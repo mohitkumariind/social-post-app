@@ -7,6 +7,7 @@ export type DashboardPostRow = {
   title: string;
   image_url: string;
   category: string;
+  dashboard_category?: string | null;
   event_date?: string;
   download_count?: number | null;
   state_id?: number[] | number | null;
@@ -61,12 +62,22 @@ export async function fetchDashboardPosts(opts: {
   userSnapshot: Record<string, unknown>;
   postsSchemaOk: boolean | null;
   onPostsSchemaMissing?: () => void;
+  dashboardCategory?: string | null;
 }): Promise<FetchPostsResult> {
   if (opts.postsSchemaOk === false) {
     return { rows: [], error: null, usedRpc: true };
   }
 
-  let rpc = await supabase.rpc('get_dashboard_posts');
+  // v2 supports optional quick-category filtering.
+  const dc = opts.dashboardCategory != null && String(opts.dashboardCategory).trim() !== '' ? String(opts.dashboardCategory).trim() : null;
+  let rpc = await supabase.rpc('get_dashboard_posts_v2', { p_dashboard_category: dc });
+  if (rpc.error && rpcMissingFunction(rpc.error)) {
+    rpc = await supabase.rpc('get_dashboard_posts_for_reader_v2', { p_dashboard_category: dc });
+  }
+  if (rpc.error && rpcMissingFunction(rpc.error)) {
+    // Legacy fallback (no category filtering available).
+    rpc = await supabase.rpc('get_dashboard_posts');
+  }
   if (rpc.error && rpcMissingFunction(rpc.error)) {
     rpc = await supabase.rpc('get_dashboard_posts_for_reader');
   }
@@ -87,4 +98,4 @@ export async function fetchDashboardPosts(opts: {
   const filtered = applySecondaryPostFilter(rows, opts.userSnapshot, opts.profileLoaded);
   return { rows: filtered, error: null, usedRpc: true };
 }
-
+

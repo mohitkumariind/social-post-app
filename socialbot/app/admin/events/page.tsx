@@ -47,6 +47,7 @@ interface Post {
   url: string;
   type: 'video' | 'image';
   name: string;
+  dashboard_category?: string | null;
 }
 
 interface CampaignEvent {
@@ -226,6 +227,8 @@ export default function App() {
   const [view, setView] = useState<'list' | 'gallery'>('list');
   const [selectedEvent, setSelectedEvent] = useState<CampaignEvent | null>(null);
   const [postToDelete, setPostToDelete] = useState<Post | null>(null);
+  const [postCategoryModal, setPostCategoryModal] = useState<{ open: boolean; post: Post | null }>({ open: false, post: null });
+  const [postCategoryValue, setPostCategoryValue] = useState<'none' | 'good_morning' | 'good_night' | 'motivation' | 'devotional' | 'birthday_wishes'>('none');
   const [captionToDelete, setCaptionToDelete] = useState<number | null>(null); 
   const [newCaptionText, setNewCaptionText] = useState(''); 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -707,7 +710,7 @@ export default function App() {
   };
 
   const openEvent = async (ev: CampaignEvent) => {
-    let postsQuery = supabase.from('posts').select('id, image_url, title').eq('category', ev.name);
+    let postsQuery = supabase.from('posts').select('id, image_url, title, dashboard_category').eq('category', ev.name);
     const [eventsRes, postsRes] = await Promise.all([
       fetchEventByIdOrName(ev),
       postsQuery.order('created_at', { ascending: false }),
@@ -721,11 +724,12 @@ export default function App() {
     const evLoksabha = toStrArr((eventRow?.loksabha as string | string[] | undefined) ?? ev.loksabha);
     const evAssembly = toStrArr((eventRow?.assembly as string | string[] | undefined) ?? ev.assembly);
     const evWithPartyState = { ...ev, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly };
-    const postsFromDb: Post[] = (postsRes.data || []).map((p: { id: string; image_url: string; title: string }) => ({
+    const postsFromDb: Post[] = (postsRes.data || []).map((p: { id: string; image_url: string; title: string; dashboard_category?: unknown }) => ({
       id: p.id,
       url: p.image_url,
       type: 'image' as const,
       name: p.title || '',
+      dashboard_category: typeof (p as any).dashboard_category === 'string' ? String((p as any).dashboard_category) : null,
     }));
     const evWithData = { ...evWithPartyState, captions: dbCaptions, posts: postsFromDb, assetsCount: postsFromDb.length };
     setEvents((prev) =>
@@ -790,6 +794,7 @@ export default function App() {
         title: file.name.replace(ext, ''),
         image_url: imageUrl,
         category: selectedEvent.name,
+        dashboard_category: postCategoryValue === 'none' ? null : postCategoryValue,
         /** Must match app/dashboard graphics filter (`is_video` false or null); DB default true would hide posts + break caption sync filters. */
         is_video: false,
         captions: batchCaptions,
@@ -826,7 +831,8 @@ export default function App() {
         id: (insertData as { id: string }).id,
         url: imageUrl,
         type: 'image',
-        name: file.name
+        name: file.name,
+        dashboard_category: postCategoryValue === 'none' ? null : postCategoryValue,
       });
     }
 
@@ -1589,6 +1595,70 @@ export default function App() {
     <div className="max-w-6xl mx-auto p-4 space-y-8 animate-in slide-in-from-bottom-4 text-slate-700 pb-20">
       <input type="file" ref={fileInputRef} onChange={handleUpload} multiple accept="image/jpeg,image/png,.jpg,.jpeg,.png" className="hidden" />
 
+      {/* Post category modal */}
+      {postCategoryModal.open && postCategoryModal.post ? (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
+          <div className="bg-white rounded-[40px] p-10 max-w-sm w-full text-center space-y-6 shadow-2xl animate-in zoom-in-95">
+            <p className="font-black text-xl text-slate-900">Post category</p>
+            <p className="text-slate-400 text-sm font-medium italic">
+              Sets dashboard quick category visibility. Event relation stays unchanged.
+            </p>
+            <select
+              value={postCategoryValue}
+              onChange={(e) => setPostCategoryValue(e.target.value as any)}
+              className="w-full bg-slate-50 p-3 rounded-2xl border border-slate-200 outline-none font-bold text-slate-800 text-sm"
+            >
+              <option value="none">none</option>
+              <option value="good_morning">good_morning</option>
+              <option value="good_night">good_night</option>
+              <option value="motivation">motivation</option>
+              <option value="devotional">devotional</option>
+              <option value="birthday_wishes">birthday_wishes</option>
+            </select>
+            <div className="flex gap-4">
+              <button
+                onClick={() => setPostCategoryModal({ open: false, post: null })}
+                className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const post = postCategoryModal.post;
+                  if (!post) return;
+                  const next = postCategoryValue === 'none' ? null : postCategoryValue;
+                  const { error } = await supabase.from('posts').update({ dashboard_category: next }).eq('id', post.id);
+                  if (error) {
+                    alert(error.message);
+                    return;
+                  }
+                  setEvents((prev) =>
+                    prev.map((ev) =>
+                      ev.id === selectedEvent?.id
+                        ? {
+                            ...ev,
+                            posts: (ev.posts ?? []).map((p) => (p.id === post.id ? { ...p, dashboard_category: next } : p)),
+                          }
+                        : ev
+                    )
+                  );
+                  if (selectedEvent) {
+                    setSelectedEvent({
+                      ...selectedEvent,
+                      posts: (selectedEvent.posts ?? []).map((p) => (p.id === post.id ? { ...p, dashboard_category: next } : p)),
+                    });
+                  }
+                  setPostCategoryModal({ open: false, post: null });
+                }}
+                className="flex-1 py-4 bg-slate-900 text-white rounded-2xl font-bold shadow-xl"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* Media Delete Popup */}
       {postToDelete && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
@@ -1637,6 +1707,21 @@ export default function App() {
         <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] px-2 flex items-center gap-2">
             <ImageIcon size={14} className="text-blue-500" /> Media ({selectedEvent?.posts.length})
         </h3>
+        <div className="px-2">
+          <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Quick category (optional)</label>
+          <select
+            value={postCategoryValue}
+            onChange={(e) => setPostCategoryValue(e.target.value as any)}
+            className="mt-2 w-full max-w-xs bg-slate-50 p-3 rounded-[25px] border border-slate-200 outline-none font-bold text-slate-800 text-sm"
+          >
+            <option value="none">none</option>
+            <option value="good_morning">good_morning</option>
+            <option value="good_night">good_night</option>
+            <option value="motivation">motivation</option>
+            <option value="devotional">devotional</option>
+            <option value="birthday_wishes">birthday_wishes</option>
+          </select>
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
             <div onClick={() => fileInputRef.current?.click()} className="aspect-[9/16] bg-white border-4 border-dashed border-slate-200 rounded-[45px] flex flex-col items-center justify-center text-slate-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50/30 transition-all group active:scale-95">
                 <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all mb-4 shadow-inner"><Plus size={32} strokeWidth={3} /></div>
@@ -1648,6 +1733,16 @@ export default function App() {
                 {post.type === 'video' ? <video src={post.url} className="w-full h-full object-cover opacity-80" /> : <img src={post.url} className="w-full h-full object-cover opacity-80" alt="asset" />}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60" />
                 <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
+                    <button
+                      onClick={() => {
+                        setPostCategoryValue((post.dashboard_category as any) || 'none');
+                        setPostCategoryModal({ open: true, post });
+                      }}
+                      className="w-10 h-10 mr-2 bg-slate-900/70 text-white rounded-2xl flex items-center justify-center shadow-2xl hover:bg-slate-900 active:scale-90 transition-all"
+                      title="Set quick category"
+                    >
+                      <Pencil size={18} />
+                    </button>
                     <button onClick={() => setPostToDelete(post)} className="w-10 h-10 bg-rose-500 text-white rounded-2xl flex items-center justify-center shadow-2xl hover:bg-rose-600 active:scale-90 transition-all"><Trash2 size={18} /></button>
                 </div>
                 <div className="absolute bottom-6 left-6 w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-xl ring-4 ring-blue-600/20">
