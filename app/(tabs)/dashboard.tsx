@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   BackHandler,
   FlatList,
+  Linking,
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -22,6 +23,7 @@ import {
 import { useBoundedDailyUrlMap } from '../../hooks/useBoundedDailyUrlMap';
 import { useDashboardRealtime } from '../../hooks/useDashboardRealtime';
 import { fetchDashboardEvents } from '../../services/eventsService';
+import { fetchDashboardBanners, type DashboardBannerRow } from '../../services/bannersService';
 import { fetchDashboardPosts } from '../../services/postsService';
 import { gfxLogCapped } from '../../utils/dashboardDebug';
 import { hasUsableProfileForVisibility } from '../../utils/visibility';
@@ -58,6 +60,83 @@ type TrendingFlatItem = {
 type CarouselFlatItem =
   | { key: string; type: 'home' }
   | { key: string; type: 'category'; cat: Category; index: number };
+
+function DashboardBannerCarousel({
+  width,
+  banners,
+  onPress,
+}: {
+  width: number;
+  banners: DashboardBannerRow[];
+  onPress: (b: DashboardBannerRow) => void;
+}) {
+  const listRef = useRef<FlatList<DashboardBannerRow>>(null);
+  const [index, setIndex] = useState(0);
+  const indexRef = useRef(0);
+  indexRef.current = index;
+
+  useEffect(() => {
+    if (!banners || banners.length <= 1) return;
+    const t = setInterval(() => {
+      const next = (indexRef.current + 1) % banners.length;
+      listRef.current?.scrollToOffset({ offset: next * width, animated: true });
+      setIndex(next);
+    }, 4500);
+    return () => clearInterval(t);
+  }, [banners, width]);
+
+  return (
+    <View style={styles.bannerCarouselWrap}>
+      <FlatList
+        ref={listRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        data={banners}
+        keyExtractor={(b) => b.id}
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => onPress(item)}
+            style={[styles.bannerCard, { width: width - 40 }]}
+          >
+            <ExpoImage
+              source={{ uri: item.image_url }}
+              style={styles.bannerImg}
+              contentFit="cover"
+              cachePolicy="disk"
+            />
+            {(item.title || item.subtitle || item.cta_text) ? (
+              <View style={styles.bannerOverlay} pointerEvents="none">
+                <LinearGradient
+                  colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.62)']}
+                  style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
+                />
+                {item.title ? <Text style={styles.bannerTitle} numberOfLines={1}>{item.title}</Text> : null}
+                {item.subtitle ? <Text style={styles.bannerSubtitle} numberOfLines={2}>{item.subtitle}</Text> : null}
+                {item.cta_text ? <Text style={styles.bannerCta} numberOfLines={1}>{item.cta_text}</Text> : null}
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        )}
+        onMomentumScrollEnd={(e) => {
+          const next = Math.round(e.nativeEvent.contentOffset.x / Math.max(1, width));
+          setIndex(Math.max(0, Math.min(next, banners.length - 1)));
+        }}
+        getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
+        snapToInterval={width}
+        decelerationRate="fast"
+      />
+      {banners.length > 1 ? (
+        <View style={styles.bannerDotsRow}>
+          {banners.map((b, i) => (
+            <View key={b.id} style={[styles.bannerDot, i === index && styles.bannerDotActive]} />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
 
 type PostRow = {
   id: string;
@@ -116,6 +195,7 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [banners, setBanners] = useState<DashboardBannerRow[]>([]);
 
   const hasFetchedProfileRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
@@ -133,6 +213,7 @@ export default function DashboardScreen() {
   postsRef.current = posts;
 
   const fetchPostsReqIdRef = useRef(0);
+  const fetchBannersReqIdRef = useRef(0);
   const postsSchemaOkRef = useRef<boolean | null>(null);
   const eventsSchemaOkRef = useRef<boolean | null>(null);
   const profileLoadedRef = useRef<boolean>(false);
@@ -432,6 +513,49 @@ export default function DashboardScreen() {
     }
   }, []);
 
+  const fetchBanners = React.useCallback(async () => {
+    const reqId = ++fetchBannersReqIdRef.current;
+    const result = await fetchDashboardBanners(10);
+    if (reqId !== fetchBannersReqIdRef.current) return;
+    if (result.error) {
+      if (__DEV__) gfxLogCapped('dashboardBannersErr', { error: result.error }, 3);
+      setBanners([]);
+      return;
+    }
+    setBanners(result.rows);
+  }, []);
+
+  const onBannerPress = React.useCallback(
+    (b: DashboardBannerRow) => {
+      const type = b.link_type;
+      const val = String(b.link_value ?? '').trim();
+      if (!type || type === 'none') return;
+      if (!val) return;
+      if (type === 'external_url') {
+        void Linking.openURL(val);
+        return;
+      }
+      if (type === 'post') {
+        router.push({
+          pathname: '/(auth)/post-detail',
+          params: {
+            postId: val,
+            image: '',
+            images: '[]',
+            currentIndex: 0,
+            category: '',
+            captions: '',
+          },
+        });
+        return;
+      }
+      if (type === 'event') {
+        router.push({ pathname: '/dashboard', params: { expandCategory: val } });
+      }
+    },
+    [router]
+  );
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -450,6 +574,11 @@ export default function DashboardScreen() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+    void fetchBanners();
+  }, [authReady, profileRefreshSeq, fetchBanners]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -922,6 +1051,9 @@ export default function DashboardScreen() {
         </View>
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+          {banners.length > 0 ? (
+            <DashboardBannerCarousel width={width} banners={banners} onPress={onBannerPress} />
+          ) : null}
           <View style={styles.gradientHeaderWrapper}>
             <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.eclipseGradient}>
               <Text style={styles.modernCenterTitle}>
@@ -1021,6 +1153,20 @@ const styles = StyleSheet.create({
   welcomeText: { fontSize: 11, color: Colors.textMuted, fontWeight: '500' },
   userName: { fontSize: 18, fontWeight: '800', color: Colors.headerColor, fontFamily: Colors.fontFamilyBold },
   gradientHeaderWrapper: { height: 60, marginVertical: 10, paddingHorizontal: 20 },
+  bannerCarouselWrap: { paddingHorizontal: 20, marginTop: 6, marginBottom: 10 },
+  bannerCard: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#F2F2F2',
+  },
+  bannerImg: { width: '100%', height: 170, backgroundColor: IMAGE_SKELETON_BG },
+  bannerOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 14, paddingVertical: 12 },
+  bannerTitle: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  bannerSubtitle: { color: 'rgba(255,255,255,0.9)', fontWeight: '600', fontSize: 12, marginTop: 2 },
+  bannerCta: { color: '#fff', fontWeight: '800', fontSize: 12, marginTop: 6 },
+  bannerDotsRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 8, gap: 6 },
+  bannerDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(0,0,0,0.18)' },
+  bannerDotActive: { backgroundColor: Colors.primary },
   eclipseGradient: { height: 50, width: '100%', borderRadius: 15, justifyContent: 'center', alignItems: 'center' },
   modernCenterTitle: { fontSize: 17, fontWeight: '800', color: '#FFF' },
   sectionContainer: { marginTop: 25 },

@@ -11,6 +11,7 @@ import {
   ShieldAlert,
   BarChart3,
   LineChart,
+  Image as ImageIcon,
 } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -24,6 +25,7 @@ const navItems = [
   { href: '/admin/users', label: 'Users', icon: Users },
   { href: '/admin/leaderboard', label: 'Leaderboard', icon: BarChart3 },
   { href: '/admin/analytics', label: 'Analytics', icon: LineChart },
+  { href: '/admin/banner-manager', label: 'Banner Manager', icon: ImageIcon },
   { href: '/admin/groups', label: 'Group Management', icon: Tags },
   { href: '/admin/notifications', label: 'Broadcast', icon: Bell },
   { href: '/admin/activity-center', label: 'Activity Center', icon: ListOrdered },
@@ -77,7 +79,7 @@ export default function Sidebar() {
       );
     }
     // Admin (and only admin) can see Activity Center. Safe-by-default: hide until role is known.
-    if (r === 'admin') return navItems;
+    if (r === 'admin' || r === 'super_admin') return navItems;
     return navItems.filter((i) => i.href !== '/admin/activity-center' && i.href !== '/admin/rbac-observability');
   }, [role]);
 
