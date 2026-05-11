@@ -119,9 +119,13 @@ export function buildScopedQuery(
     // campaign_manager: support mixed deployments where some data uses group_memberships while some still uses profiles.group_id.
     const allowedRaw = Array.isArray(ctx.allowed_profile_ids) ? ctx.allowed_profile_ids.map((x) => String(x).trim()).filter(Boolean) : [];
     const allowed = toUuidList(allowedRaw);
-    const gids = toGroupIdNums(campaignManagerScopeGroupIds(canonical, ctx));
+    const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
+    const gids = toGroupIdNums(scopeGids);
     if (allowed.length > 0 && gids.length > 0) {
-      return baseQuery.or(`id.in.(${allowed.join(',')}),group_id.in.(${gids.join(',')})`);
+      // Include campaign managers assigned to these groups even if they aren't members and have no profiles.group_id.
+      // `profiles.assigned_group_ids` is stored as an array of numeric strings in canonical schema.
+      const ov = scopeGids.length > 0 ? `,assigned_group_ids.ov.{${scopeGids.join(',')}}` : '';
+      return baseQuery.or(`id.in.(${allowed.join(',')}),group_id.in.(${gids.join(',')})${ov}`);
     }
     if (allowed.length > 0) return baseQuery.in('id', allowed);
     return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
@@ -184,9 +188,11 @@ export function buildScopedAnalyticsQuery(
     if (role === 'moderator') return baseQuery.not('assigned_state_ids', 'is', null).neq('assigned_state_ids', '{}').containedBy('assigned_state_ids', canonical.stateIds);
     const allowedRaw = Array.isArray(ctx.allowed_profile_ids) ? ctx.allowed_profile_ids.map((x) => String(x).trim()).filter(Boolean) : [];
     const allowed = toUuidList(allowedRaw);
-    const gids = toGroupIdNums(campaignManagerScopeGroupIds(canonical, ctx));
+    const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
+    const gids = toGroupIdNums(scopeGids);
     if (allowed.length > 0 && gids.length > 0) {
-      return baseQuery.or(`id.in.(${allowed.join(',')}),group_id.in.(${gids.join(',')})`);
+      const ov = scopeGids.length > 0 ? `,assigned_group_ids.ov.{${scopeGids.join(',')}}` : '';
+      return baseQuery.or(`id.in.(${allowed.join(',')}),group_id.in.(${gids.join(',')})${ov}`);
     }
     if (allowed.length > 0) return baseQuery.in('id', allowed);
     return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
