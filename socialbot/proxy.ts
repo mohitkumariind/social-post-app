@@ -209,6 +209,8 @@ export async function proxy(request: NextRequest) {
       const allowed =
         pathname === '/admin' ||
         pathname.startsWith('/admin/users') ||
+        pathname.startsWith('/admin/leaderboard') ||
+        pathname.startsWith('/admin/analytics') ||
         pathname.startsWith('/admin/events') ||
         pathname.startsWith('/admin/notifications') ||
         pathname.startsWith('/admin/groups');
