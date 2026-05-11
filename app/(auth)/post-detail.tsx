@@ -165,7 +165,10 @@ export default function PostDetailScreen() {
   const NAME_SIZE = frameRenderHeight * 0.052; // requested
   const DESIGNATION_SIZE = frameRenderHeight * 0.035;
 
-  const initialIndex = params?.currentIndex != null ? parseInt(String(params.currentIndex), 10) : 0;
+  const initialIndex = useMemo(() => {
+    const raw = params?.currentIndex != null ? parseInt(String(params.currentIndex), 10) : 0;
+    return Number.isFinite(raw) && raw >= 0 ? raw : 0;
+  }, [params?.currentIndex]);
 
   const [frames, setFrames] = useState<any[]>([]);
   const [selectedFrame, setSelectedFrame] = useState<number>(1);
@@ -252,21 +255,30 @@ export default function PostDetailScreen() {
   useEffect(() => {
     try {
       const total = originalData.length;
-      const jumpTo = total > 1 ? total + initialIndex : 0;
-      setActiveIndex(jumpTo);
+      const clampedInitial = total > 0 ? Math.min(Math.max(0, initialIndex), total - 1) : 0;
+      const jumpTo = total > 1 ? total + clampedInitial : 0;
+      // IMPORTANT: `mountComposer` keys off `activeIndex`. Do not set `activeIndex` to `jumpTo`
+      // until after `scrollTo` — otherwise the on-screen slide (still at offset 0 for ~400ms)
+      // mounts no FrameEngine and frames look "missing" for every user.
       const timer = setTimeout(() => {
         try {
           scrollRef.current?.scrollTo({ x: jumpTo * width, animated: false });
-          if (isMountedRef.current) setIsReady(true);
+          if (isMountedRef.current) {
+            setActiveIndex(jumpTo);
+            setIsReady(true);
+          }
         } catch {
-          if (isMountedRef.current) setIsReady(true);
+          if (isMountedRef.current) {
+            setActiveIndex(jumpTo);
+            setIsReady(true);
+          }
         }
       }, 400);
       return () => clearTimeout(timer);
     } catch (e) {
       if (isMountedRef.current) setIsReady(true);
     }
-  }, [originalData, initialIndex]);
+  }, [originalData, initialIndex, width]);
 
   useEffect(() => {
     let cancelled = false;
@@ -300,7 +312,16 @@ export default function PostDetailScreen() {
           if (!cancelled && __DEV__) console.warn('[PostDetail] fetchFrames error:', error.message);
           return;
         }
-        if (data && isMountedRef.current) setFrames(sortFramesByFileName(data as any[]));
+        if (data && isMountedRef.current) {
+          const sorted = sortFramesByFileName(data as any[]);
+          if (__DEV__) {
+            console.log('[frame-profile-debug] user_frames fetch', {
+              rowCount: sorted.length,
+              sampleUrls: sorted.slice(0, 3).map((r) => resolveUserFrameOverlayUrl(r)),
+            });
+          }
+          setFrames(sorted);
+        }
       } catch (e) {
       if (!cancelled && __DEV__) console.warn('fetchFrames exception');
       }
@@ -337,6 +358,24 @@ export default function PostDetailScreen() {
   const overlayRow =
     safeSelectedFrame >= 3 && safeSelectedFrame - 3 < frames.length ? frames[safeSelectedFrame - 3] : null;
   const overlayUrl = overlayRow ? resolveUserFrameOverlayUrl(overlayRow) : null;
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    const row =
+      safeSelectedFrame >= 3 && safeSelectedFrame - 3 < frames.length ? frames[safeSelectedFrame - 3] : null;
+    const url = row ? resolveUserFrameOverlayUrl(row) : '';
+    console.log('[frame-profile-debug] selection', {
+      safeSelectedFrame,
+      framesLen: frames.length,
+      hasOverlayRow: !!row,
+      overlayUrlPreview: url ? `${url.slice(0, 80)}…` : '',
+    });
+  }, [safeSelectedFrame, frames]);
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    console.log('[frame-profile-debug] carousel activeIndex', activeIndex);
+  }, [activeIndex]);
 
   const firePostDownloadEngagement = useCallback(
     async (action: PostDownloadAction) => {

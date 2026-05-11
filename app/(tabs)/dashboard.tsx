@@ -466,6 +466,15 @@ export default function DashboardScreen() {
 
       if (reqId !== fetchPostsReqIdRef.current) return;
 
+      if (__DEV__) {
+        console.log('[dash-category-debug] category posts fetch result', {
+          chip: quickChipSelected ?? null,
+          rowCount: Array.isArray(result.rows) ? result.rows.length : 0,
+          error: result.error,
+          usedRpc: result.usedRpc,
+        });
+      }
+
       if (result.error) {
         const msg = result.error;
         if (msg.includes('does not exist')) {
@@ -696,6 +705,21 @@ export default function DashboardScreen() {
     () => filteredPosts.filter((p) => String(p.image_url ?? '').trim().length > 0),
     [filteredPosts]
   );
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    const mode = isQuickCategoryFeed ? 'quick-category-feed' : 'default-dashboard';
+    console.log('[dash-category-debug] selected chip / mode', {
+      chip: quickChipSelected ?? null,
+      mode,
+    });
+  }, [quickChipSelected, isQuickCategoryFeed]);
+
+  useEffect(() => {
+    if (!__DEV__ || !isQuickCategoryFeed) return;
+    console.log('[dash-category-debug] rendered category post count', categoryFeedPosts.length);
+  }, [isQuickCategoryFeed, categoryFeedPosts.length]);
+
   const quickChipLabel = React.useMemo(() => {
     if (!quickChipSelected) return '';
     return QUICK_CATEGORY_CHIPS.find((c) => c.id === quickChipSelected)?.label ?? quickChipSelected;
