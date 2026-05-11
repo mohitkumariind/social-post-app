@@ -198,7 +198,15 @@ export async function GET(request: NextRequest) {
       ({ data, error } = await q2.maybeSingle());
     }
     if (error) return json({ error: error.message }, 500);
-    if (!data) return json({ error: 'Not found' }, 404);
+    if (!data) {
+      return json(
+        {
+          error: 'Not found',
+          hint: 'No matching event row (check id), or it is soft-deleted (try include_deleted=1 for admins), or your role cannot see it.',
+        },
+        404
+      );
+    }
 
     try {
       const ok = canAccessResource(

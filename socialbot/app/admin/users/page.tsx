@@ -608,21 +608,40 @@ export default function UserManagement() {
         continue;
       }
 
-      const { data: insertData, error: insertErr } = await supabase
-        .from('user_frames')
-        .insert({ user_id: selectedUser.id, url: imageUrl, overlay_url: imageUrl, file_name: file.name })
-        .select('id, url, overlay_url, created_at, file_name')
-        .single();
-
-      if (insertErr) {
-        if (__DEV__) console.error('user_frames insert error:', insertErr);
+      const res = await fetch('/api/admin/user-frames', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: String(selectedUser.id),
+          url: imageUrl,
+          overlay_url: imageUrl,
+          file_name: file.name,
+        }),
+      });
+      if (!res.ok) {
+        let errText = '';
+        try {
+          errText = await res.text();
+        } catch {
+          errText = '';
+        }
+        console.error('[users] user_frames POST failed', res.status, errText.slice(0, 600));
+        if (__DEV__) console.error('user_frames insert error:', res.status, errText);
         continue;
       }
+      const insertJson = (await res.json().catch(() => ({}))) as {
+        frame?: { id: unknown; url?: string; created_at?: string | null };
+      };
+      const fr = insertJson.frame;
+      if (!fr?.id) continue;
 
       const frame: UserFrame = {
-        id: insertData.id,
-        url: insertData.url,
-        uploadDate: insertData.created_at ? new Date(insertData.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
+        id: fr.id,
+        url: String(fr.url ?? imageUrl),
+        uploadDate: fr.created_at
+          ? new Date(String(fr.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })
+          : '',
       };
       newFrames.push(frame);
     }
@@ -652,7 +671,21 @@ export default function UserManagement() {
           if (__DEV__) console.error('Frame storage remove:', e);
         }
       }
-      await supabase.from('user_frames').delete().eq('id', frameId);
+      const delRes = await fetch(`/api/admin/user-frames?id=${encodeURIComponent(String(frameId))}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      if (!delRes.ok) {
+        let errText = '';
+        try {
+          errText = await delRes.text();
+        } catch {
+          errText = '';
+        }
+        console.error('[users] user_frames DELETE failed', delRes.status, errText.slice(0, 600));
+        setToast({ message: `Remove frame failed (HTTP ${delRes.status})`, tone: 'error' });
+        return;
+      }
     }
     const updatedFrames = selectedUser.personalFrames.filter((f) => f.id !== frameId);
     setUsers((prev) => prev.map((u) => (u.id === selectedUser.id ? { ...u, personalFrames: updatedFrames } : u)));

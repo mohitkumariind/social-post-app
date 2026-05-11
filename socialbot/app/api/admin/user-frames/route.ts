@@ -23,20 +23,69 @@ const isMissingColumnErr = (err: { message?: string } | null | undefined, column
   return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column'));
 };
 
-export async function GET(request: NextRequest) {
+type AdminAuth = NonNullable<Awaited<ReturnType<typeof validateAdminSession>> extends { ok: true } ? Awaited<ReturnType<typeof validateAdminSession>> : never>;
+
+async function requireAdminSessionOrJson() {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) {
-    return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
+    return {
+      error: NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status }),
+    } as const;
   }
   try {
     requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
     requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
-    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    if (e instanceof RbacError) return { error: NextResponse.json({ error: e.message }, { status: e.status }) } as const;
+    return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) } as const;
   }
+  return { supabase, auth } as const;
+}
+
+async function ensureTargetProfileInScope(
+  db: NonNullable<ReturnType<typeof createServiceRoleClient>>,
+  auth: AdminAuth,
+  adminRole: boolean,
+  targetUserId: string,
+  allowed_profile_ids: string[] | null,
+  scopedUser: { id: string; role: string; assigned_state_ids: number[]; assigned_group_ids: string[] }
+): Promise<NextResponse | null> {
+  if (adminRole) {
+    const { data: prof, error: profErr } = await db.from('profiles').select('id').eq('id', targetUserId).maybeSingle();
+    if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
+    if (!prof) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  } else {
+    const profQuery = buildScopedQuery(
+      scopedUser as any,
+      db.from('profiles').select('id').eq('id', targetUserId).limit(1) as any,
+      'profiles',
+      { allowed_profile_ids: Array.isArray(allowed_profile_ids) ? allowed_profile_ids : undefined }
+    );
+    const { data: prof, error: profErr } = await profQuery.maybeSingle();
+    if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
+    if (!prof) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+  return null;
+}
+
+function serviceDbOr503() {
+  const admin = createServiceRoleClient();
+  if (!admin) {
+    return {
+      error: NextResponse.json(
+        { error: 'Admin frame access requires SUPABASE_SERVICE_ROLE_KEY' },
+        { status: 503 }
+      ),
+    } as const;
+  }
+  return { db: admin } as const;
+}
+
+export async function GET(request: NextRequest) {
+  const gate = await requireAdminSessionOrJson();
+  if ('error' in gate) return gate.error;
 
   const userId = (request.nextUrl.searchParams.get('user_id') ?? '').trim();
   const searchQuery = (request.nextUrl.searchParams.get('search_query') ?? '').trim();
@@ -52,50 +101,27 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing user_id' }, { status: 400 });
   }
 
-  const admin = createServiceRoleClient();
-  if (!admin) {
-    return NextResponse.json(
-      { error: 'Admin frame access requires SUPABASE_SERVICE_ROLE_KEY' },
-      { status: 503 }
-    );
-  }
-  const db = admin;
-  const adminRole = isAdmin(auth);
-  if (adminRole) assertAdminRole(auth);
+  const svc = serviceDbOr503();
+  if ('error' in svc) return svc.error;
+  const db = svc.db;
+  const adminRole = isAdmin(gate.auth);
+  if (adminRole) assertAdminRole(gate.auth);
 
-  // Enforce scope BEFORE querying frames.
   const scopedUser = {
-    id: auth.user.id,
-    role: auth.role,
-    assigned_state_ids: auth.assigned_state_ids,
-    assigned_group_ids: auth.assigned_group_ids,
+    id: gate.auth.user.id,
+    role: gate.auth.role,
+    assigned_state_ids: gate.auth.assigned_state_ids,
+    assigned_group_ids: gate.auth.assigned_group_ids,
   } as any;
 
   const allowed_profile_ids =
-    isCampaignManager(auth) && admin
-      ? await resolveAllowedProfileIdsForCampaignManager(admin as any, auth.assigned_group_ids)
+    isCampaignManager(gate.auth) && db
+      ? await resolveAllowedProfileIdsForCampaignManager(db as any, gate.auth.assigned_group_ids)
       : null;
 
-  {
-    if (adminRole) {
-      const { data: prof, error: profErr } = await db.from('profiles').select('id').eq('id', userId).maybeSingle();
-      if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
-      if (!prof) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    } else {
-      const profQuery = buildScopedQuery(
-        scopedUser,
-        db.from('profiles').select('id').eq('id', userId).limit(1) as any,
-        'profiles',
-        { allowed_profile_ids: Array.isArray(allowed_profile_ids) ? allowed_profile_ids : undefined }
-      );
-      const { data: prof, error: profErr } = await profQuery.maybeSingle();
-      if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
-      if (!prof) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-  }
+  const scopeErr = await ensureTargetProfileInScope(db, gate.auth as AdminAuth, adminRole, userId, allowed_profile_ids, scopedUser);
+  if (scopeErr) return scopeErr;
 
-  // `select('*')` avoids hard failures when optional columns (`overlay_url`, `file_name`, `frame_url`)
-  // differ across environments; we normalize below.
   const baseStar = () =>
     db.from('user_frames').select('*').eq('user_id', userId).order('id', { ascending: true }).range(offset, offset + limit - 1) as any;
 
@@ -108,7 +134,7 @@ export async function GET(request: NextRequest) {
     const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
     const has_more = rows.length === limit;
     return NextResponse.json(
-      { frames: rows, usedServiceRole: !!admin, next_cursor_created_at, limit, offset, has_more },
+      { frames: rows, usedServiceRole: !!db, next_cursor_created_at, limit, offset, has_more },
       { headers: { 'Cache-Control': 'no-store' } }
     );
   }
@@ -133,7 +159,121 @@ export async function GET(request: NextRequest) {
   const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
   const has_more = rows.length === limit;
   return NextResponse.json(
-    { frames: rows, usedServiceRole: !!admin, next_cursor_created_at, limit, offset, has_more },
+    { frames: rows, usedServiceRole: !!db, next_cursor_created_at, limit, offset, has_more },
     { headers: { 'Cache-Control': 'no-store' } }
   );
+}
+
+/** Insert user frame (service role) — browser must not rely on PostgREST select lists or RLS for admin uploads. */
+export async function POST(request: NextRequest) {
+  const gate = await requireAdminSessionOrJson();
+  if ('error' in gate) return gate.error;
+
+  let body: { user_id?: unknown; url?: unknown; overlay_url?: unknown; file_name?: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const userId = String(body.user_id ?? '').trim();
+  const url = String(body.url ?? '').trim();
+  if (!userId || !url) {
+    return NextResponse.json({ error: 'Missing user_id or url' }, { status: 400 });
+  }
+
+  const svc = serviceDbOr503();
+  if ('error' in svc) return svc.error;
+  const db = svc.db;
+  const adminRole = isAdmin(gate.auth);
+  if (adminRole) assertAdminRole(gate.auth);
+
+  const scopedUser = {
+    id: gate.auth.user.id,
+    role: gate.auth.role,
+    assigned_state_ids: gate.auth.assigned_state_ids,
+    assigned_group_ids: gate.auth.assigned_group_ids,
+  } as any;
+
+  const allowed_profile_ids =
+    isCampaignManager(gate.auth) && db
+      ? await resolveAllowedProfileIdsForCampaignManager(db as any, gate.auth.assigned_group_ids)
+      : null;
+
+  const scopeErr = await ensureTargetProfileInScope(db, gate.auth as AdminAuth, adminRole, userId, allowed_profile_ids, scopedUser);
+  if (scopeErr) return scopeErr;
+
+  const overlayIn = String(body.overlay_url ?? '').trim();
+  const fileName = String(body.file_name ?? '').trim();
+
+  let insertPayload: Record<string, unknown> = {
+    user_id: userId,
+    url,
+    overlay_url: overlayIn || url,
+  };
+  if (fileName) insertPayload.file_name = fileName;
+
+  let ins = await db.from('user_frames').insert(insertPayload).select('*').maybeSingle();
+  for (let attempts = 0; attempts < 6 && ins.error; attempts++) {
+    const msg = String((ins.error as { message?: string })?.message ?? '');
+    const m = msg.match(/'([^']+)' column/i) ?? msg.match(/column ['\"]([^'\"]+)['\"]/i) ?? msg.match(/Could not find the '([^']+)' column/i);
+    const missing = m?.[1]?.trim();
+    if (missing && Object.prototype.hasOwnProperty.call(insertPayload, missing)) {
+      delete (insertPayload as any)[missing];
+      ins = await db.from('user_frames').insert(insertPayload).select('*').maybeSingle();
+      continue;
+    }
+    break;
+  }
+
+  if (ins.error) {
+    return NextResponse.json({ error: ins.error.message }, { status: 500 });
+  }
+  const frame = normalizeUserFrameRow((ins.data ?? {}) as Record<string, unknown>);
+  return NextResponse.json({ frame }, { headers: { 'Cache-Control': 'no-store' } });
+}
+
+/** Delete one frame row after scope check (service role). */
+export async function DELETE(request: NextRequest) {
+  const gate = await requireAdminSessionOrJson();
+  if ('error' in gate) return gate.error;
+
+  const frameId = (request.nextUrl.searchParams.get('id') ?? '').trim();
+  if (!frameId) {
+    return NextResponse.json({ error: 'Missing id' }, { status: 400 });
+  }
+
+  const svc = serviceDbOr503();
+  if ('error' in svc) return svc.error;
+  const db = svc.db;
+  const adminRole = isAdmin(gate.auth);
+  if (adminRole) assertAdminRole(gate.auth);
+
+  const scopedUser = {
+    id: gate.auth.user.id,
+    role: gate.auth.role,
+    assigned_state_ids: gate.auth.assigned_state_ids,
+    assigned_group_ids: gate.auth.assigned_group_ids,
+  } as any;
+
+  const allowed_profile_ids =
+    isCampaignManager(gate.auth) && db
+      ? await resolveAllowedProfileIdsForCampaignManager(db as any, gate.auth.assigned_group_ids)
+      : null;
+
+  const { data: row, error: rowErr } = await db.from('user_frames').select('id,user_id').eq('id', frameId).maybeSingle();
+  if (rowErr) return NextResponse.json({ error: rowErr.message }, { status: 500 });
+  if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  const ownerId = String((row as { user_id?: unknown }).user_id ?? '').trim();
+  if (!ownerId) {
+    return NextResponse.json({ error: 'Invalid frame row' }, { status: 500 });
+  }
+
+  const scopeErr = await ensureTargetProfileInScope(db, gate.auth as AdminAuth, adminRole, ownerId, allowed_profile_ids, scopedUser);
+  if (scopeErr) return scopeErr;
+
+  const { error: delErr } = await db.from('user_frames').delete().eq('id', frameId);
+  if (delErr) return NextResponse.json({ error: delErr.message }, { status: 500 });
+  return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
 }
