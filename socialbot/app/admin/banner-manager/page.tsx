@@ -101,6 +101,7 @@ export default function BannerManagerPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [editing, setEditing] = useState<BannerRow | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const [draft, setDraft] = useState({
     id: '' as string,
     image_url: '' as string,
@@ -177,6 +178,7 @@ export default function BannerManagerPage() {
       start_at_local: '',
       end_at_local: '',
     });
+    setModalOpen(true);
   };
 
   const openEdit = (b: BannerRow) => {
@@ -194,6 +196,7 @@ export default function BannerManagerPage() {
       start_at_local: toDatetimeLocalValue(b.start_at),
       end_at_local: toDatetimeLocalValue(b.end_at),
     });
+    setModalOpen(true);
   };
 
   const saveDraft = async () => {
@@ -232,7 +235,7 @@ export default function BannerManagerPage() {
         end_at: endIso,
       };
       const res = await fetch('/api/admin/banners', {
-        method: editing ? 'PUT' : 'POST',
+        method: draft.id ? 'PUT' : 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -241,6 +244,7 @@ export default function BannerManagerPage() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setToast(editing ? 'Banner updated' : 'Banner created');
       setEditing(null);
+      setModalOpen(false);
       await load();
     } catch (e) {
       setToast(e instanceof Error ? e.message : 'Save failed');
@@ -358,7 +362,6 @@ export default function BannerManagerPage() {
             type="button"
             onClick={() => {
               openCreate();
-              setEditing({} as any); // force open modal in create mode
             }}
             className="inline-flex items-center gap-2 rounded-md bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-white"
           >
@@ -475,14 +478,17 @@ export default function BannerManagerPage() {
         </table>
       </div>
 
-      {(editing !== null) && (
+      {modalOpen && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
           <div className="w-full max-w-2xl overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-2xl">
             <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
               <div className="text-sm font-semibold text-white">{draft.id ? 'Edit banner' : 'New banner'}</div>
               <button
                 type="button"
-                onClick={() => setEditing(null)}
+                onClick={() => {
+                  setModalOpen(false);
+                  setEditing(null);
+                }}
                 className="rounded-md p-2 text-zinc-400 hover:bg-zinc-900 hover:text-white"
               >
                 <X className="h-5 w-5" />
@@ -634,7 +640,10 @@ export default function BannerManagerPage() {
             <div className="flex items-center justify-end gap-2 border-t border-zinc-800 px-5 py-4">
               <button
                 type="button"
-                onClick={() => setEditing(null)}
+                onClick={() => {
+                  setModalOpen(false);
+                  setEditing(null);
+                }}
                 className="rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800"
               >
                 Cancel
