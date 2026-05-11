@@ -817,7 +817,9 @@ export default function PostDetailScreen() {
                     </View>
                     <FrameEngine
                       frameId={safeSelectedFrame}
-                      mountComposer={index === activeIndex}
+                      // Always mount: `activeIndex` can lag the visible page (pager / momentum / OEM
+                      // scroll quirks), which made FrameEngine null on the slide the user actually sees.
+                      mountComposer
                       staticChromeSide={staticChromeSide}
                       overlayPngUrl={overlayUrl}
                       displayName={displayName}
