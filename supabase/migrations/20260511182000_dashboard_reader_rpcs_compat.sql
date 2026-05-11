@@ -4,6 +4,54 @@
 
 DO $$
 BEGIN
+  -- If the primary RPCs are missing, create minimal invoker-safe versions.
+  -- These do NOT attempt to recreate the full visibility logic; they rely on existing RLS on posts/events.
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = 'get_dashboard_posts'
+      AND pg_get_function_identity_arguments(p.oid) = ''
+  ) THEN
+    CREATE OR REPLACE FUNCTION public.get_dashboard_posts()
+    RETURNS SETOF public.posts
+    LANGUAGE sql
+    STABLE
+    SECURITY INVOKER
+    SET search_path = public
+    AS $fn$
+      SELECT po.*
+      FROM public.posts po
+      WHERE auth.uid() IS NOT NULL
+      ORDER BY po.created_at DESC
+      LIMIT 300;
+    $fn$;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = 'get_dashboard_events'
+      AND pg_get_function_identity_arguments(p.oid) = ''
+  ) THEN
+    CREATE OR REPLACE FUNCTION public.get_dashboard_events()
+    RETURNS SETOF public.events
+    LANGUAGE sql
+    STABLE
+    SECURITY INVOKER
+    SET search_path = public
+    AS $fn$
+      SELECT ev.*
+      FROM public.events ev
+      WHERE auth.uid() IS NOT NULL
+      ORDER BY ev."end" ASC
+      LIMIT 500;
+    $fn$;
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1
     FROM pg_proc p
@@ -16,7 +64,7 @@ BEGIN
     RETURNS SETOF public.posts
     LANGUAGE sql
     STABLE
-    SECURITY DEFINER
+    SECURITY INVOKER
     SET search_path = public
     AS $fn$
       SELECT * FROM public.get_dashboard_posts();
@@ -35,7 +83,7 @@ BEGIN
     RETURNS SETOF public.events
     LANGUAGE sql
     STABLE
-    SECURITY DEFINER
+    SECURITY INVOKER
     SET search_path = public
     AS $fn$
       SELECT * FROM public.get_dashboard_events();
@@ -43,9 +91,13 @@ BEGIN
   END IF;
 END $$;
 
+REVOKE ALL ON FUNCTION public.get_dashboard_posts() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_dashboard_events() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.get_dashboard_posts_for_reader() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.get_dashboard_events_for_reader() FROM PUBLIC;
 
+GRANT EXECUTE ON FUNCTION public.get_dashboard_posts() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_dashboard_events() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_dashboard_posts_for_reader() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_dashboard_events_for_reader() TO authenticated;
 
