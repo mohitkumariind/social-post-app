@@ -227,21 +227,19 @@ export default function GroupManagementPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {!isCampaignManager ? (
-            <button
-              type="button"
-              onClick={() => {
-                setCreateName('');
-                setCreateSearch('');
-                setCreateSearchResults([]);
-                setCreateSelected([]);
-                setCreateOpen(true);
-              }}
-              className="rounded-2xl bg-slate-900 px-6 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-lg transition-all hover:bg-slate-800 active:scale-95"
-            >
-              Create Group
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              setCreateName('');
+              setCreateSearch('');
+              setCreateSearchResults([]);
+              setCreateSelected([]);
+              setCreateOpen(true);
+            }}
+            className="rounded-2xl bg-slate-900 px-6 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-lg transition-all hover:bg-slate-800 active:scale-95"
+          >
+            Create Group
+          </button>
           <button
             type="button"
             onClick={() => void loadGroups()}
@@ -316,7 +314,7 @@ export default function GroupManagementPage() {
       )}
 
       {/* Create Group */}
-      {createOpen && !isCampaignManager && (
+      {createOpen && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-2xl overflow-hidden rounded-[40px] border border-slate-100 bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
@@ -577,53 +575,51 @@ export default function GroupManagementPage() {
             </div>
 
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-              {!isCampaignManager ? (
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Add user (name or phone)</p>
-                  <div className="mt-2 flex gap-2">
-                    <div className="flex flex-1 items-center gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2">
-                      <Search size={16} className="text-slate-400" />
-                      <input
-                        value={addSearch}
-                        onChange={(e) => setAddSearch(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void runUserSearch();
-                        }}
-                        placeholder="Search…"
-                        className="min-w-0 flex-1 bg-transparent text-sm font-bold text-slate-800 outline-none placeholder:text-slate-300"
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void runUserSearch()}
-                      disabled={searching}
-                      className="rounded-xl bg-blue-600 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-50"
-                    >
-                      {searching ? '…' : 'Search'}
-                    </button>
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Add user (name or phone)</p>
+                <div className="mt-2 flex gap-2">
+                  <div className="flex flex-1 items-center gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2">
+                    <Search size={16} className="text-slate-400" />
+                    <input
+                      value={addSearch}
+                      onChange={(e) => setAddSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void runUserSearch();
+                      }}
+                      placeholder="Search…"
+                      className="min-w-0 flex-1 bg-transparent text-sm font-bold text-slate-800 outline-none placeholder:text-slate-300"
+                    />
                   </div>
-                  {searchResults.length > 0 && (
-                    <ul className="mt-3 max-h-40 space-y-2 overflow-y-auto">
-                      {searchResults.map((r) => {
-                      const already = members.some((m) => m.id === r.id);
-                        return (
-                          <li key={r.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2 text-xs font-bold">
-                            <span className="truncate text-slate-800">{r.name || '—'} · {r.phone || '—'}</span>
-                            <button
-                              type="button"
-                              disabled={already || busyTag === detailTag}
-                              onClick={() => void addUserToCurrentGroup(r.id)}
-                              className="shrink-0 rounded-lg bg-indigo-600 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-40"
-                            >
-                              {already ? 'In group' : 'Add'}
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => void runUserSearch()}
+                    disabled={searching}
+                    className="rounded-xl bg-blue-600 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-50"
+                  >
+                    {searching ? '…' : 'Search'}
+                  </button>
                 </div>
-              ) : null}
+                {searchResults.length > 0 && (
+                  <ul className="mt-3 max-h-40 space-y-2 overflow-y-auto">
+                    {searchResults.map((r) => {
+                      const already = members.some((m) => m.id === r.id);
+                      return (
+                        <li key={r.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2 text-xs font-bold">
+                          <span className="truncate text-slate-800">{r.name || '—'} · {r.phone || '—'}</span>
+                          <button
+                            type="button"
+                            disabled={already || busyTag === detailTag}
+                            onClick={() => void addUserToCurrentGroup(r.id)}
+                            className="shrink-0 rounded-lg bg-indigo-600 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-40"
+                          >
+                            {already ? 'In group' : 'Add'}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
 
               <div>
                 <p className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
@@ -643,7 +639,7 @@ export default function GroupManagementPage() {
                         </div>
                         <button
                           type="button"
-                          disabled={isCampaignManager || busyTag === detailTag}
+                          disabled={busyTag === detailTag}
                           onClick={() => void removeUserFromGroup(m.id)}
                           className="shrink-0 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-rose-700 disabled:opacity-50"
                         >

@@ -11,7 +11,12 @@ import {
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
-import { buildScopedCountQuery, buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
+import {
+  buildScopedCountQuery,
+  buildScopedQuery,
+  resolveAllowedProfileIdsForCampaignManager,
+  resolveEffectiveGroupIdsForCampaignManager,
+} from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import {
   RbacError,
@@ -262,6 +267,26 @@ async function countScopedProfilesByIds(admin: SupabaseClient, viewer: ScopedVie
   return total;
 }
 
+async function countScopedProfilesByIdsWithCtx(
+  admin: SupabaseClient,
+  viewer: ScopedViewer,
+  userIds: string[],
+  ctx: Parameters<typeof buildScopedCountQuery>[3]
+): Promise<number> {
+  if (userIds.length === 0) return 0;
+  const batch = 500;
+  let total = 0;
+  for (let i = 0; i < userIds.length; i += batch) {
+    const slice = userIds.slice(i, i + batch);
+    let q: any = admin.from('profiles').select('id', { count: 'exact', head: true }).in('id', slice);
+    q = buildScopedCountQuery(viewer as any, q, 'profiles', ctx);
+    const { count, error } = await q;
+    if (error) throw new Error(error.message);
+    total += Number(count ?? 0);
+  }
+  return total;
+}
+
 async function countProfilesInGroup(admin: SupabaseClient, groupId: number): Promise<number> {
   const { count, error } = await admin.from('profiles').select('id', { count: 'exact', head: true }).eq('group_id', groupId);
   if (error) throw new Error(error.message);
@@ -458,7 +483,11 @@ export async function GET(request: NextRequest) {
 
       // Apply RBAC scoping (moderator state scope, campaign_manager group/membership scope).
       if (!adminRole) {
-        profQ = buildScopedQuery(scopedUser, profQ, 'profiles');
+        // Campaign managers: if they can access the group itself, show the group's entire membership
+        // (membership rows are authoritative and may not mirror profiles.group_id).
+        if (!isCampaignManager(auth) || !hasMemberships) {
+          profQ = buildScopedQuery(scopedUser, profQ, 'profiles');
+        }
       }
       const { data: profRows, error: profErr } = await profQ;
       if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
@@ -746,12 +775,10 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (isCampaignManager(auth)) {
-    return NextResponse.json({ error: 'Campaign managers cannot modify groups' }, { status: 403 });
-  }
   try {
-    requireRole(auth, ['admin', 'moderator']);
+    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -783,6 +810,17 @@ export async function POST(request: NextRequest) {
   const grp = await resolveGroup(admin, tag, { createIfMissing: true, createdBy: auth.user.id });
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
   const hasMemberships = await hasGroupMembershipsTable(admin);
+
+  // If campaign manager created/resolved a group, ensure they are assigned to it so they can read/manage it later.
+  if (isCampaignManager(auth)) {
+    const gidStr = String(grp.id);
+    const current = toStrArr(auth.assigned_group_ids);
+    if (!current.includes(gidStr)) {
+      const next = [...current, gidStr];
+      const { error: upErr } = await admin.from('profiles').update({ assigned_group_ids: next }).eq('id', auth.user.id);
+      if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
+    }
+  }
 
   {
     const decision = canPerformMutation(
@@ -816,6 +854,23 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  if (isCampaignManager(auth)) {
+    // Campaign managers may only manage groups using users inside their own CM scope.
+    // Use effective group ids + membership-based allowed profile ids when available.
+    const eff = await resolveEffectiveGroupIdsForCampaignManager(admin, auth.user.id, auth.assigned_group_ids);
+    if (eff === null) return NextResponse.json({ error: 'Unable to resolve group assignments' }, { status: 500 });
+    if (eff.length === 0) return NextResponse.json({ error: 'Campaign manager is missing assigned_group_ids' }, { status: 403 });
+    const allowed = await resolveAllowedProfileIdsForCampaignManager(admin, eff);
+    if (allowed === null) return NextResponse.json({ error: 'Unable to resolve campaign manager user scope' }, { status: 500 });
+    const scopedCount = await countScopedProfilesByIdsWithCtx(admin, toScopedViewer(auth as any), userIds, {
+      effective_group_ids: eff,
+      allowed_profile_ids: allowed,
+    });
+    if (scopedCount !== userIds.length) {
+      return NextResponse.json({ error: 'Forbidden: includes users outside assigned groups' }, { status: 403 });
+    }
+  }
+
   if (hasMemberships) {
     try {
       await addMembersToGroup(admin, grp.id, userIds);
@@ -840,12 +895,10 @@ export async function PATCH(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (isCampaignManager(auth)) {
-    return NextResponse.json({ error: 'Campaign managers cannot modify groups' }, { status: 403 });
-  }
   try {
-    requireRole(auth, ['admin', 'moderator']);
+    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
+    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -866,6 +919,21 @@ export async function PATCH(request: NextRequest) {
 
   const userId = String(body.userId ?? '').trim();
   if (!userId) return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
+
+  if (isCampaignManager(auth)) {
+    const eff = await resolveEffectiveGroupIdsForCampaignManager(admin, auth.user.id, auth.assigned_group_ids);
+    if (eff === null) return NextResponse.json({ error: 'Unable to resolve group assignments' }, { status: 500 });
+    if (eff.length === 0) return NextResponse.json({ error: 'Campaign manager is missing assigned_group_ids' }, { status: 403 });
+    const allowed = await resolveAllowedProfileIdsForCampaignManager(admin, eff);
+    if (allowed === null) return NextResponse.json({ error: 'Unable to resolve campaign manager user scope' }, { status: 500 });
+    const scopedCount = await countScopedProfilesByIdsWithCtx(admin, toScopedViewer(auth as any), [userId], {
+      effective_group_ids: eff,
+      allowed_profile_ids: allowed,
+    });
+    if (scopedCount !== 1) {
+      return NextResponse.json({ error: 'Forbidden: user outside assigned groups' }, { status: 403 });
+    }
+  }
 
   const add = Array.isArray(body.add) ? body.add.map((x) => String(x).trim()).filter(Boolean) : [];
   const remove = Array.isArray(body.remove) ? body.remove.map((x) => String(x).trim()).filter(Boolean) : [];
