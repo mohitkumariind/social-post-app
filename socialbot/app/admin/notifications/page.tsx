@@ -723,10 +723,7 @@ export default function NotificationBroadcastCenterPage() {
 
       <section className="mb-8 rounded-2xl border border-slate-100 bg-white p-6 shadow-md shadow-slate-200/50">
         <h2 className="mb-1 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Broadcast mode</h2>
-        <p className="mb-4 text-sm font-semibold text-slate-600">
-          Event Campaign ties this send to an event for analytics. Global Broadcast does not require an event.
-        </p>
-        <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+        <div className="mb-4 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
           <button
             type="button"
             onClick={() => {

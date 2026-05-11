@@ -224,9 +224,6 @@ export default function GroupManagementPage() {
           </div>
           <div>
             <h1 className="text-3xl font-black tracking-tight text-slate-900">Group Management</h1>
-            <p className="mt-2 text-xs font-bold uppercase tracking-[0.2em] text-slate-400">
-              Centralized worker tags from profiles.group_tags
-            </p>
           </div>
         </div>
         <div className="flex items-center gap-2">

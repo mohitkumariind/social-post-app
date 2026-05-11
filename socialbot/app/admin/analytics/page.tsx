@@ -364,7 +364,7 @@ export default function AdminAnalyticsPage() {
             <LineChart className="h-7 w-7 text-zinc-400" strokeWidth={1.75} />
             Analytics
           </h1>
-          <p className="mt-1 text-sm text-zinc-500">Campaign downloads and follow-up (scoped to your access).</p>
+          <p className="mt-1 text-sm text-zinc-500">Campaign downloads and follow-up.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -494,11 +494,6 @@ export default function AdminAnalyticsPage() {
         <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Campaign Intelligence</h2>
-            <p className="mt-1 max-w-3xl text-xs font-medium leading-snug text-zinc-500">
-              Legacy broadcasts are not event-linked. Rows with no{' '}
-              <code className="text-zinc-400">event_id</code> stay in the Global bucket only; we do not infer or remap old
-              sends to events.
-            </p>
           </div>
           {ciLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-zinc-500" /> : null}
         </div>

@@ -178,9 +178,6 @@ export default function PartyManager() {
           </div>
           <div>
             <h1 className="text-3xl font-black text-slate-900 tracking-tight leading-none">Parties</h1>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mt-2">
-              Live party list from Supabase ({rows.length} parties)
-            </p>
           </div>
         </div>
       </div>
@@ -194,10 +191,6 @@ export default function PartyManager() {
           <div className="flex-1">
             <p className="font-black text-slate-900 text-sm uppercase tracking-widest mb-1">
               Manage parties
-            </p>
-            <p className="text-sm font-medium text-slate-600 leading-relaxed">
-              Add, edit, or delete parties in real-time. Data is stored in the Supabase table{' '}
-              <code className="text-xs font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200">parties</code>.
             </p>
           </div>
         </div>
