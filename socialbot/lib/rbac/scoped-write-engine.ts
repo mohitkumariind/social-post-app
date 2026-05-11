@@ -8,6 +8,7 @@ import {
   canUseOwnershipFallback,
   validateRegisteredResourceForLayer,
 } from '@/lib/rbac/resource-classification';
+import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 
 export type MutationAction =
   | 'events.create'
@@ -136,6 +137,14 @@ export function canPerformMutation(
 
   if (user.role === 'admin') return { ok: true };
 
+  if (
+    action === 'events.create' &&
+    isActiveEventDashboardCategory((payload as any)?.dashboard_category) &&
+    (user.role === 'moderator' || user.role === 'campaign_manager')
+  ) {
+    return { ok: true };
+  }
+
   const payloadFilters = ((payload as any)?.filters ?? null) as Record<string, unknown> | null;
   // Build effective resource scope from resource+payload (payload for creates).
   const effective: UnifiedResource = {
@@ -166,6 +175,9 @@ export function canPerformMutation(
     }
     const rStates = rStatesParsed.ids;
     const assigned = assignedParsed.ids;
+    if (action === 'events.update' && isActiveEventDashboardCategory((payload as any)?.dashboard_category)) {
+      return { ok: true };
+    }
     if (rStates.length > 0) {
       // Conservative: require subset to avoid weakening existing restrictions.
       const set = new Set(assigned);
@@ -185,6 +197,9 @@ export function canPerformMutation(
 
   // Campaign manager rules: group-scoped first; owner fallback only for approved resource types.
   if (user.role === 'campaign_manager') {
+    if (action === 'events.update' && isActiveEventDashboardCategory((payload as any)?.dashboard_category)) {
+      return { ok: true };
+    }
     const gid = normalizeGroupId(effective.group_id) ?? '';
     const gidsParsed = parseGroupIds(effective.group_ids);
     const assignedParsed = parseGroupIds(user.assigned_group_ids);

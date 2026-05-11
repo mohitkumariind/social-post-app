@@ -70,15 +70,18 @@ export async function fetchDashboardPosts(opts: {
 
   // v2 supports optional quick-category filtering.
   const dc = opts.dashboardCategory != null && String(opts.dashboardCategory).trim() !== '' ? String(opts.dashboardCategory).trim() : null;
+  let usedLegacyDashboardRpc = false;
   let rpc = await supabase.rpc('get_dashboard_posts_v2', { p_dashboard_category: dc });
   if (rpc.error && rpcMissingFunction(rpc.error)) {
     rpc = await supabase.rpc('get_dashboard_posts_for_reader_v2', { p_dashboard_category: dc });
   }
   if (rpc.error && rpcMissingFunction(rpc.error)) {
-    // Legacy fallback (no category filtering available).
+    // Legacy fallback (no category filtering in RPC — enforce chip rules client-side).
+    usedLegacyDashboardRpc = true;
     rpc = await supabase.rpc('get_dashboard_posts');
   }
   if (rpc.error && rpcMissingFunction(rpc.error)) {
+    usedLegacyDashboardRpc = true;
     rpc = await supabase.rpc('get_dashboard_posts_for_reader');
   }
 
@@ -94,7 +97,14 @@ export async function fetchDashboardPosts(opts: {
     return { rows: [], error: 'Invalid response from get_dashboard_posts', usedRpc: true };
   }
 
-  const rows = rpc.data as DashboardPostRow[];
+  let rows = rpc.data as DashboardPostRow[];
+  if (usedLegacyDashboardRpc && Array.isArray(rows)) {
+    if (dc == null) {
+      rows = rows.filter((r) => r.dashboard_category == null || String(r.dashboard_category).trim() === '');
+    } else {
+      rows = rows.filter((r) => String(r.dashboard_category ?? '').trim() === dc);
+    }
+  }
   const filtered = applySecondaryPostFilter(rows, opts.userSnapshot, opts.profileLoaded);
   return { rows: filtered, error: null, usedRpc: true };
 }

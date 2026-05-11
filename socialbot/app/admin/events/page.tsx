@@ -23,6 +23,7 @@ import {
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
+import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 import { isPartyOtherId, PARTIES_DATA } from '@/lib/constants';
 import { getStateVisibility } from '@/lib/admin/state-filter';
 import { captionsJsonForPostColumn, isLikelyEventUuid, normalizeCaptionsFromDb } from '@/lib/captions';
@@ -61,10 +62,28 @@ interface CampaignEvent {
   loksabha?: string[];
   assembly?: string[];
   target_groups?: string[];
+  /** Event-level dashboard quick category (null = none). */
+  dashboard_category?: string | null;
   /** Precomputed for list cards; `posts` are only loaded on Manage. */
   assetsCount: number;
   posts: Post[];
   captions: string[];
+}
+
+type UiDashboardCategory =
+  | 'none'
+  | 'good_morning'
+  | 'good_night'
+  | 'motivation'
+  | 'devotional'
+  | 'birthday_wishes';
+
+function dashboardCategoryToDb(v: UiDashboardCategory): string | null {
+  return v === 'none' ? null : v;
+}
+
+function dashboardCategoryFromDb(v: unknown): UiDashboardCategory {
+  return isActiveEventDashboardCategory(v) ? (v as UiDashboardCategory) : 'none';
 }
 
 /** Normalize party/state from DB: string | string[] -> string[] */
@@ -227,8 +246,8 @@ export default function App() {
   const [view, setView] = useState<'list' | 'gallery'>('list');
   const [selectedEvent, setSelectedEvent] = useState<CampaignEvent | null>(null);
   const [postToDelete, setPostToDelete] = useState<Post | null>(null);
-  const [postCategoryModal, setPostCategoryModal] = useState<{ open: boolean; post: Post | null }>({ open: false, post: null });
-  const [postCategoryValue, setPostCategoryValue] = useState<'none' | 'good_morning' | 'good_night' | 'motivation' | 'devotional' | 'birthday_wishes'>('none');
+  const [newEventDashboardCategory, setNewEventDashboardCategory] = useState<UiDashboardCategory>('none');
+  const [editEventDashboardCategory, setEditEventDashboardCategory] = useState<UiDashboardCategory>('none');
   const [captionToDelete, setCaptionToDelete] = useState<number | null>(null); 
   const [newCaptionText, setNewCaptionText] = useState(''); 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -250,6 +269,7 @@ export default function App() {
   const [newLoksabha, setNewLoksabha] = useState<string[]>([]);
   const [newAssembly, setNewAssembly] = useState<string[]>([]);
   const [newTargetGroups, setNewTargetGroups] = useState<string[]>([]);
+  const isCreateCategoryMode = newEventDashboardCategory !== 'none';
   const [groupOptions, setGroupOptions] = useState<{ tag: string; name?: string; count: number }[]>([]);
   const [filterParty, setFilterParty] = useState<string>('ALL');
   const [filterState, setFilterState] = useState<string>('ALL');
@@ -311,6 +331,15 @@ export default function App() {
   const isCampaignManager = viewer?.role === 'campaign_manager';
 
   useEffect(() => {
+    if (!isCreateCategoryMode) return;
+    setNewParty([]);
+    setNewState([]);
+    setNewLoksabha([]);
+    setNewAssembly([]);
+    setNewTargetGroups([]);
+  }, [isCreateCategoryMode]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
@@ -357,7 +386,7 @@ export default function App() {
       }
       const data = payload.events ?? [];
       const base: CampaignEvent[] = (data || [])
-        .map((row: { id?: string; name: string; start?: string; end?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; target_groups?: string | string[]; captions?: unknown }) => ({
+        .map((row: { id?: string; name: string; start?: string; end?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; target_groups?: string | string[]; captions?: unknown; dashboard_category?: unknown }) => ({
           id: String(row.id ?? '').trim(),
           name: row.name,
           start: row.start ?? '',
@@ -367,6 +396,7 @@ export default function App() {
           loksabha: toStrArr(row.loksabha),
           assembly: toStrArr(row.assembly),
           target_groups: toStrArr(row.target_groups),
+          dashboard_category: isActiveEventDashboardCategory(row.dashboard_category) ? String(row.dashboard_category) : null,
           assetsCount: 0,
           posts: [],
           captions: normalizeCaptionsFromDb(row.captions),
@@ -620,12 +650,15 @@ export default function App() {
       }
       payload.scheduled_at = iso;
     }
-    const partyArr = newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
-    const stateArr = newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
-    const loksabhaArr = newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
-    const assemblyArr = newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
-    const targetGroupsArr = newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
-    if (isCampaignManager && targetGroupsArr.length === 0) {
+    const dashDb = dashboardCategoryToDb(newEventDashboardCategory);
+    if (dashDb != null) (payload as any).dashboard_category = dashDb;
+
+    const partyArr = isCreateCategoryMode ? [] : newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
+    const stateArr = isCreateCategoryMode ? [] : newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
+    const loksabhaArr = isCreateCategoryMode ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
+    const assemblyArr = isCreateCategoryMode ? [] : newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
+    const targetGroupsArr = isCreateCategoryMode ? [] : newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
+    if (isCampaignManager && targetGroupsArr.length === 0 && dashDb == null) {
       alert('Please select at least one Target Group.');
       return;
     }
@@ -692,6 +725,7 @@ export default function App() {
       loksabha: loksabhaArr.length ? loksabhaArr : undefined,
       assembly: assemblyArr.length ? assemblyArr : undefined,
       target_groups: targetGroupsArr.length ? targetGroupsArr : undefined,
+      dashboard_category: (data as any)?.dashboard_category != null ? ((data as any).dashboard_category as string | null) : dashDb,
       assetsCount: 0,
       posts: [],
       captions: normalizeCaptionsFromDb(data.captions),
@@ -707,6 +741,7 @@ export default function App() {
     setNewLoksabha([]);
     setNewAssembly([]);
     setNewTargetGroups([]);
+    setNewEventDashboardCategory('none');
   };
 
   const openEvent = async (ev: CampaignEvent) => {
@@ -723,7 +758,13 @@ export default function App() {
     const evState = toStrArr((eventRow?.state as string | string[] | undefined) ?? ev.state);
     const evLoksabha = toStrArr((eventRow?.loksabha as string | string[] | undefined) ?? ev.loksabha);
     const evAssembly = toStrArr((eventRow?.assembly as string | string[] | undefined) ?? ev.assembly);
-    const evWithPartyState = { ...ev, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly };
+    const evDashCat =
+      eventRow && isActiveEventDashboardCategory((eventRow as Record<string, unknown>).dashboard_category)
+        ? String((eventRow as Record<string, unknown>).dashboard_category)
+        : ev.dashboard_category && isActiveEventDashboardCategory(ev.dashboard_category)
+          ? ev.dashboard_category
+          : null;
+    const evWithPartyState = { ...ev, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly, dashboard_category: evDashCat };
     const postsFromDb: Post[] = (postsRes.data || []).map((p: { id: string; image_url: string; title: string; dashboard_category?: unknown }) => ({
       id: p.id,
       url: p.image_url,
@@ -735,7 +776,17 @@ export default function App() {
     setEvents((prev) =>
       prev.map((e) =>
         e.id === ev.id
-          ? { ...e, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly, captions: dbCaptions, posts: postsFromDb, assetsCount: postsFromDb.length }
+          ? {
+              ...e,
+              party: evParty,
+              state: evState,
+              loksabha: evLoksabha,
+              assembly: evAssembly,
+              dashboard_category: evDashCat,
+              captions: dbCaptions,
+              posts: postsFromDb,
+              assetsCount: postsFromDb.length,
+            }
           : e
       )
     );
@@ -770,6 +821,14 @@ export default function App() {
     const fromUi = normalizeCaptionsFromDb(selectedEvent.captions);
     const batchCaptions = fromDb.length > 0 ? fromDb : fromUi;
 
+    const dashFromEvent =
+      capRow && isActiveEventDashboardCategory((capRow as Record<string, unknown>).dashboard_category)
+        ? String((capRow as Record<string, unknown>).dashboard_category)
+        : selectedEvent.dashboard_category && isActiveEventDashboardCategory(selectedEvent.dashboard_category)
+          ? selectedEvent.dashboard_category
+          : null;
+    const isGlobalDashPost = dashFromEvent != null;
+
     const newPosts: Post[] = [];
     for (const file of imageFiles) {
       const ext = file.name.toLowerCase().endsWith('.jpeg')
@@ -794,17 +853,17 @@ export default function App() {
         title: file.name.replace(ext, ''),
         image_url: imageUrl,
         category: selectedEvent.name,
-        dashboard_category: postCategoryValue === 'none' ? null : postCategoryValue,
+        dashboard_category: dashFromEvent,
         /** Must match app/dashboard graphics filter (`is_video` false or null); DB default true would hide posts + break caption sync filters. */
         is_video: false,
         captions: batchCaptions,
         // Only numeric columns
-        party_id: toNumArr(selectedEvent.party),
-        state_id: toNumArr(selectedEvent.state),
-        loksabha_id: toNumArr(selectedEvent.loksabha),
-        assembly_id: toNumArr(selectedEvent.assembly),
+        party_id: isGlobalDashPost ? [] : toNumArr(selectedEvent.party),
+        state_id: isGlobalDashPost ? [] : toNumArr(selectedEvent.state),
+        loksabha_id: isGlobalDashPost ? [] : toNumArr(selectedEvent.loksabha),
+        assembly_id: isGlobalDashPost ? [] : toNumArr(selectedEvent.assembly),
       };
-      const targetGroupsArr = toStrArr(selectedEvent.target_groups);
+      const targetGroupsArr = isGlobalDashPost ? [] : toStrArr(selectedEvent.target_groups);
       postPayload.target_groups = targetGroupsArr;
       // Priority rule: if target_groups is set, ignore geo filters on the post row.
       if (targetGroupsArr.length > 0) {
@@ -832,7 +891,7 @@ export default function App() {
         url: imageUrl,
         type: 'image',
         name: file.name,
-        dashboard_category: postCategoryValue === 'none' ? null : postCategoryValue,
+        dashboard_category: dashFromEvent,
       });
     }
 
@@ -978,6 +1037,7 @@ export default function App() {
 
   const openEditModal = (ev: CampaignEvent) => {
     setEditingEvent(ev);
+    setEditEventDashboardCategory(dashboardCategoryFromDb(ev.dashboard_category));
     setNewName(ev.name);
     skipLoksabhaResetCountRef.current = 2;
     setStartDate(toDateInputValue(ev.start));
@@ -1007,6 +1067,7 @@ export default function App() {
       start: `${startDate}T00:00:00Z`,
       end: `${endDate}T23:59:59Z`,
       captions: editingEvent.captions,
+      dashboard_category: dashboardCategoryToDb(editEventDashboardCategory),
     };
     if (scheduledAt) {
       const iso = new Date(scheduledAt).toISOString();
@@ -1016,12 +1077,13 @@ export default function App() {
       }
       updatePayload.scheduled_at = iso;
     }
-    const partyArr = newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
-    const stateArr = newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
-    const loksabhaArr = newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
-    const assemblyArr = newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
-    const targetGroupsArr = newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
-    if (isCampaignManager && targetGroupsArr.length === 0) {
+    const isEditCat = editEventDashboardCategory !== 'none';
+    const partyArr = isEditCat ? [] : newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
+    const stateArr = isEditCat ? [] : newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
+    const loksabhaArr = isEditCat ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
+    const assemblyArr = isEditCat ? [] : newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
+    const targetGroupsArr = isEditCat ? [] : newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
+    if (isCampaignManager && targetGroupsArr.length === 0 && !isEditCat) {
       alert('Please select at least one Target Group.');
       return;
     }
@@ -1099,6 +1161,11 @@ export default function App() {
       await pq;
     }
 
+    {
+      const nextDash = dashboardCategoryToDb(editEventDashboardCategory);
+      await supabase.from('posts').update({ dashboard_category: nextDash }).eq('category', targetCategory);
+    }
+
     /** Edit Event "Save" updates `events.captions` but must also push to `posts.captions` (same as add/delete caption). */
     const evForSync: CampaignEvent = {
       ...editingEvent,
@@ -1119,10 +1186,15 @@ export default function App() {
       loksabha: targetGroupsArr.length > 0 ? undefined : loksabhaArr.length ? loksabhaArr : undefined,
       assembly: targetGroupsArr.length > 0 ? undefined : assemblyArr.length ? assemblyArr : undefined,
       target_groups: targetGroupsArr.length ? targetGroupsArr : undefined,
+      dashboard_category: dashboardCategoryToDb(editEventDashboardCategory),
     };
     setEvents((prev) => prev.map((ev) => (ev.id === editingEvent.id ? updated : ev)));
     if (selectedEvent?.id === editingEvent.id) {
-      setSelectedEvent(updated);
+      const nextDash = dashboardCategoryToDb(editEventDashboardCategory);
+      setSelectedEvent({
+        ...updated,
+        posts: (selectedEvent.posts ?? []).map((p) => ({ ...p, dashboard_category: nextDash })),
+      });
     }
 
     setEditingEvent(null);
@@ -1134,6 +1206,7 @@ export default function App() {
     setNewLoksabha([]);
     setNewAssembly([]);
     setNewTargetGroups([]);
+    setEditEventDashboardCategory('none');
 
     let workerNotifyOk = false;
     try {
@@ -1212,9 +1285,31 @@ export default function App() {
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</label>
                     <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30" />
                   </div>
+                  <div className="flex flex-col">
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Dashboard Category</label>
+                    <select
+                      value={editEventDashboardCategory}
+                      onChange={(e) => setEditEventDashboardCategory(e.target.value as UiDashboardCategory)}
+                      className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30 text-sm"
+                    >
+                      <option value="none">None</option>
+                      <option value="good_morning">Good Morning</option>
+                      <option value="good_night">Good Night</option>
+                      <option value="motivation">Motivation</option>
+                      <option value="devotional">Devotional</option>
+                      <option value="birthday_wishes">Birthday Wishes</option>
+                    </select>
+                    {editEventDashboardCategory !== 'none' ? (
+                      <p className="mt-2 text-[10px] font-bold text-slate-500">Category events are global dashboard content events.</p>
+                    ) : null}
+                  </div>
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-1">
                     {!isCampaignManager ? (
-                      <>
+                      <div
+                        className={`col-span-2 lg:col-span-3 grid grid-cols-2 lg:grid-cols-2 gap-4 ${
+                          editEventDashboardCategory !== 'none' ? 'pointer-events-none opacity-50' : ''
+                        }`}
+                      >
                         <div className="rounded-2xl border border-slate-200 bg-white p-3">
                           {hasSingleAssignedState && singleAssignedStateId ? (
                             <div>
@@ -1280,9 +1375,9 @@ export default function App() {
                             searchable
                           />
                         </div>
-                      </>
+                      </div>
                     ) : null}
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
+                    <div className={`rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3 ${editEventDashboardCategory !== 'none' ? 'pointer-events-none opacity-50' : ''}`}>
                       <MultiSelectDropdown
                         label="Target Groups"
                         options={groupOptions.map((g) => ({ id: g.tag, tag: g.tag, name: g.name || g.tag, count: g.count }))}
@@ -1343,7 +1438,7 @@ export default function App() {
               </div>
               <div className="shrink-0 px-4 sm:px-5 py-4 border-t border-slate-100 bg-white">
                 <div className="flex gap-4">
-                  <button onClick={() => { setEditingEvent(null); setNewName(''); setStartDate(''); setEndDate(''); setScheduledAt(''); setScheduleUiOpen(false); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
+                  <button onClick={() => { setEditingEvent(null); setEditEventDashboardCategory('none'); setNewName(''); setStartDate(''); setEndDate(''); setScheduledAt(''); setScheduleUiOpen(false); setNewParty([]); setNewState([]); setNewLoksabha([]); setNewAssembly([]); setNewTargetGroups([]); }} className="flex-1 py-3 sm:py-4 bg-slate-100 rounded-2xl font-bold text-slate-700">Cancel</button>
                   <button onClick={handleSaveEvent} disabled={!newName.trim() || !startDate || !endDate} className="flex-1 py-3 sm:py-4 bg-blue-600 text-white rounded-2xl font-bold disabled:opacity-30">Save</button>
                 </div>
               </div>
@@ -1395,8 +1490,30 @@ export default function App() {
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</span>
               <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm" />
             </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Dashboard Category</span>
+              <select
+                value={newEventDashboardCategory}
+                onChange={(e) => setNewEventDashboardCategory(e.target.value as UiDashboardCategory)}
+                className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm"
+              >
+                <option value="none">None</option>
+                <option value="good_morning">Good Morning</option>
+                <option value="good_night">Good Night</option>
+                <option value="motivation">Motivation</option>
+                <option value="devotional">Devotional</option>
+                <option value="birthday_wishes">Birthday Wishes</option>
+              </select>
+              {isCreateCategoryMode ? (
+                <p className="mt-2 text-[10px] font-bold text-slate-500">Category events are global dashboard content events.</p>
+              ) : null}
+            </div>
             {!isCampaignManager ? (
-              <>
+              <div
+                className={`col-span-2 lg:col-span-3 grid grid-cols-2 lg:grid-cols-2 gap-4 ${
+                  isCreateCategoryMode ? 'pointer-events-none opacity-50' : ''
+                }`}
+              >
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
                   {hasSingleAssignedState && singleAssignedStateId ? (
                     <div>
@@ -1462,7 +1579,7 @@ export default function App() {
                     searchable
                   />
                 </div>
-              </>
+              </div>
             ) : null}
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Activation</span>
@@ -1496,7 +1613,7 @@ export default function App() {
                 </>
               )}
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
+            <div className={`rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3 ${isCreateCategoryMode ? 'pointer-events-none opacity-50' : ''}`}>
               <MultiSelectDropdown
                 label="Target Groups"
                 options={groupOptions.map((g) => ({ id: g.tag, tag: g.tag, name: g.name || g.tag, count: g.count }))}
@@ -1595,70 +1712,6 @@ export default function App() {
     <div className="max-w-6xl mx-auto p-4 space-y-8 animate-in slide-in-from-bottom-4 text-slate-700 pb-20">
       <input type="file" ref={fileInputRef} onChange={handleUpload} multiple accept="image/jpeg,image/png,.jpg,.jpeg,.png" className="hidden" />
 
-      {/* Post category modal */}
-      {postCategoryModal.open && postCategoryModal.post ? (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
-          <div className="bg-white rounded-[40px] p-10 max-w-sm w-full text-center space-y-6 shadow-2xl animate-in zoom-in-95">
-            <p className="font-black text-xl text-slate-900">Post category</p>
-            <p className="text-slate-400 text-sm font-medium italic">
-              Sets dashboard quick category visibility. Event relation stays unchanged.
-            </p>
-            <select
-              value={postCategoryValue}
-              onChange={(e) => setPostCategoryValue(e.target.value as any)}
-              className="w-full bg-slate-50 p-3 rounded-2xl border border-slate-200 outline-none font-bold text-slate-800 text-sm"
-            >
-              <option value="none">none</option>
-              <option value="good_morning">good_morning</option>
-              <option value="good_night">good_night</option>
-              <option value="motivation">motivation</option>
-              <option value="devotional">devotional</option>
-              <option value="birthday_wishes">birthday_wishes</option>
-            </select>
-            <div className="flex gap-4">
-              <button
-                onClick={() => setPostCategoryModal({ open: false, post: null })}
-                className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  const post = postCategoryModal.post;
-                  if (!post) return;
-                  const next = postCategoryValue === 'none' ? null : postCategoryValue;
-                  const { error } = await supabase.from('posts').update({ dashboard_category: next }).eq('id', post.id);
-                  if (error) {
-                    alert(error.message);
-                    return;
-                  }
-                  setEvents((prev) =>
-                    prev.map((ev) =>
-                      ev.id === selectedEvent?.id
-                        ? {
-                            ...ev,
-                            posts: (ev.posts ?? []).map((p) => (p.id === post.id ? { ...p, dashboard_category: next } : p)),
-                          }
-                        : ev
-                    )
-                  );
-                  if (selectedEvent) {
-                    setSelectedEvent({
-                      ...selectedEvent,
-                      posts: (selectedEvent.posts ?? []).map((p) => (p.id === post.id ? { ...p, dashboard_category: next } : p)),
-                    });
-                  }
-                  setPostCategoryModal({ open: false, post: null });
-                }}
-                className="flex-1 py-4 bg-slate-900 text-white rounded-2xl font-bold shadow-xl"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {/* Media Delete Popup */}
       {postToDelete && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
@@ -1707,21 +1760,6 @@ export default function App() {
         <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] px-2 flex items-center gap-2">
             <ImageIcon size={14} className="text-blue-500" /> Media ({selectedEvent?.posts.length})
         </h3>
-        <div className="px-2">
-          <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Quick category (optional)</label>
-          <select
-            value={postCategoryValue}
-            onChange={(e) => setPostCategoryValue(e.target.value as any)}
-            className="mt-2 w-full max-w-xs bg-slate-50 p-3 rounded-[25px] border border-slate-200 outline-none font-bold text-slate-800 text-sm"
-          >
-            <option value="none">none</option>
-            <option value="good_morning">good_morning</option>
-            <option value="good_night">good_night</option>
-            <option value="motivation">motivation</option>
-            <option value="devotional">devotional</option>
-            <option value="birthday_wishes">birthday_wishes</option>
-          </select>
-        </div>
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
             <div onClick={() => fileInputRef.current?.click()} className="aspect-[9/16] bg-white border-4 border-dashed border-slate-200 rounded-[45px] flex flex-col items-center justify-center text-slate-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50/30 transition-all group active:scale-95">
                 <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all mb-4 shadow-inner"><Plus size={32} strokeWidth={3} /></div>
@@ -1733,16 +1771,6 @@ export default function App() {
                 {post.type === 'video' ? <video src={post.url} className="w-full h-full object-cover opacity-80" /> : <img src={post.url} className="w-full h-full object-cover opacity-80" alt="asset" />}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60" />
                 <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
-                    <button
-                      onClick={() => {
-                        setPostCategoryValue((post.dashboard_category as any) || 'none');
-                        setPostCategoryModal({ open: true, post });
-                      }}
-                      className="w-10 h-10 mr-2 bg-slate-900/70 text-white rounded-2xl flex items-center justify-center shadow-2xl hover:bg-slate-900 active:scale-90 transition-all"
-                      title="Set quick category"
-                    >
-                      <Pencil size={18} />
-                    </button>
                     <button onClick={() => setPostToDelete(post)} className="w-10 h-10 bg-rose-500 text-white rounded-2xl flex items-center justify-center shadow-2xl hover:bg-rose-600 active:scale-90 transition-all"><Trash2 size={18} /></button>
                 </div>
                 <div className="absolute bottom-6 left-6 w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-xl ring-4 ring-blue-600/20">

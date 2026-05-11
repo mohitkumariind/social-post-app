@@ -97,18 +97,25 @@ export function buildScopedQuery(
 
   if (resourceType === 'events') {
     if (role === 'moderator') {
-      // Require event.state_id subset of moderator assigned_state_ids.
-      return baseQuery.not('state_id', 'is', null).neq('state_id', '{}').containedBy('state_id', canonical.stateIds);
+      if (canonical.stateIds.length === 0) {
+        return baseQuery.not('dashboard_category', 'is', null).eq('created_by', user.id);
+      }
+      const sidList = canonical.stateIds.join(',');
+      const branch1 = `and(state_id.not.is.null,state_id.neq.{},state_id.cd.{${sidList}})`;
+      const branch2 = `and(dashboard_category.not.is.null,created_by.eq.${user.id})`;
+      return baseQuery.or(`${branch1},${branch2}`);
     }
     // campaign_manager: require event.target_groups subset of assigned (effective) group ids.
     // Use normalized string IDs for PostgREST: `events.target_groups` is text[] (numeric strings) in canonical schema;
     // passing number[] can break `<@` / `containedBy` matching against text[].
     const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
-    if (scopeGids.length === 0) return baseQuery.eq('id', '__none__');
-    return baseQuery
-      .not('target_groups', 'is', null)
-      .neq('target_groups', '{}')
-      .containedBy('target_groups', scopeGids);
+    if (scopeGids.length === 0) {
+      return baseQuery.not('dashboard_category', 'is', null).eq('created_by', user.id);
+    }
+    const gidList = scopeGids.join(',');
+    const branch1 = `and(target_groups.not.is.null,target_groups.neq.{},target_groups.cd.{${gidList}})`;
+    const branch2 = `and(dashboard_category.not.is.null,created_by.eq.${user.id})`;
+    return baseQuery.or(`${branch1},${branch2}`);
   }
 
   if (resourceType === 'profiles') {
@@ -199,14 +206,23 @@ export function buildScopedAnalyticsQuery(
   }
 
   if (resourceType === 'events') {
-    if (role === 'moderator') return baseQuery.not('state_id', 'is', null).neq('state_id', '{}').containedBy('state_id', canonical.stateIds);
+    if (role === 'moderator') {
+      if (canonical.stateIds.length === 0) {
+        return baseQuery.not('dashboard_category', 'is', null).eq('created_by', user.id);
+      }
+      const sidList = canonical.stateIds.join(',');
+      const branch1 = `and(state_id.not.is.null,state_id.neq.{},state_id.cd.{${sidList}})`;
+      const branch2 = `and(dashboard_category.not.is.null,created_by.eq.${user.id})`;
+      return baseQuery.or(`${branch1},${branch2}`);
+    }
     const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
-    return scopeGids.length > 0
-      ? baseQuery
-          .not('target_groups', 'is', null)
-          .neq('target_groups', '{}')
-          .containedBy('target_groups', scopeGids)
-      : baseQuery.eq('id', '__none__');
+    if (scopeGids.length === 0) {
+      return baseQuery.not('dashboard_category', 'is', null).eq('created_by', user.id);
+    }
+    const gidList = scopeGids.join(',');
+    const branch1 = `and(target_groups.not.is.null,target_groups.neq.{},target_groups.cd.{${gidList}})`;
+    const branch2 = `and(dashboard_category.not.is.null,created_by.eq.${user.id})`;
+    return baseQuery.or(`${branch1},${branch2}`);
   }
 
   // posts

@@ -21,6 +21,40 @@ import {
   toNumArray,
 } from '@/lib/rbac/require';
 import { API_DEFAULT_LIMIT, API_MAX_LIMIT, clampLimit } from '@/lib/perf-defaults';
+import {
+  EVENT_DASHBOARD_CATEGORY_VALUES,
+  isActiveEventDashboardCategory,
+} from '@/lib/dashboard-event-category';
+
+function pickEventDashboardCategory(patch: Record<string, unknown>, prior: unknown): unknown {
+  return Object.prototype.hasOwnProperty.call(patch, 'dashboard_category')
+    ? patch.dashboard_category
+    : prior;
+}
+
+/** Normalize client input: null/none/omit → null; invalid → sentinel. */
+function normalizeIncomingEventDashboardCategory(v: unknown): string | null | '__invalid__' {
+  if (v === undefined) return null;
+  if (v == null || v === '') return null;
+  const s = String(v).trim();
+  if (s === '' || s.toLowerCase() === 'none') return null;
+  if (!(EVENT_DASHBOARD_CATEGORY_VALUES as readonly string[]).includes(s)) return '__invalid__';
+  return s;
+}
+
+/** When a quick category is set, event is global dashboard content: clear geo/party/group targeting. */
+function applyDashboardCategoryGlobalEventFields(p: Record<string, unknown>) {
+  if (!isActiveEventDashboardCategory(p.dashboard_category)) return;
+  p.target_groups = [];
+  p.party = [];
+  p.state = [];
+  p.loksabha = [];
+  p.assembly = [];
+  p.party_id = [];
+  p.state_id = [];
+  p.loksabha_id = [];
+  p.assembly_id = [];
+}
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -173,6 +207,7 @@ export async function GET(request: NextRequest) {
           created_by: (data as any).created_by,
           state_ids: (data as any).state_id,
           group_ids: (data as any).target_groups,
+          dashboard_category: (data as any).dashboard_category,
         },
         {
           resourceType: 'events',
@@ -261,6 +296,16 @@ export async function POST(request: NextRequest) {
     return json({ error: 'Invalid JSON body' }, 400);
   }
 
+  if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category')) {
+    const n = normalizeIncomingEventDashboardCategory(payload.dashboard_category);
+    if (n === '__invalid__') return json({ error: 'Invalid dashboard_category' }, 400);
+    if (n == null) (payload as any).dashboard_category = null;
+    else (payload as any).dashboard_category = n;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category')) {
+    applyDashboardCategoryGlobalEventFields(payload);
+  }
+
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
   {
@@ -277,14 +322,16 @@ export async function POST(request: NextRequest) {
   }
 
   if (isModerator(auth)) {
-    const stateIds = toNumArray(payload.state_id);
-    if (stateIds.length === 0) {
-      return json({ error: 'Forbidden: moderator event must target at least one state' }, 403);
-    }
-    try {
-      requireScopeState(stateIds, auth.assigned_state_ids, 'subset');
-    } catch {
-      return json({ error: 'Forbidden: event includes states outside assignment' }, 403);
+    if (!isActiveEventDashboardCategory(payload.dashboard_category)) {
+      const stateIds = toNumArray(payload.state_id);
+      if (stateIds.length === 0) {
+        return json({ error: 'Forbidden: moderator event must target at least one state' }, 403);
+      }
+      try {
+        requireScopeState(stateIds, auth.assigned_state_ids, 'subset');
+      } catch {
+        return json({ error: 'Forbidden: event includes states outside assignment' }, 403);
+      }
     }
     const tg = Array.isArray(payload.target_groups) ? payload.target_groups : [];
     if (tg.length > 0) {
@@ -293,8 +340,10 @@ export async function POST(request: NextRequest) {
   }
 
   if (isCampaignManager(auth)) {
-    const tg = Array.isArray(payload.target_groups) ? payload.target_groups : [];
-    if (tg.length === 0) return json({ error: 'Forbidden: campaign_manager must target_groups' }, 403);
+    if (!isActiveEventDashboardCategory(payload.dashboard_category)) {
+      const tg = Array.isArray(payload.target_groups) ? payload.target_groups : [];
+      if (tg.length === 0) return json({ error: 'Forbidden: campaign_manager must target_groups' }, 403);
+    }
     // No global/state-wide targeting for campaign_manager.
     const forbiddenKeys = ['party', 'state', 'loksabha', 'assembly', 'party_id', 'state_id', 'loksabha_id', 'assembly_id', 'profile_ids', 'group_id'];
     for (const k of forbiddenKeys) {
@@ -379,6 +428,13 @@ export async function PATCH(request: NextRequest) {
   const patch = body.patch && typeof body.patch === 'object' ? body.patch : null;
   if (!id || !patch) return json({ error: 'Missing id or patch' }, 400);
 
+  if (Object.prototype.hasOwnProperty.call(patch, 'dashboard_category')) {
+    const n = normalizeIncomingEventDashboardCategory(patch.dashboard_category);
+    if (n === '__invalid__') return json({ error: 'Invalid dashboard_category' }, 400);
+    if (n == null) (patch as any).dashboard_category = null;
+    else (patch as any).dashboard_category = n;
+  }
+
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
   const { error: cmErr, ids: cmEff } = await resolveCmEffectiveGroupsOrError(admin, auth);
@@ -388,22 +444,16 @@ export async function PATCH(request: NextRequest) {
   const { data: evForGuard, error: evForGuardErr } = await selectEventByIdMaybe(
     admin,
     id,
-    'id, created_by, state_id, target_groups, name'
+    'id, created_by, state_id, target_groups, name, dashboard_category'
   );
   if (evForGuardErr) return json({ error: evForGuardErr.message }, 500);
-  {
-    const decision = canPerformMutation(
-      rbacUserForMutation(auth, cmEff) as any,
-      'events.update',
-      {
-        created_by: (evForGuard as any)?.created_by,
-        state_ids: (evForGuard as any)?.state_id,
-        group_ids: (evForGuard as any)?.target_groups,
-      },
-      patch as any,
-      { resourceType: 'events', resourceId: id, resourceName: String((evForGuard as any)?.name ?? '') }
-    );
-    if (!decision.ok) return json({ error: decision.reason }, 403);
+  if (!evForGuard) return json({ error: 'Not found' }, 404);
+
+  if (
+    Object.prototype.hasOwnProperty.call(patch, 'dashboard_category') &&
+    isActiveEventDashboardCategory((patch as any).dashboard_category)
+  ) {
+    applyDashboardCategoryGlobalEventFields(patch);
   }
 
   if (isModerator(auth)) {
@@ -411,23 +461,16 @@ export async function PATCH(request: NextRequest) {
       if (hasStoredCreatedBy(evForGuard)) {
         requireOwnership((evForGuard as any)?.created_by, auth.user.id);
       }
-      requireScopeState((evForGuard as any)?.state_id, auth.assigned_state_ids, 'subset');
+      const evIsCat = isActiveEventDashboardCategory((evForGuard as any)?.dashboard_category);
+      if (!evIsCat) {
+        const exStates = toNumArray((evForGuard as any)?.state_id);
+        if (exStates.length === 0) throw new RbacError('Forbidden', 403);
+        requireScopeState((evForGuard as any)?.state_id, auth.assigned_state_ids, 'subset');
+      }
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
     }
-    const existingStateIds = toNumArray((evForGuard as any)?.state_id);
-    const nextStateIds = patch.state_id != null ? toNumArray(patch.state_id) : existingStateIds;
-    try {
-      requireScopeState(nextStateIds, auth.assigned_state_ids, 'subset');
-    } catch {
-      return json({ error: 'Forbidden: cannot set states outside assignment' }, 403);
-    }
-    const nextTargetGroups = patch.target_groups != null ? (Array.isArray(patch.target_groups) ? patch.target_groups : []) : ((evForGuard as any)?.target_groups ?? []);
-    if (Array.isArray(nextTargetGroups) && nextTargetGroups.length > 0) return json({ error: 'Forbidden: moderators cannot use target_groups events' }, 403);
-
-    // Never allow moderators to change ownership.
-    if (patch.created_by != null) return json({ error: 'Forbidden' }, 403);
   }
 
   if (isCampaignManager(auth)) {
@@ -439,11 +482,55 @@ export async function PATCH(request: NextRequest) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
     }
+  }
 
-    // Must remain groups-only targeting.
+  const mergedForRbac: Record<string, unknown> = {
+    ...patch,
+    dashboard_category: pickEventDashboardCategory(patch, (evForGuard as any)?.dashboard_category),
+  };
+  {
+    const decision = canPerformMutation(
+      rbacUserForMutation(auth, cmEff) as any,
+      'events.update',
+      {
+        created_by: (evForGuard as any)?.created_by,
+        state_ids: (evForGuard as any)?.state_id,
+        group_ids: (evForGuard as any)?.target_groups,
+      },
+      mergedForRbac as any,
+      { resourceType: 'events', resourceId: id, resourceName: String((evForGuard as any)?.name ?? '') }
+    );
+    if (!decision.ok) return json({ error: decision.reason }, 403);
+  }
+
+  if (isModerator(auth)) {
+    const existingStateIds = toNumArray((evForGuard as any)?.state_id);
+    const nextStateIds = patch.state_id != null ? toNumArray(patch.state_id) : existingStateIds;
+    const dashEff = pickEventDashboardCategory(patch, (evForGuard as any)?.dashboard_category);
+    if (!isActiveEventDashboardCategory(dashEff)) {
+      try {
+        requireScopeState(nextStateIds, auth.assigned_state_ids, 'subset');
+      } catch {
+        return json({ error: 'Forbidden: cannot set states outside assignment' }, 403);
+      }
+      if (nextStateIds.length === 0) {
+        return json({ error: 'Forbidden: moderator event must target at least one state' }, 403);
+      }
+    }
+    const nextTargetGroups = patch.target_groups != null ? (Array.isArray(patch.target_groups) ? patch.target_groups : []) : ((evForGuard as any)?.target_groups ?? []);
+    if (Array.isArray(nextTargetGroups) && nextTargetGroups.length > 0) return json({ error: 'Forbidden: moderators cannot use target_groups events' }, 403);
+
+    // Never allow moderators to change ownership.
+    if (patch.created_by != null) return json({ error: 'Forbidden' }, 403);
+  }
+
+  if (isCampaignManager(auth)) {
     if (patch.target_groups != null) {
       const tg = Array.isArray(patch.target_groups) ? patch.target_groups : [];
-      if (tg.length === 0) return json({ error: 'Forbidden: campaign_manager must target_groups' }, 403);
+      const effDash = pickEventDashboardCategory(patch, (evForGuard as any)?.dashboard_category);
+      if (tg.length === 0 && !isActiveEventDashboardCategory(effDash)) {
+        return json({ error: 'Forbidden: campaign_manager must target_groups' }, 403);
+      }
     }
 
     const forbiddenKeys = ['party', 'state', 'loksabha', 'assembly', 'party_id', 'state_id', 'loksabha_id', 'assembly_id', 'profile_ids', 'group_id'];

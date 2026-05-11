@@ -12,6 +12,7 @@ import {
   canUseOwnershipFallback,
   validateRegisteredResourceForLayer,
 } from '@/lib/rbac/resource-classification';
+import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 
 export type UnifiedScope =
   | { type: 'GLOBAL' }
@@ -30,6 +31,8 @@ export type UnifiedResource = {
   state_ids?: unknown;
   group_id?: unknown;
   group_ids?: unknown;
+  /** When set on `events`, global dashboard category rows may omit geo/group scope. */
+  dashboard_category?: unknown;
 };
 
 type AccessAuditContext = {
@@ -152,6 +155,13 @@ export function canAccessResource(user: UnifiedUser, resource: UnifiedResource, 
     }
     const rStates = rStatesParsed.ids;
     if (rStates.length === 0) {
+      if (
+        resourceType === 'events' &&
+        isActiveEventDashboardCategory(resource.dashboard_category) &&
+        isOwner(user.id, resource.created_by)
+      ) {
+        return true;
+      }
       if (allowOwnershipFallback && isOwner(user.id, resource.created_by)) return true;
       auditAccessDenied(user, options.audit, 'Forbidden: missing state scope', { state_ids: resource.state_ids, allowOwnershipFallback, resourceType });
       return false;
@@ -171,6 +181,13 @@ export function canAccessResource(user: UnifiedUser, resource: UnifiedResource, 
     }
     const gids = gidsParsed.ids;
     if (!gid && gids.length === 0) {
+      if (
+        resourceType === 'events' &&
+        isActiveEventDashboardCategory(resource.dashboard_category) &&
+        isOwner(user.id, resource.created_by)
+      ) {
+        return true;
+      }
       if (allowOwnershipFallback && isOwner(user.id, resource.created_by)) return true;
       auditAccessDenied(user, options.audit, 'Forbidden: missing group scope', { group_id: resource.group_id, group_ids: resource.group_ids, allowOwnershipFallback, resourceType });
       return false;
