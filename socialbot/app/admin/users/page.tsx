@@ -91,9 +91,21 @@ async function fetchAllUserFramesForAdmin(userId: string, searchQuery: string): 
     const usp = new URLSearchParams({ user_id: userId, limit: String(chunk), offset: String(offset) });
     if (searchQuery) usp.set('search_query', searchQuery);
     const res = await fetch(`/api/admin/user-frames?${usp.toString()}`, { credentials: 'same-origin' });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      let errText = '';
+      try {
+        errText = await res.text();
+      } catch {
+        errText = '';
+      }
+      console.error('[admin/user-frames] request failed', { status: res.status, userId, body: errText.slice(0, 800) });
+      return [];
+    }
     const json = (await res.json().catch(() => ({}))) as { frames?: UserFrameRow[]; has_more?: boolean };
-    const batch = json.frames ?? [];
+    const batch = (json.frames ?? []).map((row) => ({
+      ...row,
+      url: String(row.url ?? (row as { frame_url?: string }).frame_url ?? '').trim(),
+    }));
     aggregated.push(...batch);
     if (batch.length < chunk || !json.has_more) break;
     offset += chunk;
@@ -551,17 +563,11 @@ export default function UserManagement() {
     return () => window.clearTimeout(t);
   }, [framesSearchQuery]);
 
-  const openUserProfile = async (user: AppUser) => {
+  const openUserProfile = (user: AppUser) => {
     setSelectedUser(user);
     setFramesSearchQuery('');
     setFramesSearchDebounced('');
-    try {
-      const frames = await fetchAllUserFramesForAdmin(String(user.id), '');
-      setSelectedUser((prev) => (prev ? { ...prev, personalFrames: frames } : null));
-      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, personalFrames: frames } : u)));
-    } catch (e) {
-      if (__DEV__) console.error('[users] fetch user-frames failed', e);
-    }
+    // Frames load only in the effect below (single in-flight path; avoids racing duplicate fetches).
   };
 
   useEffect(() => {

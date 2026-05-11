@@ -5,6 +5,24 @@ import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
 import { API_DEFAULT_FRAMES_LIMIT, API_MAX_FRAMES_LIMIT, clampLimit } from '@/lib/perf-defaults';
 
+/** Normalize DB row for admin UI + mobile (`url` vs legacy `frame_url`). */
+function normalizeUserFrameRow(r: Record<string, unknown>) {
+  const url = String((r as { url?: unknown; frame_url?: unknown }).url ?? (r as { frame_url?: unknown }).frame_url ?? '').trim();
+  const overlay = (r as { overlay_url?: unknown }).overlay_url;
+  return {
+    id: (r as { id?: unknown }).id,
+    url,
+    overlay_url: overlay != null && String(overlay).trim() !== '' ? String(overlay).trim() : undefined,
+    created_at: (r as { created_at?: unknown }).created_at ?? null,
+    file_name: (r as { file_name?: unknown }).file_name,
+  };
+}
+
+const isMissingColumnErr = (err: { message?: string } | null | undefined, columnName: string) => {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column'));
+};
+
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
@@ -76,41 +94,17 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Stable `id` order so `offset` / `.range()` pagination cannot skip or duplicate rows.
-  const base = () =>
-    db
-      .from('user_frames')
-      // `file_name` is optional across projects; keep response typing loose.
-      .select('id,url,overlay_url,created_at,file_name')
-      .eq('user_id', userId)
-      .order('id', { ascending: true })
-      .range(offset, offset + limit - 1) as any;
+  // `select('*')` avoids hard failures when optional columns (`overlay_url`, `file_name`, `frame_url`)
+  // differ across environments; we normalize below.
+  const baseStar = () =>
+    db.from('user_frames').select('*').eq('user_id', userId).order('id', { ascending: true }).range(offset, offset + limit - 1) as any;
 
-  const baseWithoutFileName = () =>
-    db
-      .from('user_frames')
-      .select('id,url,created_at')
-      .eq('user_id', userId)
-      .order('id', { ascending: true })
-      .range(offset, offset + limit - 1) as any;
-
-  const isMissingColumnErr = (err: { message?: string } | null | undefined, columnName: string) => {
-    const msg = String(err?.message ?? '').toLowerCase();
-    return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column'));
-  };
-
-  // If file_name column doesn't exist in this project, fall back to URL search.
   if (!searchQuery) {
-    let q = base();
+    let q = baseStar();
     if (offset === 0 && cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
-    let { data, error } = await q;
-    if (error && isMissingColumnErr(error, 'file_name')) {
-      let q2 = baseWithoutFileName();
-      if (offset === 0 && cursorCreatedAt) q2 = q2.lt('created_at', cursorCreatedAt);
-      ({ data, error } = await q2);
-    }
+    const { data, error } = await q;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    const rows = (data ?? []) as any[];
+    const rows = ((data ?? []) as Record<string, unknown>[]).map((r) => normalizeUserFrameRow(r));
     const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
     const has_more = rows.length === limit;
     return NextResponse.json(
@@ -119,25 +113,23 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  let qSearch: any = base().ilike('file_name', `%${searchQuery}%`);
+  let qSearch: any = baseStar().ilike('file_name', `%${searchQuery}%`);
   if (offset === 0 && cursorCreatedAt) qSearch = qSearch.lt('created_at', cursorCreatedAt);
   let res: any = await qSearch;
-  if (res.error) {
-    if (isMissingColumnErr(res.error, 'file_name')) {
-      let qFallback: any = db
-        .from('user_frames')
-        .select('id,url,created_at')
-        .eq('user_id', userId)
-        .ilike('url', `%${searchQuery}%`)
-        .order('id', { ascending: true })
-        .range(offset, offset + limit - 1);
-      if (offset === 0 && cursorCreatedAt) qFallback = qFallback.lt('created_at', cursorCreatedAt);
-      res = (await qFallback) as any;
-    }
+  if (res.error && isMissingColumnErr(res.error, 'file_name')) {
+    let qFallback: any = db
+      .from('user_frames')
+      .select('*')
+      .eq('user_id', userId)
+      .ilike('url', `%${searchQuery}%`)
+      .order('id', { ascending: true })
+      .range(offset, offset + limit - 1);
+    if (offset === 0 && cursorCreatedAt) qFallback = qFallback.lt('created_at', cursorCreatedAt);
+    res = (await qFallback) as any;
   }
 
   if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
-  const rows = (res.data ?? []) as any[];
+  const rows = ((res.data ?? []) as Record<string, unknown>[]).map((r) => normalizeUserFrameRow(r));
   const next_cursor_created_at = rows.length > 0 ? String(rows[rows.length - 1]?.created_at ?? '') : '';
   const has_more = rows.length === limit;
   return NextResponse.json(
@@ -145,4 +137,3 @@ export async function GET(request: NextRequest) {
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }
-
