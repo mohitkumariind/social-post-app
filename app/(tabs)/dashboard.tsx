@@ -1140,13 +1140,27 @@ export default function DashboardScreen() {
             />
           </View>
 
-          <View style={styles.gradientHeaderWrapper}>
-            <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.eclipseGradient}>
-              <Text style={styles.modernCenterTitle}>
-                {activeCategory ? activeCategory.name : 'Daily Trending Graphics'}
-              </Text>
-            </LinearGradient>
-          </View>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => {
+              // Quick reset back to the default Daily Trending Graphics dashboard view.
+              // Does not change the existing feed behavior; it only clears an explicit category selection.
+              if (activeCategory !== null || quickChipSelected !== null) {
+                setActiveCategory(null);
+                setQuickChipSelected(null);
+                clearDashboardExpandParams();
+                void fetchPosts('', '', true);
+              }
+            }}
+          >
+            <View style={styles.gradientHeaderWrapper}>
+              <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.eclipseGradient}>
+                <Text style={styles.modernCenterTitle}>
+                  {activeCategory ? activeCategory.name : 'Daily Trending Graphics'}
+                </Text>
+              </LinearGradient>
+            </View>
+          </TouchableOpacity>
 
           {loading ? (
             <View style={styles.statusMessage}>
