@@ -14,6 +14,39 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
+-- Compatibility: some DBs may not have the helper from earlier migrations yet.
+-- ---------------------------------------------------------------------------
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = 'dashboard_auth_is_elevated_editor'
+      AND pg_get_function_identity_arguments(p.oid) = ''
+  ) THEN
+    CREATE OR REPLACE FUNCTION public.dashboard_auth_is_elevated_editor()
+    RETURNS boolean
+    LANGUAGE sql
+    STABLE
+    SECURITY INVOKER
+    SET search_path = public
+    AS $fn$
+      SELECT EXISTS (
+        SELECT 1
+        FROM public.profiles p
+        WHERE p.id = auth.uid()
+          AND COALESCE(p.role, 'user') IN ('admin', 'moderator', 'campaign_manager', 'super_admin')
+      );
+    $fn$;
+
+    REVOKE ALL ON FUNCTION public.dashboard_auth_is_elevated_editor() FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION public.dashboard_auth_is_elevated_editor() TO authenticated;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------
 -- Table
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.dashboard_banners (
