@@ -156,6 +156,7 @@ type PostRow = {
   title: string;
   image_url: string;
   category: string;
+  dashboard_category?: string | null;
   event_date?: string;
   download_count?: number | null;
   // Strict numeric-ID targeting arrays
@@ -642,9 +643,9 @@ export default function DashboardScreen() {
     if (!profileLoaded) return;
     void (async () => {
       await fetchPosts('', '', true);
-      await fetchEvents();
+      if (!quickChipSelected) await fetchEvents();
     })();
-  }, [authReady, profileLoaded, profileRefreshSeq, fetchPosts, fetchEvents]);
+  }, [authReady, profileLoaded, profileRefreshSeq, quickChipSelected, fetchPosts, fetchEvents]);
 
   useEffect(() => {
     if (!authReady || !profileLoaded || !dashboardProfileLoaded) {
@@ -681,12 +682,24 @@ export default function DashboardScreen() {
 
   useEffect(() => {
     if (!authReady || !profileLoaded) return;
+    if (quickChipSelected) return;
     void fetchEvents();
-  }, [authReady, profileLoaded, fetchEvents]);
+  }, [authReady, profileLoaded, quickChipSelected, fetchEvents]);
 
   const safePosts = Array.isArray(posts) ? posts : [];
   const safeEvents = Array.isArray(events) ? events : [];
   const filteredPosts = safePosts;
+
+  /** Quick category chips: flat post feed — not grouped by campaign/event. */
+  const isQuickCategoryFeed = quickChipSelected != null;
+  const categoryFeedPosts = React.useMemo(
+    () => filteredPosts.filter((p) => String(p.image_url ?? '').trim().length > 0),
+    [filteredPosts]
+  );
+  const quickChipLabel = React.useMemo(() => {
+    if (!quickChipSelected) return '';
+    return QUICK_CATEGORY_CHIPS.find((c) => c.id === quickChipSelected)?.label ?? quickChipSelected;
+  }, [quickChipSelected]);
 
   const postsByCategory = React.useMemo(() => {
     const map = new Map<string, Category>();
@@ -796,44 +809,29 @@ export default function DashboardScreen() {
 
   const onQuickChipPress = React.useCallback(
     (chipId: QuickCategoryChip['id']) => {
-      // Toggle behavior:
-      // - If already selected, clear and return to default dashboard view.
-      // - Otherwise switch to that category (only if it exists in CURRENT_DATA).
       if (quickChipSelected === chipId) {
         setQuickChipSelected(null);
         setActiveCategory(null);
         clearDashboardExpandParams();
         void fetchPosts('', '', true);
-        return;
-      }
-      const idx = CURRENT_DATA.findIndex((c) => String(c.name).trim().toLowerCase() === chipId);
-      if (idx === -1) {
-        // Category not present in current feed; do not change default behavior.
-        setQuickChipSelected(chipId);
-        setActiveCategory(null);
-        clearDashboardExpandParams();
-        void fetchPosts('', '', true);
+        void fetchEvents();
         return;
       }
       setQuickChipSelected(chipId);
-      switchCategory(CURRENT_DATA[idx], idx);
+      setActiveCategory(null);
       clearDashboardExpandParams();
       void fetchPosts('', '', true);
     },
-    [quickChipSelected, CURRENT_DATA, clearDashboardExpandParams, fetchPosts]
+    [quickChipSelected, clearDashboardExpandParams, fetchPosts, fetchEvents]
   );
 
-  // Keep quick chip selection aligned with manual category navigation/swipes.
+  // When user opens a carousel category whose name matches a quick chip id, sync the pill highlight.
   useEffect(() => {
-    if (!activeCategory) {
-      if (quickChipSelected !== null) setQuickChipSelected(null);
-      return;
-    }
-    const name = String(activeCategory.name ?? '').trim().toLowerCase();
-    const isQuick = QUICK_CATEGORY_CHIPS.some((c) => c.id === (name as any));
-    if (!isQuick && quickChipSelected !== null) setQuickChipSelected(null);
-    if (isQuick && quickChipSelected !== (name as any)) setQuickChipSelected(name as any);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- derived from activeCategory and quickChipSelected only
+    if (!activeCategory) return;
+    const name = String(activeCategory.name ?? '').trim().toLowerCase() as QuickCategoryChip['id'];
+    const match = QUICK_CATEGORY_CHIPS.find((c) => c.id === name);
+    if (match) setQuickChipSelected(match.id);
+    else setQuickChipSelected(null);
   }, [activeCategory?.name]);
 
   const handleGridScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -861,12 +859,20 @@ export default function DashboardScreen() {
     const target = CURRENT_DATA[idx];
     if (activeCategory?.id === target.id) return;
     consumedExpandKeyRef.current = expandKey;
+    setQuickChipSelected(null);
     switchCategory(target, idx);
     clearDashboardExpandParams();
-  }, [dashParams?.expandCategory, CURRENT_DATA, activeCategory, clearDashboardExpandParams]);
+    void fetchPosts('', '', true);
+  }, [dashParams?.expandCategory, CURRENT_DATA, activeCategory, clearDashboardExpandParams, fetchPosts]);
 
   useEffect(() => {
     const onBackPress = () => {
+      if (quickChipSelected) {
+        setQuickChipSelected(null);
+        clearDashboardExpandParams();
+        void fetchPosts('', '', true);
+        return true;
+      }
       if (activeCategory) {
         setActiveCategory(null);
         clearDashboardExpandParams();
@@ -876,7 +882,7 @@ export default function DashboardScreen() {
     };
     const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => sub.remove();
-  }, [activeCategory, clearDashboardExpandParams]);
+  }, [activeCategory, quickChipSelected, clearDashboardExpandParams, fetchPosts]);
 
   const renderTrendingSection = () => (
     <View style={styles.sectionContainer}>
@@ -1045,6 +1051,56 @@ export default function DashboardScreen() {
     </View>
   );
 
+  const categoryFeedImageUrls = React.useMemo(
+    () => categoryFeedPosts.map((p) => p.image_url),
+    [categoryFeedPosts]
+  );
+
+  const renderCategoryDirectFeed = () => (
+    <View style={{ paddingBottom: 30, paddingTop: 8 }}>
+      <View style={styles.staggeredContainer}>
+        {categoryFeedPosts.map((post, idx) => (
+          <TouchableOpacity
+            key={post.id}
+            style={[
+              styles.modernGridItem,
+              {
+                width: (width - 50) / 2,
+                height: Math.round(((width - 50) / 2) * 5 / 4),
+                marginTop: idx % 2 === 0 ? 0 : 25,
+              },
+            ]}
+            onPress={() =>
+              router.push({
+                pathname: '/(auth)/post-detail',
+                params: {
+                  image: post.image_url,
+                  images: JSON.stringify(categoryFeedImageUrls),
+                  currentIndex: String(idx),
+                  category: quickChipLabel,
+                  captions: postCaptionsForNavigation(post.captions),
+                  postId: post.id,
+                },
+              })
+            }
+          >
+            <ExpoImage
+              source={{ uri: dailyLocalByUrl[post.image_url] || post.image_url }}
+              style={styles.modernGridImg}
+              contentFit="contain"
+              cachePolicy="disk"
+              onLoadStart={() => void ensureDailyCached(post.image_url)}
+            />
+            <View style={styles.modernShareLabel}>
+              <Ionicons name="flame" size={10} color="#FFD700" />
+              <Text style={styles.modernShareText}>{String(post.download_count ?? 0)}</Text>
+            </View>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+
   return (
     <>
       <Modal
@@ -1150,13 +1206,14 @@ export default function DashboardScreen() {
                 setQuickChipSelected(null);
                 clearDashboardExpandParams();
                 void fetchPosts('', '', true);
+                void fetchEvents();
               }
             }}
           >
             <View style={styles.gradientHeaderWrapper}>
               <LinearGradient colors={[Colors.primary, Colors.accent]} style={styles.eclipseGradient}>
                 <Text style={styles.modernCenterTitle}>
-                  {activeCategory ? activeCategory.name : 'Daily Trending Graphics'}
+                  {quickChipSelected ? quickChipLabel : activeCategory ? activeCategory.name : 'Daily Trending Graphics'}
                 </Text>
               </LinearGradient>
             </View>
@@ -1186,6 +1243,14 @@ export default function DashboardScreen() {
                 <Text style={styles.retryButtonText}>{retrying ? 'Retrying...' : 'Retry'}</Text>
               </TouchableOpacity>
             </View>
+          ) : isQuickCategoryFeed ? (
+            categoryFeedPosts.length === 0 ? (
+              <View style={styles.statusMessage}>
+                <Text style={styles.statusText}>No graphics in this category right now.</Text>
+              </View>
+            ) : (
+              renderCategoryDirectFeed()
+            )
           ) : filteredPosts.length === 0 || graphicsData.length === 0 ? (
             <View style={styles.statusMessage}>
               <Text style={styles.statusText}>No graphics available right now.</Text>
