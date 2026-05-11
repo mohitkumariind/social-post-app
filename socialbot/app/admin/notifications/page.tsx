@@ -268,7 +268,9 @@ export default function NotificationBroadcastCenterPage() {
       .from('posts')
       .select('id, image_url, title, created_at')
       .order('created_at', { ascending: false })
-      .limit(400);
+      // PERF (P0): large gallery payload makes the Broadcast page feel heavy.
+      // Keep UI the same, but reduce initial rows.
+      .limit(80);
     setGalleryLoading(false);
     if (error) {
       if (__DEV__) console.error('gallery posts:', error.message);

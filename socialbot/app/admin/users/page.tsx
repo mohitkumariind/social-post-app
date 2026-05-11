@@ -468,13 +468,21 @@ export default function UserManagement() {
 
   // Realtime: refetch with current filters.
   useEffect(() => {
+    let t: number | null = null;
     const channel = supabase
       .channel('profiles-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
-        void fetchProfiles();
+      // PERF (P0): avoid refetching on every event type; debounce rapid updates.
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'profiles' }, () => {
+        if (t) window.clearTimeout(t);
+        t = window.setTimeout(() => void fetchProfiles(), 400);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, () => {
+        if (t) window.clearTimeout(t);
+        t = window.setTimeout(() => void fetchProfiles(), 400);
       })
       .subscribe();
     return () => {
+      if (t) window.clearTimeout(t);
       supabase.removeChannel(channel);
     };
   }, [filterParty, filterState, filterLoksabhaId, filterAssemblyId, searchQuery]);

@@ -370,22 +370,12 @@ export default function App() {
         }))
         .filter((e) => e.id.length > 0);
 
-      // Card counts must be correct even before clicking "Manage".
-      const withCounts: CampaignEvent[] = await Promise.all(
-        base.map(async (ev) => {
-          const { count, error: cntErr } = await supabase
-            .from('posts')
-            .select('id', { count: 'exact', head: true })
-            .eq('category', ev.name);
-          if (cntErr) {
-            if (__DEV__) console.error('[fetchEvents] posts count error:', cntErr.message);
-            return ev;
-          }
-          return { ...ev, assetsCount: count ?? 0 };
-        })
-      );
-
-      setEvents(withCounts);
+      /**
+       * PERF (P0):
+       * Avoid N+1 `posts` count queries on initial Events load.
+       * `assetsCount` is set when opening "Manage" (where we already load posts anyway).
+       */
+      setEvents(base);
     };
     fetchEvents().finally(() => setEventsLoading(false));
   }, []);
