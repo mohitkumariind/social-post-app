@@ -12,6 +12,7 @@ import {
   BarChart3,
   LineChart,
   Image as ImageIcon,
+  Share2,
 } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -28,6 +29,7 @@ const navItems = [
   { href: '/admin/banner-manager', label: 'Banner Manager', icon: ImageIcon },
   { href: '/admin/groups', label: 'Group Management', icon: Tags },
   { href: '/admin/notifications', label: 'Broadcast', icon: Bell },
+  { href: '/admin/twitter-campaign', label: 'Twitter Campaign', icon: Share2 },
   { href: '/admin/activity-center', label: 'Activity Center', icon: ListOrdered },
   { href: '/admin/rbac-observability', label: 'RBAC Observability', icon: ShieldAlert },
 ];
@@ -57,7 +59,7 @@ export default function Sidebar() {
   const visibleNavItems = useMemo(() => {
     const r = role?.toLowerCase() ?? '';
     if (r === 'moderator') {
-      // Moderator: Dashboard, Users, Events, Notifications, Groups (NO Activity Center)
+      // Moderator: Dashboard, Users, Events, Notifications, Twitter Campaign, Groups (NO Activity Center)
       return navItems.filter(
         (i) =>
           i.href !== '/admin/parties' &&
@@ -66,7 +68,7 @@ export default function Sidebar() {
       );
     }
     if (r === 'campaign_manager') {
-      // Campaign Manager: Dashboard, Users, Events, Notifications, Groups (NO Activity Center)
+      // Campaign Manager: Dashboard, Users, Events, Notifications, Groups (NO Activity Center, NO Twitter Campaign)
       return navItems.filter(
         (i) =>
           i.href === '/admin' ||
@@ -80,7 +82,12 @@ export default function Sidebar() {
     }
     // Admin (and only admin) can see Activity Center. Safe-by-default: hide until role is known.
     if (r === 'admin' || r === 'super_admin') return navItems;
-    return navItems.filter((i) => i.href !== '/admin/activity-center' && i.href !== '/admin/rbac-observability');
+    return navItems.filter(
+      (i) =>
+        i.href !== '/admin/activity-center' &&
+        i.href !== '/admin/rbac-observability' &&
+        i.href !== '/admin/twitter-campaign'
+    );
   }, [role]);
 
   return (
