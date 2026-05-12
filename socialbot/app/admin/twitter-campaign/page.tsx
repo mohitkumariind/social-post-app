@@ -163,9 +163,9 @@ export default function TwitterCampaignPage() {
 
   const scheduleLabel = useMemo(() => {
     const s = scheduleAt.trim();
-    if (!s) return 'Not scheduled (waves can start on publish)';
+    if (!s) return '—';
     const d = new Date(s);
-    if (Number.isNaN(d.getTime())) return 'Invalid schedule';
+    if (Number.isNaN(d.getTime())) return '—';
     return formatMockDate(d.toISOString());
   }, [scheduleAt]);
 
@@ -263,19 +263,13 @@ export default function TwitterCampaignPage() {
             Admin
           </div>
           <h1 className="text-3xl font-black tracking-tight text-white">Twitter Campaign</h1>
-          <p className="mt-2 max-w-2xl text-sm font-medium text-zinc-400">
-            Wave-based X (Twitter) campaigns: variants, audience, and wave spacing. This page is UI scaffolding — backend scheduling,
-            assignment, and notifications will connect here later.
-          </p>
         </div>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-[1fr_minmax(260px,320px)] lg:items-start">
-        <div className="space-y-8">
+      <div className="space-y-8">
           {/* Create campaign */}
           <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-md shadow-slate-200/50">
-            <h2 className="mb-1 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Create Twitter Campaign</h2>
-            <p className="mb-6 text-sm font-semibold text-slate-600">Define waves, timing, and target party. Server fields will map 1:1 later.</p>
+            <h2 className="mb-6 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Create Twitter Campaign</h2>
 
             <div className="grid gap-5 sm:grid-cols-2">
               <div className="sm:col-span-2">
@@ -320,7 +314,6 @@ export default function TwitterCampaignPage() {
               <div>
                 <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Schedule time (optional)</label>
                 <input className={inputClass} type="datetime-local" value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} />
-                <p className="mt-1 text-[11px] font-medium text-slate-500">First wave anchor; exact engine TBD.</p>
               </div>
 
               <div>
@@ -341,15 +334,14 @@ export default function TwitterCampaignPage() {
               </div>
 
               <div className="sm:col-span-2 rounded-xl border border-slate-100 bg-slate-50/80 p-4">
-                <span className="mb-2 block text-[10px] font-black uppercase tracking-widest text-slate-400">Status badge preview</span>
-                <p className="mb-3 text-xs font-medium text-slate-600">Chip styles used in lists and detail views after backend wiring.</p>
+                <span className="mb-2 block text-[10px] font-black uppercase tracking-widest text-slate-400">Alert badge Preview</span>
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusChip kind="draft" />
                   <StatusChip kind="published" />
                   <StatusChip kind="scheduled" />
                 </div>
                 <p className="mt-3 text-xs font-bold text-slate-700">
-                  Form-derived preview: <StatusChip kind={derivedPreviewStatus} />
+                  <StatusChip kind={derivedPreviewStatus} />
                 </p>
               </div>
             </div>
@@ -361,7 +353,7 @@ export default function TwitterCampaignPage() {
               <div>
                 <h2 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Tweet variants</h2>
                 <p className="mt-1 text-sm font-semibold text-slate-600">
-                  {campaignType === 'tweet' ? 'Compose tweet copy per variant (future: unseen assignment across waves).' : 'One URL per variant (future: open X retweet UI).'}
+                  {campaignType === 'tweet' ? 'Compose tweet copy per variant.' : 'One URL per variant.'}
                 </p>
               </div>
               <button
@@ -477,6 +469,39 @@ export default function TwitterCampaignPage() {
             </button>
           </div>
 
+          {/* Campaign summary — full-width row above table */}
+          <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-md shadow-slate-200/50">
+            <h3 className="mb-4 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Campaign summary</h3>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+              <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Variants</div>
+                <div className="mt-1 text-lg font-black text-slate-900">{variantCount}</div>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Waves</div>
+                <div className="mt-1 text-lg font-black text-slate-900">{Math.max(1, totalWaves)}</div>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Est. span</div>
+                <div className="mt-1 text-sm font-black leading-snug text-slate-900">
+                  {estimatedDurationMinutes === 0 ? 'Single wave' : `~${estimatedDurationMinutes} min`}
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Type</div>
+                <div className="mt-1 text-sm font-black text-slate-900">{campaignType === 'tweet' ? 'Tweet' : 'Retweet'}</div>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Target party</div>
+                <div className="mt-1 text-sm font-black text-slate-900">{targetPartyId ? getPartyLabel(targetPartyId) : '—'}</div>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Schedule</div>
+                <div className="mt-1 text-xs font-bold leading-snug text-slate-900">{scheduleLabel}</div>
+              </div>
+            </div>
+          </section>
+
           {/* Mock table */}
           <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-md shadow-slate-200/50">
             <h2 className="mb-1 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Existing campaigns</h2>
@@ -554,43 +579,6 @@ export default function TwitterCampaignPage() {
               </table>
             </div>
           </section>
-        </div>
-
-        {/* Sticky summary */}
-        <aside className="lg:sticky lg:top-6 lg:self-start">
-          <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-md shadow-slate-200/50">
-            <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Campaign summary</h3>
-            <p className="mt-1 text-xs font-medium text-slate-500">Live preview from form state (no server).</p>
-            <dl className="mt-4 space-y-3 text-sm">
-              <div className="flex justify-between gap-2 border-b border-slate-100 pb-2">
-                <dt className="font-bold text-slate-500">Variants</dt>
-                <dd className="font-black text-slate-900">{variantCount}</dd>
-              </div>
-              <div className="flex justify-between gap-2 border-b border-slate-100 pb-2">
-                <dt className="font-bold text-slate-500">Waves</dt>
-                <dd className="font-black text-slate-900">{Math.max(1, totalWaves)}</dd>
-              </div>
-              <div className="flex justify-between gap-2 border-b border-slate-100 pb-2">
-                <dt className="font-bold text-slate-500">Est. span</dt>
-                <dd className="text-right font-black text-slate-900">
-                  {estimatedDurationMinutes === 0 ? 'Single wave' : `~${estimatedDurationMinutes} min`}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-2 border-b border-slate-100 pb-2">
-                <dt className="font-bold text-slate-500">Type</dt>
-                <dd className="font-black text-slate-900">{campaignType === 'tweet' ? 'Tweet' : 'Retweet'}</dd>
-              </div>
-              <div className="flex justify-between gap-2 border-b border-slate-100 pb-2">
-                <dt className="font-bold text-slate-500">Target party</dt>
-                <dd className="text-right font-black text-slate-900">{targetPartyId ? getPartyLabel(targetPartyId) : '—'}</dd>
-              </div>
-              <div className="flex justify-between gap-2">
-                <dt className="font-bold text-slate-500">Schedule</dt>
-                <dd className="text-right text-xs font-bold leading-snug text-slate-900">{scheduleLabel}</dd>
-              </div>
-            </dl>
-          </div>
-        </aside>
       </div>
     </div>
   );
