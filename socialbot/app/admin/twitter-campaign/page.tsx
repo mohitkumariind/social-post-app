@@ -328,7 +328,7 @@ export default function TwitterCampaignPage() {
               </div>
 
               <div>
-                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Targeted users (optional)</label>
+                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Targeted user (optional)</label>
                 <input
                   className={inputClass}
                   type="number"
@@ -505,7 +505,7 @@ export default function TwitterCampaignPage() {
                 <div className="mt-1 text-sm font-black text-slate-900">{targetPartyId ? getPartyLabel(targetPartyId) : '—'}</div>
               </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
-                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Targeted users</div>
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Targeted user</div>
                 <div className="mt-1 text-sm font-black leading-snug text-slate-900">{targetedUsersSummary}</div>
               </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
