@@ -30,7 +30,6 @@ type MockCampaignRow = {
   variantsCount: number;
   status: 'draft' | 'published' | 'scheduled';
   targetPartyId: string;
-  createdBy: string;
   createdAt: string;
 };
 
@@ -74,7 +73,6 @@ const INITIAL_MOCK_CAMPAIGNS: MockCampaignRow[] = [
     variantsCount: 6,
     status: 'published',
     targetPartyId: 'bjp',
-    createdBy: 'admin@example.com',
     createdAt: new Date(Date.now() - 86400000 * 4).toISOString(),
   },
   {
@@ -86,7 +84,6 @@ const INITIAL_MOCK_CAMPAIGNS: MockCampaignRow[] = [
     variantsCount: 5,
     status: 'scheduled',
     targetPartyId: 'inc',
-    createdBy: 'moderator@example.com',
     createdAt: new Date(Date.now() - 86400000 * 1).toISOString(),
   },
   {
@@ -98,7 +95,6 @@ const INITIAL_MOCK_CAMPAIGNS: MockCampaignRow[] = [
     variantsCount: 0,
     status: 'draft',
     targetPartyId: 'aap',
-    createdBy: 'admin@example.com',
     createdAt: new Date(Date.now() - 3600000 * 6).toISOString(),
   },
 ];
@@ -114,6 +110,7 @@ export default function TwitterCampaignPage() {
   const [gapMinutes, setGapMinutes] = useState(15);
   const [scheduleAt, setScheduleAt] = useState('');
   const [targetPartyId, setTargetPartyId] = useState('');
+  const [targetedUsersInput, setTargetedUsersInput] = useState('');
   const [description, setDescription] = useState('');
 
   const [tweetVariants, setTweetVariants] = useState<TweetVariantRow[]>([{ id: newId('tw'), text: '' }]);
@@ -169,12 +166,13 @@ export default function TwitterCampaignPage() {
     return formatMockDate(d.toISOString());
   }, [scheduleAt]);
 
-  const derivedPreviewStatus = useMemo((): 'draft' | 'published' | 'scheduled' => {
-    if (!scheduleAt.trim()) return 'draft';
-    const d = new Date(scheduleAt);
-    if (Number.isNaN(d.getTime())) return 'draft';
-    return d.getTime() > Date.now() ? 'scheduled' : 'draft';
-  }, [scheduleAt]);
+  const targetedUsersSummary = useMemo(() => {
+    const raw = targetedUsersInput.trim();
+    if (!raw) return '—';
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return '—';
+    return new Intl.NumberFormat().format(Math.floor(n));
+  }, [targetedUsersInput]);
 
   const resetForm = useCallback(() => {
     setCampaignName('');
@@ -183,6 +181,7 @@ export default function TwitterCampaignPage() {
     setGapMinutes(15);
     setScheduleAt('');
     setTargetPartyId('');
+    setTargetedUsersInput('');
     setDescription('');
     setTweetVariants([{ id: newId('tw'), text: '' }]);
     setRetweetVariants([{ id: newId('rt'), url: '', note: '' }]);
@@ -328,6 +327,19 @@ export default function TwitterCampaignPage() {
                 </select>
               </div>
 
+              <div>
+                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Targeted users (optional)</label>
+                <input
+                  className={inputClass}
+                  type="number"
+                  min={0}
+                  inputMode="numeric"
+                  value={targetedUsersInput}
+                  onChange={(e) => setTargetedUsersInput(e.target.value)}
+                  placeholder="e.g. audience size estimate"
+                />
+              </div>
+
               <div className="sm:col-span-2">
                 <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Description</label>
                 <textarea className={textareaClass} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Internal notes, goals, compliance reminders…" rows={4} />
@@ -340,9 +352,6 @@ export default function TwitterCampaignPage() {
                   <StatusChip kind="published" />
                   <StatusChip kind="scheduled" />
                 </div>
-                <p className="mt-3 text-xs font-bold text-slate-700">
-                  <StatusChip kind={derivedPreviewStatus} />
-                </p>
               </div>
             </div>
           </section>
@@ -472,7 +481,7 @@ export default function TwitterCampaignPage() {
           {/* Campaign summary — full-width row above table */}
           <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-md shadow-slate-200/50">
             <h3 className="mb-4 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Campaign summary</h3>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
               <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
                 <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Variants</div>
                 <div className="mt-1 text-lg font-black text-slate-900">{variantCount}</div>
@@ -496,6 +505,10 @@ export default function TwitterCampaignPage() {
                 <div className="mt-1 text-sm font-black text-slate-900">{targetPartyId ? getPartyLabel(targetPartyId) : '—'}</div>
               </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Targeted users</div>
+                <div className="mt-1 text-sm font-black leading-snug text-slate-900">{targetedUsersSummary}</div>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
                 <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Schedule</div>
                 <div className="mt-1 text-xs font-bold leading-snug text-slate-900">{scheduleLabel}</div>
               </div>
@@ -504,11 +517,11 @@ export default function TwitterCampaignPage() {
 
           {/* Mock table */}
           <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-md shadow-slate-200/50">
-            <h2 className="mb-1 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Existing campaigns</h2>
+            <h2 className="mb-1 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Campaigns</h2>
             <p className="mb-4 text-sm font-semibold text-slate-600">Mock data for layout only.</p>
 
             <div className="overflow-x-auto rounded-xl border border-slate-100">
-              <table className="w-full min-w-[880px] text-left text-sm">
+              <table className="w-full min-w-[760px] text-left text-sm">
                 <thead className="border-b border-slate-100 bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500">
                   <tr>
                     <th className="px-3 py-3">Campaign name</th>
@@ -518,7 +531,6 @@ export default function TwitterCampaignPage() {
                     <th className="px-3 py-3">Variants</th>
                     <th className="px-3 py-3">Status</th>
                     <th className="px-3 py-3">Party</th>
-                    <th className="px-3 py-3">Created by</th>
                     <th className="px-3 py-3">Created at</th>
                     <th className="px-3 py-3 text-right">Actions</th>
                   </tr>
@@ -526,7 +538,7 @@ export default function TwitterCampaignPage() {
                 <tbody className="divide-y divide-slate-100">
                   {mockCampaigns.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="px-3 py-8 text-center text-sm font-semibold text-slate-500">
+                      <td colSpan={9} className="px-3 py-8 text-center text-sm font-semibold text-slate-500">
                         No mock rows. Refresh the page to restore samples.
                       </td>
                     </tr>
@@ -542,7 +554,6 @@ export default function TwitterCampaignPage() {
                           <StatusChip kind={row.status} />
                         </td>
                         <td className="px-3 py-3">{getPartyLabel(row.targetPartyId) || '—'}</td>
-                        <td className="max-w-[140px] truncate px-3 py-3 text-slate-600">{row.createdBy}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatMockDate(row.createdAt)}</td>
                         <td className="px-3 py-3 text-right">
                           <div className="flex flex-wrap justify-end gap-1">
