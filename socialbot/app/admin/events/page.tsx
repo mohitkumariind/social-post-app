@@ -386,28 +386,47 @@ export default function App() {
       }
       const data = payload.events ?? [];
       const base: CampaignEvent[] = (data || [])
-        .map((row: { id?: string; name: string; start?: string; end?: string; party?: string | string[]; state?: string | string[]; loksabha?: string | string[]; assembly?: string | string[]; target_groups?: string | string[]; captions?: unknown; dashboard_category?: unknown }) => ({
-          id: String(row.id ?? '').trim(),
-          name: row.name,
-          start: row.start ?? '',
-          end: row.end ?? '',
-          party: toStrArr(row.party),
-          state: toStrArr(row.state),
-          loksabha: toStrArr(row.loksabha),
-          assembly: toStrArr(row.assembly),
-          target_groups: toStrArr(row.target_groups),
-          dashboard_category: isActiveEventDashboardCategory(row.dashboard_category) ? String(row.dashboard_category) : null,
-          assetsCount: 0,
-          posts: [],
-          captions: normalizeCaptionsFromDb(row.captions),
-        }))
+        .map(
+          (row: {
+            id?: string;
+            name: string;
+            start?: string;
+            end?: string;
+            party?: string | string[];
+            state?: string | string[];
+            loksabha?: string | string[];
+            assembly?: string | string[];
+            target_groups?: string | string[];
+            captions?: unknown;
+            dashboard_category?: unknown;
+            assets_count?: number | string | null;
+          }) => {
+            const ac = row.assets_count;
+            const parsedAssets =
+              typeof ac === 'number' && Number.isFinite(ac)
+                ? ac
+                : typeof ac === 'string' && ac.trim() !== ''
+                  ? Number(ac)
+                  : 0;
+            return {
+              id: String(row.id ?? '').trim(),
+              name: row.name,
+              start: row.start ?? '',
+              end: row.end ?? '',
+              party: toStrArr(row.party),
+              state: toStrArr(row.state),
+              loksabha: toStrArr(row.loksabha),
+              assembly: toStrArr(row.assembly),
+              target_groups: toStrArr(row.target_groups),
+              dashboard_category: isActiveEventDashboardCategory(row.dashboard_category) ? String(row.dashboard_category) : null,
+              assetsCount: Number.isFinite(parsedAssets) ? parsedAssets : 0,
+              posts: [],
+              captions: normalizeCaptionsFromDb(row.captions),
+            };
+          }
+        )
         .filter((e) => e.id.length > 0);
 
-      /**
-       * PERF (P0):
-       * Avoid N+1 `posts` count queries on initial Events load.
-       * `assetsCount` is set when opening "Manage" (where we already load posts anyway).
-       */
       setEvents(base);
     };
     fetchEvents().finally(() => setEventsLoading(false));

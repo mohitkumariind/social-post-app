@@ -73,6 +73,14 @@ function isMissingColumnErr(err: { message?: string } | null | undefined, column
   return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column') || msg.includes('schema cache'));
 }
 
+function isMissingRpcErr(err: { message?: string } | null | undefined) {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return (
+    (msg.includes('function') && (msg.includes('does not exist') || msg.includes('schema cache'))) ||
+    msg.includes('could not find the function')
+  );
+}
+
 /** PostgREST rejects the whole projection if any listed column is missing. */
 function stripColumnFromSelect(selectList: string, column: string): string {
   const col = column.trim().toLowerCase();
@@ -282,7 +290,35 @@ export async function GET(request: NextRequest) {
   if (error) return json({ error: error.message }, 500);
   const rows = (data ?? []) as any[];
   const next_cursor_created_at = rows.length > 0 ? String((rows[rows.length - 1] as any)?.created_at ?? '') : '';
-  return json({ events: rows, usedServiceRole: !!admin, next_cursor_created_at, limit });
+
+  const categoryNames = Array.from(
+    new Set(rows.map((r) => String((r as any)?.name ?? '').trim()).filter((n) => n.length > 0))
+  );
+  const countByCategory = new Map<string, number>();
+  if (categoryNames.length > 0) {
+    const { data: agg, error: aggErr } = await db.rpc('admin_post_counts_by_event_categories', {
+      p_categories: categoryNames,
+    });
+    if (aggErr && !isMissingRpcErr(aggErr)) {
+      return json({ error: aggErr.message }, 500);
+    }
+    if (!aggErr && Array.isArray(agg)) {
+      for (const row of agg as { category?: string; post_count?: number | string }[]) {
+        const c = String(row?.category ?? '').trim();
+        if (!c) continue;
+        const n = Number(row?.post_count ?? 0);
+        countByCategory.set(c, Number.isFinite(n) ? n : 0);
+      }
+    }
+  }
+
+  const enriched = rows.map((r) => {
+    const nameKey = String((r as any)?.name ?? '').trim();
+    const assets_count = nameKey ? countByCategory.get(nameKey) ?? 0 : 0;
+    return { ...r, assets_count };
+  });
+
+  return json({ events: enriched, usedServiceRole: !!admin, next_cursor_created_at, limit });
 }
 
 export async function POST(request: NextRequest) {
