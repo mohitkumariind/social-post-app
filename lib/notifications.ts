@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { Alert, Linking, Platform } from 'react-native';
+import { PUSH_DATA_TYPE_TWITTER_CAMPAIGN } from './twitterCampaignDeepLink';
 import { supabase } from './supabase';
 
 export { ANDROID_NOTIFICATION_CHANNEL_ID } from './pushChannel';
@@ -236,6 +237,25 @@ export async function recordNotificationOpen(response: Notifications.Notificatio
   const data = response.notification?.request?.content?.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return;
   const rec = data as Record<string, unknown>;
+
+  if (rec.type === PUSH_DATA_TYPE_TWITTER_CAMPAIGN) {
+    const assignmentId = parseUuidDataField(rec, 'assignment_id') ?? parseUuidDataField(rec, 'assignmentId');
+    if (assignmentId) {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+      if (!userError && user?.id) {
+        const { error } = await supabase.rpc('twitter_campaign_track_event', {
+          p_assignment_id: assignmentId,
+          p_event_type: 'notification_opened',
+          p_metadata: {},
+        });
+        if (error && __DEV__) console.warn('[notifications] twitter_campaign_track_event:', error.message);
+      }
+      return;
+    }
+  }
 
   const broadcastId = parseBroadcastId(rec);
   if (!broadcastId) return;

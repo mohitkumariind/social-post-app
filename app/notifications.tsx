@@ -11,7 +11,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
+import { MOCK_TWITTER_ASSIGNMENT_IDS } from '../constants/twitterCampaignMock';
 import { useLang } from '../context/LanguageContext';
+import { navigateToTwitterCampaign } from '../lib/twitterCampaignNavigation';
 
 type NotiItem = {
   id: string;
@@ -19,13 +21,33 @@ type NotiItem = {
   message: string;
   time: string;
   isUnread: boolean;
-  type: 'post' | 'reward' | 'video';
+  type: 'post' | 'reward' | 'video' | 'twitter_campaign';
+  assignmentId?: string;
 };
 
 export default function NotificationScreen() {
   const router = useRouter();
   const { t } = useLang();
-  const [notifications, setNotifications] = useState<NotiItem[]>([]);
+  const [notifications, setNotifications] = useState<NotiItem[]>([
+    {
+      id: 'mock_twitter_tweet',
+      title: 'Twitter campaign',
+      message: 'Preview tweet campaign (mock assignment)',
+      time: 'Now',
+      isUnread: true,
+      type: 'twitter_campaign',
+      assignmentId: MOCK_TWITTER_ASSIGNMENT_IDS.TWEET_DEMO,
+    },
+    {
+      id: 'mock_twitter_retweet',
+      title: 'Twitter campaign',
+      message: 'Preview retweet campaign (mock assignment)',
+      time: 'Now',
+      isUnread: true,
+      type: 'twitter_campaign',
+      assignmentId: MOCK_TWITTER_ASSIGNMENT_IDS.RETWEET_DEMO,
+    },
+  ]);
 
   const markAllRead = () => {
     const updated = notifications.map(n => ({ ...n, isUnread: false }));
@@ -33,12 +55,40 @@ export default function NotificationScreen() {
   };
 
   const renderItem = ({ item }: { item: NotiItem }) => (
-    <TouchableOpacity style={[styles.notiCard, item.isUnread && styles.unreadCard]}>
-      <View style={[styles.iconBox, { backgroundColor: item.type === 'post' ? Colors.successBg : '#FFF3E0' }]}>
-        <Ionicons 
-          name={item.type === 'post' ? "image-outline" : item.type === 'reward' ? "gift-outline" : "videocam-outline"} 
-          size={22} 
-          color={item.type === 'post' ? "#2ECC71" : "#FF9800"} 
+    <TouchableOpacity
+      style={[styles.notiCard, item.isUnread && styles.unreadCard]}
+      onPress={() => {
+        if (item.type === 'twitter_campaign' && item.assignmentId) {
+          navigateToTwitterCampaign(router, item.assignmentId);
+        }
+      }}
+      activeOpacity={0.75}
+    >
+      <View
+        style={[
+          styles.iconBox,
+          {
+            backgroundColor:
+              item.type === 'twitter_campaign'
+                ? '#E3F2FD'
+                : item.type === 'post'
+                  ? Colors.successBg
+                  : '#FFF3E0',
+          },
+        ]}
+      >
+        <Ionicons
+          name={
+            item.type === 'twitter_campaign'
+              ? 'logo-twitter'
+              : item.type === 'post'
+                ? 'image-outline'
+                : item.type === 'reward'
+                  ? 'gift-outline'
+                  : 'videocam-outline'
+          }
+          size={22}
+          color={item.type === 'twitter_campaign' ? '#1DA1F2' : item.type === 'post' ? '#2ECC71' : '#FF9800'}
         />
       </View>
       

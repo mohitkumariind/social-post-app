@@ -1,4 +1,5 @@
 import { useFonts } from 'expo-font';
+import * as ExpoLinking from 'expo-linking';
 import { Stack, useRouter } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
@@ -12,6 +13,9 @@ import { LanguageProvider } from '../context/LanguageContext';
 import { UserProvider, useUser } from '../context/UserContext';
 import { cleanupDailyContentCache } from '../lib/mediaCache';
 import { FRAME_FONT_ASSETS } from '../lib/frameFonts';
+import { extractAssignmentIdFromDeepLink, getTwitterCampaignAssignmentIdFromPayload } from '../lib/twitterCampaignDeepLink';
+import { navigateToTwitterCampaign } from '../lib/twitterCampaignNavigation';
+import { isTwitterCampaignAssignmentUuid, trackTwitterCampaignEvent } from '../lib/twitterCampaignAnalytics';
 import {
   ANDROID_NOTIFICATION_CHANNEL_ID,
   recordNotificationOpen,
@@ -102,9 +106,12 @@ const BANNER_GREEN = '#25D366';
 
 /** Registers Expo push token when logged in; foreground in-app banner for incoming notifications. */
 function PushNotificationLayer() {
+  const router = useRouter();
   const { isLoggedIn } = useUser();
   const insets = useSafeAreaInsets();
-  const [banner, setBanner] = useState<{ title: string; body: string } | null>(null);
+  const [banner, setBanner] = useState<{ title: string; body: string; data?: Record<string, unknown> | null } | null>(
+    null
+  );
   const bannerClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -158,14 +165,15 @@ function PushNotificationLayer() {
   useEffect(() => {
     if (!isLoggedIn) return;
     const sub = Notifications.addNotificationReceivedListener((notification) => {
-      const { title, body } = notification.request.content;
+      const { title, body, data } = notification.request.content;
       const safeTitle = typeof title === 'string' ? title.trim() : title != null ? String(title).trim() : '';
       const safeBody = typeof body === 'string' ? body.trim() : body != null ? String(body).trim() : '';
       if (!safeTitle && !safeBody) {
         setBanner(null);
         return;
       }
-      setBanner({ title: safeTitle, body: safeBody });
+      const dataObj = data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>) : null;
+      setBanner({ title: safeTitle, body: safeBody, data: dataObj });
       if (bannerClearRef.current) clearTimeout(bannerClearRef.current);
       bannerClearRef.current = setTimeout(() => setBanner(null), 4500);
     });
@@ -178,18 +186,36 @@ function PushNotificationLayer() {
   useEffect(() => {
     if (!isLoggedIn) return;
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      void recordNotificationOpen(response);
+      void (async () => {
+        await recordNotificationOpen(response);
+        const aid = getTwitterCampaignAssignmentIdFromPayload(response.notification.request.content.data);
+        if (aid) navigateToTwitterCampaign(router, aid);
+      })();
     });
     return () => sub.remove();
-  }, [isLoggedIn]);
+  }, [isLoggedIn, router]);
 
   useEffect(() => {
     if (!isLoggedIn) return;
     void (async () => {
       const last = await Notifications.getLastNotificationResponseAsync();
-      if (last) await recordNotificationOpen(last);
+      if (!last) return;
+      await recordNotificationOpen(last);
+      const aid = getTwitterCampaignAssignmentIdFromPayload(last.notification.request.content.data);
+      if (aid) navigateToTwitterCampaign(router, aid);
     })();
-  }, [isLoggedIn]);
+  }, [isLoggedIn, router]);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const openFromUrl = (url: string | null) => {
+      const id = extractAssignmentIdFromDeepLink(url ?? '');
+      if (id) navigateToTwitterCampaign(router, id);
+    };
+    void ExpoLinking.getInitialURL().then(openFromUrl);
+    const sub = ExpoLinking.addEventListener('url', ({ url }) => openFromUrl(url));
+    return () => sub.remove();
+  }, [isLoggedIn, router]);
 
   const shouldRenderBanner = isLoggedIn && !!banner && (!!banner.title || !!banner.body);
   if (!shouldRenderBanner) return null;
@@ -198,6 +224,11 @@ function PushNotificationLayer() {
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
       <Pressable
         onPress={() => {
+          const aid = getTwitterCampaignAssignmentIdFromPayload(banner.data);
+          if (aid && isTwitterCampaignAssignmentUuid(aid)) {
+            void trackTwitterCampaignEvent(aid, 'notification_opened', { surface: 'foreground_banner' });
+          }
+          if (aid) navigateToTwitterCampaign(router, aid);
           if (bannerClearRef.current) clearTimeout(bannerClearRef.current);
           setBanner(null);
         }}

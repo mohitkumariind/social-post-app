@@ -36,6 +36,14 @@ export function computeExponentialBackoffMs(attempt: number) {
   return Math.min(16 * 60 * 1000, 60 * 1000 * Math.pow(2, safeAttempt - 1));
 }
 
+/** Exponential backoff with optional jitter (TWITTER_BACKOFF_JITTER_PCT, default 12). */
+export function computeExponentialBackoffMsWithJitter(attempt: number) {
+  const base = computeExponentialBackoffMs(attempt);
+  const pct = intFromEnv('TWITTER_BACKOFF_JITTER_PCT', 12, 0, 45);
+  const jitter = base * (pct / 100) * Math.random();
+  return Math.min(16 * 60 * 1000, Math.floor(base + jitter));
+}
+
 export function nowIso() {
   return new Date().toISOString();
 }

@@ -1,0 +1,102 @@
+import { NextResponse } from 'next/server';
+import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { RbacError, requireRole } from '@/lib/rbac/require';
+import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
+import { withAudit } from '@/lib/audit/withAudit';
+import { TWITTER_CAMPAIGN_RESOURCE, twitterCampaignIdFromRequest } from '@/app/api/admin/twitter-campaigns/_lib';
+
+function json(body: unknown, status = 200) {
+  return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
+}
+
+function rbacUser(auth: {
+  user: { id: string };
+  role: 'admin' | 'moderator' | 'campaign_manager';
+  assigned_state_ids: number[];
+  assigned_group_ids: string[];
+}) {
+  return {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+  };
+}
+
+function mapPublishRpcError(message: string): { status: number; body: unknown } | null {
+  const m = message.toLowerCase();
+  if (m.includes('twitter_campaign_not_found')) return { status: 404, body: { error: 'Not found' } };
+  if (m.includes('twitter_campaign_publish_conflict')) return { status: 409, body: { error: 'Campaign is not in draft status' } };
+  return null;
+}
+
+export const POST = withAudit(
+  async ({ req, auth, admin, previous_data }) => {
+    try {
+      requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    } catch (e) {
+      if (e instanceof RbacError) return json({ error: e.message }, e.status);
+      return json({ error: 'Forbidden' }, 403);
+    }
+
+    const before = previous_data as Record<string, unknown> | null;
+    if (!before) return json({ error: 'Not found' }, 404);
+
+    const id = twitterCampaignIdFromRequest(req);
+    if (!id) return json({ error: 'Missing id' }, 400);
+
+    const u = rbacUser(auth);
+    if (
+      auth.role !== 'admin' &&
+      !canAccessResource(u, { created_by: before.created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })
+    ) {
+      return json({ error: 'Forbidden' }, 403);
+    }
+
+    const decision = canPerformMutation(
+      u,
+      'twitter_campaigns.publish',
+      { created_by: before.created_by },
+      null,
+      { resourceType: TWITTER_CAMPAIGN_RESOURCE, resourceId: id, resourceName: String(before.title ?? '') }
+    );
+    if (!decision.ok) return json({ error: decision.reason }, 403);
+
+    const { error: rpcErr } = await admin.rpc('twitter_campaign_publish', { p_campaign_id: id });
+    if (rpcErr) {
+      const mapped = mapPublishRpcError(String(rpcErr.message ?? ''));
+      if (mapped) return json(mapped.body, mapped.status);
+      return json({ error: rpcErr.message }, 500);
+    }
+
+    const { data: campaign, error: cErr } = await admin.from('twitter_campaigns').select('*').eq('id', id).single();
+    if (cErr) return json({ error: cErr.message }, 500);
+    const { data: waves, error: wErr } = await admin
+      .from('twitter_campaign_waves')
+      .select('*')
+      .eq('campaign_id', id)
+      .order('wave_index', { ascending: true });
+    if (wErr) return json({ error: wErr.message }, 500);
+
+    return json({ campaign, waves: waves ?? [] });
+  },
+  {
+    action_type: 'twitter_campaigns.publish',
+    resource_type: TWITTER_CAMPAIGN_RESOURCE,
+    severity: 'info',
+    undoable: false,
+    getPreviousData: async ({ req, admin }) => {
+      const cid = twitterCampaignIdFromRequest(req);
+      if (!cid) return null;
+      const { data } = await admin.from('twitter_campaigns').select('*').eq('id', cid).maybeSingle();
+      return data as any;
+    },
+    build: ({ response_json }) => ({
+      resource_id: String(response_json?.campaign?.id ?? ''),
+      resource_name: String(response_json?.campaign?.title ?? ''),
+      new_data: response_json ?? null,
+    }),
+  }
+);

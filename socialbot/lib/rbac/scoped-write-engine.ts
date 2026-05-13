@@ -31,7 +31,15 @@ export type MutationAction =
   | 'notifications.schedule'
   | 'templates.create'
   | 'templates.update'
-  | 'templates.delete';
+  | 'templates.delete'
+  | 'twitter_campaigns.create'
+  | 'twitter_campaigns.update'
+  | 'twitter_campaigns.delete'
+  | 'twitter_campaigns.publish'
+  | 'twitter_campaigns.pause'
+  | 'twitter_campaigns.resume'
+  | 'twitter_campaigns.cancel_waves'
+  | 'twitter_campaigns.retry_notifications';
 
 export type MutationDecision =
   | { ok: true }

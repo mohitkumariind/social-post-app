@@ -71,6 +71,14 @@ export const RBAC_RESOURCE_REGISTRY: Record<string, RbacResourcePolicy> = {
     analytics_behavior: 'not applicable',
     supported_layers: ['query', 'access', 'mutation'],
   },
+  twitter_campaigns: {
+    category: 'owner_only',
+    scope_model: 'owner-only by created_by (admin unrestricted)',
+    ownership_behavior: 'ownership is required for non-admin',
+    allow_ownership_fallback: true,
+    analytics_behavior: 'not applicable',
+    supported_layers: ['query', 'access', 'mutation'],
+  },
   groups: {
     category: 'scoped',
     scope_model: 'moderator owner-created groups, campaign_manager assigned_group_ids subset',
