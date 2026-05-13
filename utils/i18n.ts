@@ -25,6 +25,8 @@ const en = {
   login_title: "SocialBot",
   login_subtitle: "Connecting Leaders Connecting People",
   continue_google: "Continue with Google",
+  login_terms_consent_lead: "I agree to the ",
+  login_terms_consent_join: " and ",
   secure_login: "Secure, Encrypted Login",
   terms_of_service: "Terms of Service",
   login_google_cancelled: "Sign-in was cancelled.",

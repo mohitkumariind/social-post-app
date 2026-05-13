@@ -29,6 +29,8 @@ export default function LoginScreen() {
   const [isLoading, setIsLoading] = useState(false);
   /** Which social button is showing the spinner (only that row replaces icon + text). */
   const [googleLoading, setGoogleLoading] = useState(false);
+  /** Pre-checked: user must keep checked to enable Google sign-in (Play-friendly consent). */
+  const [termsAccepted, setTermsAccepted] = useState(true);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
@@ -42,6 +44,7 @@ export default function LoginScreen() {
   /** Google Sign-In → idToken → Supabase session → profile check → dashboard or /language → /party */
   const handleGoogleLogin = useCallback(async () => {
     if (isLoading) return;
+    if (!termsAccepted) return;
 
     if (Platform.OS === 'web') {
       Alert.alert(t('save_error_title'), t('login_google_web_only_native'));
@@ -224,7 +227,7 @@ export default function LoginScreen() {
       setIsLoading(false);
       setGoogleLoading(false);
     }
-  }, [changeLanguage, isLoading, router, setIsLoggedIn, setUserInfo, t]);
+  }, [changeLanguage, isLoading, router, setIsLoggedIn, setUserInfo, t, termsAccepted]);
 
   return (
     <View style={styles.container}>
@@ -243,15 +246,44 @@ export default function LoginScreen() {
             <Text style={styles.subtitle}>{t('login_subtitle')}</Text>
           </View>
 
+          {/* Terms & Privacy consent (required to continue) */}
+          <View style={styles.consentRow}>
+            <TouchableOpacity
+              onPress={() => setTermsAccepted((v) => !v)}
+              style={styles.checkboxHit}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: termsAccepted }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <View style={[styles.checkboxBox, termsAccepted && styles.checkboxBoxOn]}>
+                {termsAccepted ? <Ionicons name="checkmark" size={16} color={Colors.textOnPrimary} /> : null}
+              </View>
+            </TouchableOpacity>
+            <Text style={styles.consentText}>
+              <Text>{t('login_terms_consent_lead')}</Text>
+              <Text style={styles.consentLink} onPress={() => router.push('/terms')}>
+                {t('terms_conditions')}
+              </Text>
+              <Text>{t('login_terms_consent_join')}</Text>
+              <Text style={styles.consentLink} onPress={() => router.push('/privacy-policy')}>
+                {t('privacy_policy')}
+              </Text>
+            </Text>
+          </View>
+
           {/* Social Buttons Section */}
           <View style={styles.buttonWrapper}>
             
             {/* Google Login */}
             <TouchableOpacity
-              style={[styles.socialBtn, { backgroundColor: Colors.secondary, ...Colors.cardShadow, elevation: Colors.cardElevation }]}
+              style={[
+                styles.socialBtn,
+                { backgroundColor: Colors.secondary, ...Colors.cardShadow, elevation: Colors.cardElevation },
+                (!termsAccepted || isLoading) && styles.socialBtnDisabled,
+              ]}
               onPress={() => void handleGoogleLogin()}
-              disabled={isLoading}
-              accessibilityState={{ disabled: isLoading }}
+              disabled={isLoading || !termsAccepted}
+              accessibilityState={{ disabled: isLoading || !termsAccepted }}
             >
               {googleLoading ? (
                 <ActivityIndicator size="small" color={Colors.textOnPrimary} />
@@ -309,6 +341,40 @@ const styles = StyleSheet.create({
   title: { fontSize: 32, fontWeight: 'bold', color: Colors.headerColor, fontFamily: Colors.fontFamilyBold, marginTop: 10 },
   subtitle: { fontSize: 16, color: '#666', textAlign: 'center', marginTop: 8, paddingHorizontal: 20 },
   buttonWrapper: { width: '100%', gap: 15 },
+  consentRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 16,
+    paddingHorizontal: 4,
+  },
+  checkboxHit: { paddingTop: 2 },
+  checkboxBox: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: Colors.secondary,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxBoxOn: {
+    backgroundColor: Colors.secondary,
+    borderColor: Colors.secondary,
+  },
+  consentText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#444',
+  },
+  consentLink: {
+    color: Colors.secondary,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
   socialBtn: { 
     flexDirection: 'row',
     height: 60, 
@@ -327,6 +393,9 @@ const styles = StyleSheet.create({
     fontSize: 16, 
     fontWeight: '600', 
     marginLeft: 15 
+  },
+  socialBtnDisabled: {
+    opacity: 0.45,
   },
   legalLinks: {
     flexDirection: 'row',
