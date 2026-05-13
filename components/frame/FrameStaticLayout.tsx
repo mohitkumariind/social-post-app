@@ -172,5 +172,9 @@ function FrameStaticLayoutInner(props: FrameStaticLayoutProps) {
 
 export const FrameStaticLayout = memo(FrameStaticLayoutInner);
 
-export const FrameStaticRight = memo((p: Omit<FrameStaticLayoutProps, 'side'>) => <FrameStaticLayout {...p} side="right" />);
-export const FrameStaticLeft = memo((p: Omit<FrameStaticLayoutProps, 'side'>) => <FrameStaticLayout {...p} side="left" />);
+export const FrameStaticRight = memo(function FrameStaticRight(props: Omit<FrameStaticLayoutProps, 'side'>) {
+  return <FrameStaticLayout {...props} side="right" />;
+});
+export const FrameStaticLeft = memo(function FrameStaticLeft(props: Omit<FrameStaticLayoutProps, 'side'>) {
+  return <FrameStaticLayout {...props} side="left" />;
+});

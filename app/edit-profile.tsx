@@ -516,7 +516,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         instagram: (formData.instagram ?? '').trim(),
         twitter: (formData.twitter ?? '').trim(),
       };
-      console.log('[gfx] Saving to Supabase:', { state_id: formData.stateId, uid });
+      if (__DEV__) console.log('[gfx] Saving to Supabase:', { state_id: formData.stateId, uid });
       const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
       if (error) {
         if (__DEV__) console.warn('Profile save failed', error.message, error);

@@ -239,7 +239,7 @@ export default function DashboardScreen() {
 
   // Persistence logs (requested): whenever sync inputs change.
   useEffect(() => {
-    console.log('[gfx] Sync Check - ProfileReady:', profileLoaded);
+    if (__DEV__) console.log('[gfx] Sync Check - ProfileReady:', profileLoaded);
   }, [profileLoaded]);
 
   useEffect(() => {
@@ -248,6 +248,7 @@ export default function DashboardScreen() {
 
   // Full worker context (requested)
   useEffect(() => {
+    if (!__DEV__) return;
     const u: any = userInfoRef.current;
     console.log(
       '[gfx] Full Worker Context:',
@@ -271,6 +272,7 @@ export default function DashboardScreen() {
 
   // Debug logs for stuck state (requested)
   useEffect(() => {
+    if (!__DEV__) return;
     const payload = {
       name: (userInfo as any)?.name ?? '',
       state: (userInfo as any)?.state ?? '',
@@ -589,7 +591,7 @@ export default function DashboardScreen() {
       } catch (e) {
         // If session hydration throws on cold start, we must still resolve authReady
         // so the dashboard pipeline can progress and clear the loading UI.
-        console.warn('[gfx] auth.getSession failed during bootstrap:', e);
+        if (__DEV__) console.warn('[gfx] auth.getSession failed during bootstrap:', e);
       } finally {
         if (cancelled) return;
         setAuthReady(true);

@@ -321,16 +321,15 @@ function RootLayoutBody() {
   const updateCheckInFlightRef = useRef(false);
 
   useEffect(() => {
-    // These logs are safe in production and do not change UI.
     void (async () => {
       try {
-        // If user reports "update applied but issue persists", first confirm what the device is actually running.
-        // This is critical for diagnosing channel/runtime mismatches in EAS Update.
-        console.log('[updates] runtimeVersion=', Updates.runtimeVersion);
-        console.log('[updates] channel=', (Updates as any).channel ?? 'unknown');
-        console.log('[updates] updateId=', Updates.updateId ?? null);
-        console.log('[updates] isEmbeddedLaunch=', Updates.isEmbeddedLaunch);
-        console.log('[updates] isEmergencyLaunch=', Updates.isEmergencyLaunch);
+        if (__DEV__) {
+          console.log('[updates] runtimeVersion=', Updates.runtimeVersion);
+          console.log('[updates] channel=', (Updates as any).channel ?? 'unknown');
+          console.log('[updates] updateId=', Updates.updateId ?? null);
+          console.log('[updates] isEmbeddedLaunch=', Updates.isEmbeddedLaunch);
+          console.log('[updates] isEmergencyLaunch=', Updates.isEmergencyLaunch);
+        }
 
         // NOTE: checkForUpdateAsync is not re-entrant; calling it while a previous check/fetch is running
         // can be rejected by the native module. Use the same in-flight lock as the debug button.

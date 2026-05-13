@@ -288,14 +288,19 @@ export async function POST(request: Request) {
           skipped_duplicate: stats.skipped_duplicate,
         });
 
-        const { data: enqCount, error: enqErr } = await admin.rpc('twitter_campaign_enqueue_notification_outbox', {
-          p_wave_id: waveId,
-        });
-        if (enqErr) {
-          logWorker('worker.twitter_wave.outbox_enqueue.warn', { wave_id: waveId, error: enqErr.message });
-        } else {
-          logWorker('worker.twitter_wave.outbox_enqueue', { wave_id: waveId, rows: enqCount });
+        let enqErr: { message: string } | null = null;
+        let enqCount: unknown = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const res = await admin.rpc('twitter_campaign_enqueue_notification_outbox', { p_wave_id: waveId });
+          enqErr = res.error;
+          enqCount = res.data;
+          if (!enqErr) break;
+          await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
         }
+        if (enqErr) {
+          throw new Error(`twitter_campaign_enqueue_notification_outbox: ${enqErr.message}`);
+        }
+        logWorker('worker.twitter_wave.outbox_enqueue', { wave_id: waveId, rows: enqCount });
 
         const ins = await admin.from('twitter_campaign_wave_batches').insert({
           wave_id: waveId,

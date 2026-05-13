@@ -125,6 +125,43 @@ export async function POST(request: Request) {
     }
   }
 
+  const sinceIso = new Date(Date.now() - cooldownMs).toISOString();
+  const dayStart = startOfUtcDayIso();
+  const cooldownHot = new Set<string>();
+  const capCountMap = new Map<string, number>();
+
+  const userIdsForPrefetch = [...new Set(due.map((r) => String(r?.user_id ?? '').trim()).filter(Boolean))];
+  if (userIdsForPrefetch.length > 0) {
+    const { data: coolRows } = await admin
+      .from('notification_outbox')
+      .select('user_id')
+      .eq('status', 'sent')
+      .gte('sent_at', sinceIso)
+      .in('user_id', userIdsForPrefetch);
+    for (const row of coolRows ?? []) {
+      const u = String((row as { user_id?: string }).user_id ?? '').trim();
+      if (u) cooldownHot.add(u);
+    }
+  }
+
+  if (userIdsForPrefetch.length > 0 && campaignIds.length > 0) {
+    const { data: capRows } = await admin
+      .from('notification_outbox')
+      .select('user_id,campaign_id')
+      .eq('status', 'sent')
+      .gte('sent_at', dayStart)
+      .in('user_id', userIdsForPrefetch)
+      .in('campaign_id', campaignIds);
+    for (const row of capRows ?? []) {
+      const r = row as { user_id?: string; campaign_id?: string };
+      const u = String(r.user_id ?? '').trim();
+      const c = String(r.campaign_id ?? '').trim();
+      if (!u || !c) continue;
+      const k = `${u}:${c}`;
+      capCountMap.set(k, (capCountMap.get(k) ?? 0) + 1);
+    }
+  }
+
   for (const row of due) {
     if (Date.now() - startedAt > WORKER.maxRunMs) break;
     const id = String(row?.id ?? '').trim();
@@ -154,14 +191,7 @@ export async function POST(request: Request) {
     const claimed = claimRes.data as any;
     const attempt = Number(claimed.attempts ?? 0) + 1;
 
-    const sinceIso = new Date(Date.now() - cooldownMs).toISOString();
-    const { count: recentSent, error: coolErr } = await admin
-      .from('notification_outbox')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .eq('status', 'sent')
-      .gte('sent_at', sinceIso);
-    if (!coolErr && (recentSent ?? 0) > 0) {
+    if (cooldownHot.has(userId)) {
       const deferUntil = new Date(Date.now() + cooldownMs).toISOString();
       await admin
         .from('notification_outbox')
@@ -207,15 +237,9 @@ export async function POST(request: Request) {
 
     if (campaignIdForSend) {
       const maxCap = meta?.maxCap ?? 20;
-      const dayStart = startOfUtcDayIso();
-      const { count: sentToday, error: capErr } = await admin
-        .from('notification_outbox')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', userId)
-        .eq('campaign_id', campaignIdForSend)
-        .eq('status', 'sent')
-        .gte('sent_at', dayStart);
-      if (!capErr && (sentToday ?? 0) >= maxCap) {
+      const capKey = `${userId}:${campaignIdForSend}`;
+      const sentToday = capCountMap.get(capKey) ?? 0;
+      if (sentToday >= maxCap) {
         const deferUntil = new Date(Date.now() + 5 * 60_000).toISOString();
         await admin
           .from('notification_outbox')
@@ -318,6 +342,11 @@ export async function POST(request: Request) {
               assignment_id: assignmentId,
               error: evErr.message,
             });
+          }
+          cooldownHot.add(userId);
+          if (campaignId) {
+            const ck = `${userId}:${campaignId}`;
+            capCountMap.set(ck, (capCountMap.get(ck) ?? 0) + 1);
           }
           sent++;
           results.push({ id, ok: true, sent: true });
