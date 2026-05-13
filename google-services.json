@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "309496298521",
+    "project_id": "socialpost-da9f2",
+    "storage_bucket": "socialpost-da9f2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:309496298521:android:0593ce313db3d3a2957e88",
+        "android_client_info": {
+          "package_name": "com.mohit.socialpost.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "309496298521-ch6m9l3d9n5tkr6scdgfjl7d69snacqi.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.mohit.socialpost.app",
+            "certificate_hash": "16fa6946dd9ba903f8bbadfed44df2bbf18b1620"
+          }
+        },
+        {
+          "client_id": "309496298521-recmd3pe2d6g2cqhkmc86g9ha7dffntn.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDNUHXebD8z9TvZBgUngLUqxf8S07v3VA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "309496298521-recmd3pe2d6g2cqhkmc86g9ha7dffntn.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
