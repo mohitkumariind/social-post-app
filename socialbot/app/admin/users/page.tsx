@@ -26,6 +26,7 @@ import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-clie
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 import { API_MAX_FRAMES_LIMIT } from '@/lib/perf-defaults';
+import { sortUserFramesByDisplayKey } from '../../../../lib/sortUserFramesByDisplayKey';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
 
@@ -34,6 +35,8 @@ interface UserFrame {
   id: string | number;
   url: string;
   uploadDate: string;
+  /** For stable alphabetical gallery order (matches mobile picker). */
+  file_name?: string;
 }
 
 interface AppUser {
@@ -77,11 +80,6 @@ type GroupRow = { id: string; name: string };
 
 type UserFrameRow = { id: string | number; url: string; created_at: string | null; file_name?: unknown };
 
-function sortUserFramesByFileName(rows: UserFrameRow[]): UserFrameRow[] {
-  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-  return [...rows].sort((a, b) => collator.compare(String(a.file_name ?? '').trim(), String(b.file_name ?? '').trim()));
-}
-
 /** Loads every chunk from `/api/admin/user-frames` (server caps each chunk at `API_MAX_FRAMES_LIMIT`). */
 async function fetchAllUserFramesForAdmin(userId: string, searchQuery: string): Promise<UserFrame[]> {
   const aggregated: UserFrameRow[] = [];
@@ -111,13 +109,14 @@ async function fetchAllUserFramesForAdmin(userId: string, searchQuery: string): 
     offset += chunk;
     if (offset > 500_000) break;
   }
-  const sorted = sortUserFramesByFileName(aggregated);
+  const sorted = sortUserFramesByDisplayKey(aggregated);
   return sorted.map((row) => ({
     id: row.id,
     url: row.url,
     uploadDate: row.created_at
       ? new Date(String(row.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })
       : '',
+    file_name: String(row.file_name ?? '').trim() || undefined,
   }));
 }
 
@@ -645,12 +644,13 @@ export default function UserManagement() {
         uploadDate: fr.created_at
           ? new Date(String(fr.created_at)).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })
           : '',
+        file_name: file.name,
       };
       newFrames.push(frame);
     }
 
     if (newFrames.length > 0) {
-      const updatedFrames = [...newFrames, ...selectedUser.personalFrames];
+      const updatedFrames = sortUserFramesByDisplayKey([...newFrames, ...selectedUser.personalFrames]);
       setUsers((prev) => prev.map((u) => (u.id === selectedUser.id ? { ...u, personalFrames: updatedFrames } : u)));
       setSelectedUser({ ...selectedUser, personalFrames: updatedFrames });
     }

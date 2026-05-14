@@ -32,6 +32,7 @@ import {
   incrementPostDownloadEngagement,
   type PostDownloadAction,
 } from '../../lib/postDownloadEngagement';
+import { sortUserFramesByDisplayKey } from '../../lib/sortUserFramesByDisplayKey';
 import { supabase } from '../../lib/supabase';
 import { resolveUserFrameOverlayUrl } from '../../lib/userFrameUrl';
 
@@ -54,69 +55,6 @@ function buildSocialPostSaveBasename(displayName: unknown): string {
   const raw = String(displayName ?? '').trim() || 'User';
   const cleanName = raw.replace(/[^a-zA-Z0-9]/g, '') || 'User';
   return `SocialPost-${cleanName}`;
-}
-
-function sortFramesByFileName<T extends { file_name?: unknown; url?: unknown; frame_url?: unknown }>(rows: T[]): T[] {
-  // Numeric-aware collator (14 > 2)
-  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-
-  const key = (r: T) => {
-    // Trim sabse zaruri hai taaki hidden spaces " 14" na aaye
-    const fn = String(r?.file_name ?? '').trim();
-    if (fn !== '') return fn;
-
-    // Fallback: Agar file_name missing hai
-    const urlCandidate = String(r?.url ?? '').trim() || String((r as any)?.frame_url ?? '').trim();
-    const u = String(urlCandidate ?? '').split('?')[0];
-    const last = u ? u.split('/').pop() ?? '' : '';
-    return last.trim();
-  };
-
-  const extractFrameIndex = (s: string): number | null => {
-    // Prefer suffix patterns used by our uploads/backfills:
-    // "<ts>-_001.png" -> 1
-    // "frame_12.png" -> 12
-    // "12.png" -> 12
-    // Fallback: last number anywhere in the string.
-    const base = s.split('?')[0].trim().replace(/\.[a-z0-9]+$/i, '');
-    const suffix = base.match(/(?:^|[^0-9])(?:-|_)+0*(\d+)$/);
-    if (suffix?.[1]) {
-      const n = Number(suffix[1]);
-      return Number.isFinite(n) ? n : null;
-    }
-    const lastNum = base.match(/(\d+)(?!.*\d)/);
-    if (!lastNum?.[1]) return null;
-    const n = Number(lastNum[1]);
-    return Number.isFinite(n) ? n : null;
-  };
-
-  const sorted = [...rows].sort((a, b) => {
-    const keyA = key(a);
-    const keyB = key(b);
-
-    // Prefer numeric ordering when a frame number exists.
-    const numA = extractFrameIndex(keyA);
-    const numB = extractFrameIndex(keyB);
-    if (numA != null && numB != null && numA !== numB) return numA - numB;
-    if (numA != null && numB == null) return -1;
-    if (numA == null && numB != null) return 1;
-
-    // If both don't have a numeric index, fall back to created_at when available.
-    const aCreated = Date.parse(String((a as any)?.created_at ?? ''));
-    const bCreated = Date.parse(String((b as any)?.created_at ?? ''));
-    if (Number.isFinite(aCreated) && Number.isFinite(bCreated) && aCreated !== bCreated) {
-      // Newest first to match the admin list & expected recency behavior.
-      return bCreated - aCreated;
-    }
-
-    // Fallback to collator (handles "14" vs "2" and general string order)
-    const c = collator.compare(keyA, keyB);
-    if (c !== 0) return c;
-    // Stable-ish tie-breaker to avoid random flips
-    return collator.compare(String(a?.url ?? ''), String(b?.url ?? ''));
-  });
-
-  return sorted;
 }
 
 /** Normalize `posts.captions` / `events.captions` (jsonb, text JSON string, or plain string). */
@@ -302,18 +240,14 @@ export default function PostDetailScreen() {
           return;
         }
 
-        const { data, error } = await supabase
-          .from('user_frames')
-          .select('*')
-          .eq('user_id', uid)
-          .order('file_name', { ascending: true });
+        const { data, error } = await supabase.from('user_frames').select('*').eq('user_id', uid);
         if (cancelled) return;
         if (error) {
           if (!cancelled && __DEV__) console.warn('[PostDetail] fetchFrames error:', error.message);
           return;
         }
         if (data && isMountedRef.current) {
-          const sorted = sortFramesByFileName(data as any[]);
+          const sorted = sortUserFramesByDisplayKey(data as any[]);
           if (__DEV__) {
             console.log('[frame-profile-debug] user_frames fetch', {
               rowCount: sorted.length,
