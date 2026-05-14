@@ -28,12 +28,11 @@ function FrameEngineInner({
     return <FrameStaticLeft {...staticProps} />;
   }
   if (frameId >= 3) {
-    return (
-      <>
-        <FrameStaticLayout {...staticProps} side={staticChromeSide} />
-        {overlayPngUrl ? <FramePNGOverlay overlayUrl={overlayPngUrl} /> : null}
-      </>
-    );
+    // User PNG frames are full-bleed overlays; do not stack static chrome underneath (double frame).
+    if (overlayPngUrl) {
+      return <FramePNGOverlay overlayUrl={overlayPngUrl} />;
+    }
+    return <FrameStaticLayout {...staticProps} side={staticChromeSide} />;
   }
   return null;
 }
