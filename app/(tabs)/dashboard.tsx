@@ -84,6 +84,7 @@ function DashboardBannerCarousel({
   banners: DashboardBannerRow[];
   onPress: (b: DashboardBannerRow) => void;
 }) {
+  const itemWidth = Math.max(1, width - 40);
   const listRef = useRef<FlatList<DashboardBannerRow>>(null);
   const [index, setIndex] = useState(0);
   const indexRef = useRef(0);
@@ -93,18 +94,19 @@ function DashboardBannerCarousel({
     if (!banners || banners.length <= 1) return;
     const t = setInterval(() => {
       const next = (indexRef.current + 1) % banners.length;
-      listRef.current?.scrollToOffset({ offset: next * width, animated: true });
+      listRef.current?.scrollToOffset({ offset: next * itemWidth, animated: true });
       setIndex(next);
     }, 4500);
     return () => clearInterval(t);
-  }, [banners, width]);
+  }, [banners, itemWidth]);
 
   return (
     <View style={styles.bannerCarouselWrap}>
       <FlatList
         ref={listRef}
         horizontal
-        pagingEnabled
+        nestedScrollEnabled
+        style={styles.bannerList}
         showsHorizontalScrollIndicator={false}
         data={banners}
         keyExtractor={(b) => b.id}
@@ -112,7 +114,7 @@ function DashboardBannerCarousel({
           <TouchableOpacity
             activeOpacity={0.9}
             onPress={() => onPress(item)}
-            style={[styles.bannerCard, { width: width - 40 }]}
+            style={[styles.bannerCard, { width: itemWidth }]}
           >
             <ExpoImage
               source={{ uri: item.image_url }}
@@ -134,11 +136,11 @@ function DashboardBannerCarousel({
           </TouchableOpacity>
         )}
         onMomentumScrollEnd={(e) => {
-          const next = Math.round(e.nativeEvent.contentOffset.x / Math.max(1, width));
+          const next = Math.round(e.nativeEvent.contentOffset.x / itemWidth);
           setIndex(Math.max(0, Math.min(next, banners.length - 1)));
         }}
-        getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
-        snapToInterval={width}
+        getItemLayout={(_, i) => ({ length: itemWidth, offset: itemWidth * i, index: i })}
+        snapToInterval={itemWidth}
         decelerationRate="fast"
       />
       {banners.length > 1 ? (
@@ -202,7 +204,7 @@ export default function DashboardScreen() {
   const { width } = useWindowDimensions();
   const router = useRouter();
   const dashParams = useLocalSearchParams();
-  const { userInfo, setUserInfo, profileLoaded, setProfileLoaded, profileRefreshSeq } = useUser();
+  const { userInfo, setUserInfo, profileLoaded, setProfileLoaded, profileRefreshSeq, isLoggedIn } = useUser();
   const { t, lang } = useLang();
   const [activeCategory, setActiveCategory] = useState<Category | null>(null);
   const [posts, setPosts] = useState<PostRow[]>([]);
@@ -548,7 +550,6 @@ export default function DashboardScreen() {
     if (reqId !== fetchBannersReqIdRef.current) return;
     if (result.error) {
       if (__DEV__) gfxLogCapped('dashboardBannersErr', { error: result.error }, 3);
-      setBanners([]);
       return;
     }
     setBanners(result.rows);
@@ -605,9 +606,19 @@ export default function DashboardScreen() {
   }, []);
 
   useEffect(() => {
-    if (!authReady) return;
+    if (!isLoggedIn) {
+      setBanners([]);
+      return;
+    }
     void fetchBanners();
-  }, [authReady, profileRefreshSeq, fetchBanners]);
+  }, [isLoggedIn, fetchBanners]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!isLoggedIn) return;
+      void fetchBanners();
+    }, [isLoggedIn, fetchBanners])
+  );
 
   useEffect(() => {
     if (!authReady) return;
@@ -1356,6 +1367,7 @@ const styles = StyleSheet.create({
   userName: { fontSize: 18, fontWeight: '800', color: Colors.headerColor, fontFamily: Colors.fontFamilyBold },
   gradientHeaderWrapper: { height: 60, marginVertical: 10, paddingHorizontal: 20 },
   bannerCarouselWrap: { paddingHorizontal: 20, marginTop: 6, marginBottom: 10 },
+  bannerList: { height: 170 },
   bannerCard: {
     borderRadius: 16,
     overflow: 'hidden',
