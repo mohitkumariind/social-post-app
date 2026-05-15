@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Eye, Pencil, Plus, Save, Send, Share2, Trash2, ImageIcon } from 'lucide-react';
+import { Pencil, Plus, Save, Send, Share2, Trash2, ImageIcon } from 'lucide-react';
 import { getPartyLabel, PARTIES_DATA } from '@/lib/constants';
 
 const ACCENT = '#25D366';
@@ -21,16 +21,26 @@ type CampaignType = 'tweet' | 'retweet';
 type TweetVariantRow = { id: string; text: string };
 type RetweetVariantRow = { id: string; url: string; note: string };
 
-type MockCampaignRow = {
+type ApiCampaignRow = {
   id: string;
-  name: string;
+  title: string;
   type: CampaignType;
-  waves: number;
-  gapMinutes: number;
-  variantsCount: number;
-  status: 'draft' | 'published' | 'scheduled';
-  targetPartyId: string;
-  createdAt: string;
+  total_waves: number;
+  gap_minutes: number;
+  scheduled_at: string | null;
+  target_party: string;
+  status: string;
+  created_at: string;
+  variant_count?: number;
+  wave_count?: number;
+};
+
+type VariantPayload = {
+  variant_index: number;
+  text?: string | null;
+  image_url?: string | null;
+  tweet_url?: string | null;
+  note?: string | null;
 };
 
 function newId(prefix: string) {
@@ -45,59 +55,44 @@ function formatMockDate(iso: string) {
   }
 }
 
-function StatusChip({ kind }: { kind: 'draft' | 'published' | 'scheduled' }) {
-  const styles: Record<typeof kind, string> = {
+function toIsoFromDatetimeLocal(local: string): string | null {
+  const s = String(local ?? '').trim();
+  if (!s) return null;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function toDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function StatusChip({ status }: { status: string }) {
+  const kind = String(status ?? 'draft').toLowerCase();
+  const styles: Record<string, string> = {
     draft: 'bg-slate-100 text-slate-700 ring-slate-200',
     published: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
-    scheduled: 'bg-amber-50 text-amber-900 ring-amber-200',
+    paused: 'bg-amber-50 text-amber-900 ring-amber-200',
+    cancelled: 'bg-red-50 text-red-800 ring-red-200',
   };
-  const labels: Record<typeof kind, string> = {
+  const labels: Record<string, string> = {
     draft: 'Draft',
     published: 'Published',
-    scheduled: 'Scheduled',
+    paused: 'Paused',
+    cancelled: 'Cancelled',
   };
+  const cls = styles[kind] ?? styles.draft;
+  const label = labels[kind] ?? kind;
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider ring-1 ring-inset ${styles[kind]}`}>
-      {labels[kind]}
+    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider ring-1 ring-inset ${cls}`}>
+      {label}
     </span>
   );
 }
-
-const INITIAL_MOCK_CAMPAIGNS: MockCampaignRow[] = [
-  {
-    id: 'mock_1',
-    name: 'Sample: GOTV morning push',
-    type: 'tweet',
-    waves: 3,
-    gapMinutes: 20,
-    variantsCount: 6,
-    status: 'published',
-    targetPartyId: 'bjp',
-    createdAt: new Date(Date.now() - 86400000 * 4).toISOString(),
-  },
-  {
-    id: 'mock_2',
-    name: 'Sample: Leader quote retweet chain',
-    type: 'retweet',
-    waves: 5,
-    gapMinutes: 15,
-    variantsCount: 5,
-    status: 'scheduled',
-    targetPartyId: 'inc',
-    createdAt: new Date(Date.now() - 86400000 * 1).toISOString(),
-  },
-  {
-    id: 'mock_3',
-    name: 'Draft: festival hashtag pack',
-    type: 'tweet',
-    waves: 2,
-    gapMinutes: 45,
-    variantsCount: 0,
-    status: 'draft',
-    targetPartyId: 'aap',
-    createdAt: new Date(Date.now() - 3600000 * 6).toISOString(),
-  },
-];
 
 export default function TwitterCampaignPage() {
   const [role, setRole] = useState<string | null>(null);
@@ -116,7 +111,10 @@ export default function TwitterCampaignPage() {
   const [tweetVariants, setTweetVariants] = useState<TweetVariantRow[]>([{ id: newId('tw'), text: '' }]);
   const [retweetVariants, setRetweetVariants] = useState<RetweetVariantRow[]>([{ id: newId('rt'), url: '', note: '' }]);
 
-  const [mockCampaigns, setMockCampaigns] = useState<MockCampaignRow[]>(INITIAL_MOCK_CAMPAIGNS);
+  const [campaigns, setCampaigns] = useState<ApiCampaignRow[]>([]);
+  const [loadingCampaigns, setLoadingCampaigns] = useState(true);
+  const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,6 +173,7 @@ export default function TwitterCampaignPage() {
   }, [targetedUsersInput]);
 
   const resetForm = useCallback(() => {
+    setEditingCampaignId(null);
     setCampaignName('');
     setCampaignType('tweet');
     setTotalWaves(3);
@@ -186,6 +185,66 @@ export default function TwitterCampaignPage() {
     setTweetVariants([{ id: newId('tw'), text: '' }]);
     setRetweetVariants([{ id: newId('rt'), url: '', note: '' }]);
   }, []);
+
+  const loadCampaigns = useCallback(async () => {
+    setLoadingCampaigns(true);
+    try {
+      const res = await fetch('/api/admin/twitter-campaigns?limit=50', { credentials: 'same-origin' });
+      const json = (await res.json().catch(() => ({}))) as { campaigns?: ApiCampaignRow[]; error?: string };
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setCampaigns(Array.isArray(json.campaigns) ? json.campaigns : []);
+    } catch (e) {
+      setCampaigns([]);
+      setToast(e instanceof Error ? e.message : 'Failed to load campaigns');
+    } finally {
+      setLoadingCampaigns(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!canAccess) return;
+    void loadCampaigns();
+  }, [canAccess, loadCampaigns]);
+
+  const buildVariantsPayload = useCallback((): VariantPayload[] => {
+    if (campaignType === 'tweet') {
+      return tweetVariants
+        .map((v, idx) => ({ variant_index: idx + 1, text: v.text.trim() || null, image_url: null }))
+        .filter((v) => !!v.text);
+    }
+    return retweetVariants
+      .map((v, idx) => ({
+        variant_index: idx + 1,
+        tweet_url: v.url.trim() || null,
+        note: v.note.trim() || null,
+      }))
+      .filter((v) => !!v.tweet_url);
+  }, [campaignType, tweetVariants, retweetVariants]);
+
+  const buildCampaignBody = useCallback(() => {
+    return {
+      title: campaignName.trim(),
+      type: campaignType,
+      total_waves: Math.max(1, Math.floor(totalWaves) || 1),
+      gap_minutes: Math.max(0, Math.floor(gapMinutes) || 0),
+      scheduled_at: toIsoFromDatetimeLocal(scheduleAt),
+      target_party: targetPartyId.trim(),
+      description: description.trim() || null,
+      variants: buildVariantsPayload(),
+    };
+  }, [campaignName, campaignType, totalWaves, gapMinutes, scheduleAt, targetPartyId, description, buildVariantsPayload]);
+
+  const validateForm = useCallback((): string | null => {
+    if (!campaignName.trim()) return 'Campaign name is required.';
+    if (!targetPartyId.trim()) return 'Target party is required.';
+    const variants = buildVariantsPayload();
+    if (variants.length === 0) {
+      return campaignType === 'tweet'
+        ? 'Add at least one tweet variant with text.'
+        : 'Add at least one retweet variant with a tweet URL.';
+    }
+    return null;
+  }, [campaignName, targetPartyId, campaignType, buildVariantsPayload]);
 
   const onCampaignTypeChange = (next: CampaignType) => {
     setCampaignType(next);
@@ -207,28 +266,164 @@ export default function TwitterCampaignPage() {
     }
   };
 
-  const saveDraftScaffold = () => {
-    setToast('Save Draft: UI scaffolding only — no data was persisted.');
+  const saveDraft = async () => {
+    const err = validateForm();
+    if (err) {
+      setToast(err);
+      return;
+    }
+    setSaving(true);
+    try {
+      const body = buildCampaignBody();
+      if (editingCampaignId) {
+        const res = await fetch(`/api/admin/twitter-campaigns/${encodeURIComponent(editingCampaignId)}`, {
+          method: 'PATCH',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ patch: body }),
+        });
+        const json = (await res.json().catch(() => ({}))) as { error?: string; campaign?: { id?: string } };
+        if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+        setToast('Draft saved.');
+      } else {
+        const res = await fetch('/api/admin/twitter-campaigns', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await res.json().catch(() => ({}))) as { error?: string; campaign?: { id?: string } };
+        if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+        const id = String(json.campaign?.id ?? '').trim();
+        if (id) setEditingCampaignId(id);
+        setToast('Draft created.');
+      }
+      await loadCampaigns();
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const publishScaffold = () => {
-    setToast('Publish Campaign: UI scaffolding only — scheduling and notifications are not wired yet.');
+  const publishCampaign = async () => {
+    const err = validateForm();
+    if (err) {
+      setToast(err);
+      return;
+    }
+    setSaving(true);
+    try {
+      let id = editingCampaignId;
+      if (!id) {
+        const createRes = await fetch('/api/admin/twitter-campaigns', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(buildCampaignBody()),
+        });
+        const createJson = (await createRes.json().catch(() => ({}))) as { error?: string; campaign?: { id?: string } };
+        if (!createRes.ok) throw new Error(createJson.error || `HTTP ${createRes.status}`);
+        id = String(createJson.campaign?.id ?? '').trim() || null;
+        if (!id) throw new Error('Campaign id missing after create');
+        setEditingCampaignId(id);
+      } else {
+        const patchRes = await fetch(`/api/admin/twitter-campaigns/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ patch: buildCampaignBody() }),
+        });
+        const patchJson = (await patchRes.json().catch(() => ({}))) as { error?: string };
+        if (!patchRes.ok) throw new Error(patchJson.error || `HTTP ${patchRes.status}`);
+      }
+
+      const pubRes = await fetch(`/api/admin/twitter-campaigns/${encodeURIComponent(id)}/publish`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      const pubJson = (await pubRes.json().catch(() => ({}))) as { error?: string; waves?: unknown[] };
+      if (!pubRes.ok) throw new Error(pubJson.error || `HTTP ${pubRes.status}`);
+
+      const waveCount = Array.isArray(pubJson.waves) ? pubJson.waves.length : totalWaves;
+      setToast(`Campaign published (${waveCount} wave${waveCount === 1 ? '' : 's'} scheduled).`);
+      await loadCampaigns();
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : 'Publish failed');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const deleteMockRow = (id: string) => {
-    if (!confirm('Remove this row from the mock table? (Scaffolding only.)')) return;
-    setMockCampaigns((prev) => prev.filter((r) => r.id !== id));
-    setToast('Mock row removed.');
+  const deleteCampaign = async (id: string) => {
+    if (!id) return;
+    if (!confirm('Delete this campaign permanently?')) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/twitter-campaigns/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      if (editingCampaignId === id) resetForm();
+      setToast('Campaign deleted.');
+      await loadCampaigns();
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : 'Delete failed');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const editMockRow = (row: MockCampaignRow) => {
-    setCampaignName(row.name);
-    setCampaignType(row.type);
-    setTotalWaves(row.waves);
-    setGapMinutes(row.gapMinutes);
-    setTargetPartyId(row.targetPartyId);
-    setToast(`Loaded “${row.name}” into the form (local only). Add variants manually to match the row.`);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  const editCampaign = async (row: ApiCampaignRow) => {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/twitter-campaigns/${encodeURIComponent(row.id)}`, {
+        credentials: 'same-origin',
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        campaign?: ApiCampaignRow;
+        variants?: Array<{ variant_index: number; text?: string | null; tweet_url?: string | null; note?: string | null }>;
+      };
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      const c = json.campaign ?? row;
+      const variants = Array.isArray(json.variants) ? json.variants : [];
+      setEditingCampaignId(c.id);
+      setCampaignName(c.title);
+      setCampaignType(c.type);
+      setTotalWaves(c.total_waves);
+      setGapMinutes(c.gap_minutes);
+      setScheduleAt(toDatetimeLocalValue(c.scheduled_at));
+      setTargetPartyId(c.target_party);
+      setDescription(String((c as { description?: string | null }).description ?? ''));
+      if (c.type === 'tweet') {
+        const rows =
+          variants.length > 0
+            ? variants.map((v) => ({ id: newId('tw'), text: String(v.text ?? '') }))
+            : [{ id: newId('tw'), text: '' }];
+        setTweetVariants(rows);
+        setRetweetVariants([{ id: newId('rt'), url: '', note: '' }]);
+      } else {
+        const rows =
+          variants.length > 0
+            ? variants.map((v) => ({
+                id: newId('rt'),
+                url: String(v.tweet_url ?? ''),
+                note: String(v.note ?? ''),
+              }))
+            : [{ id: newId('rt'), url: '', note: '' }];
+        setRetweetVariants(rows);
+        setTweetVariants([{ id: newId('tw'), text: '' }]);
+      }
+      setToast(`Editing “${c.title}”.`);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : 'Failed to load campaign');
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (viewerLoading) {
@@ -348,9 +543,9 @@ export default function TwitterCampaignPage() {
               <div className="sm:col-span-2 rounded-xl border border-slate-100 bg-slate-50/80 p-4">
                 <span className="mb-2 block text-[10px] font-black uppercase tracking-widest text-slate-400">Alert badge Preview</span>
                 <div className="flex flex-wrap items-center gap-2">
-                  <StatusChip kind="draft" />
-                  <StatusChip kind="published" />
-                  <StatusChip kind="scheduled" />
+                  <StatusChip status="draft" />
+                  <StatusChip status="published" />
+                  <StatusChip status="paused" />
                 </div>
               </div>
             </div>
@@ -454,20 +649,22 @@ export default function TwitterCampaignPage() {
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
-              onClick={saveDraftScaffold}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-800 shadow-sm hover:bg-slate-50"
+              onClick={() => void saveDraft()}
+              disabled={saving}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
-              Save draft
+              {saving ? 'Saving…' : editingCampaignId ? 'Update draft' : 'Save draft'}
             </button>
             <button
               type="button"
-              onClick={publishScaffold}
-              className="inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white shadow-sm"
+              onClick={() => void publishCampaign()}
+              disabled={saving}
+              className="inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white shadow-sm disabled:opacity-60"
               style={{ backgroundColor: ACCENT }}
             >
               <Send className="h-4 w-4" />
-              Publish campaign
+              {saving ? 'Publishing…' : 'Publish campaign'}
             </button>
             <button
               type="button"
@@ -518,7 +715,9 @@ export default function TwitterCampaignPage() {
           {/* Mock table */}
           <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-md shadow-slate-200/50">
             <h2 className="mb-1 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Campaigns</h2>
-            <p className="mb-4 text-sm font-semibold text-slate-600">Mock data for layout only.</p>
+            <p className="mb-4 text-sm font-semibold text-slate-600">
+              {editingCampaignId ? `Editing draft ${editingCampaignId.slice(0, 8)}…` : 'Saved campaigns from the server.'}
+            </p>
 
             <div className="overflow-x-auto rounded-xl border border-slate-100">
               <table className="w-full min-w-[760px] text-left text-sm">
@@ -536,47 +735,47 @@ export default function TwitterCampaignPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {mockCampaigns.length === 0 ? (
+                  {loadingCampaigns ? (
                     <tr>
                       <td colSpan={9} className="px-3 py-8 text-center text-sm font-semibold text-slate-500">
-                        No mock rows. Refresh the page to restore samples.
+                        Loading campaigns…
+                      </td>
+                    </tr>
+                  ) : campaigns.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="px-3 py-8 text-center text-sm font-semibold text-slate-500">
+                        No campaigns yet. Save a draft above.
                       </td>
                     </tr>
                   ) : (
-                    mockCampaigns.map((row) => (
+                    campaigns.map((row) => (
                       <tr key={row.id} className="bg-white font-medium text-slate-800 hover:bg-slate-50/80">
-                        <td className="max-w-[200px] truncate px-3 py-3 font-bold">{row.name}</td>
+                        <td className="max-w-[200px] truncate px-3 py-3 font-bold">{row.title}</td>
                         <td className="px-3 py-3">{row.type === 'tweet' ? 'Tweet' : 'Retweet'}</td>
-                        <td className="px-3 py-3">{row.waves}</td>
-                        <td className="px-3 py-3">{row.gapMinutes} min</td>
-                        <td className="px-3 py-3">{row.variantsCount}</td>
+                        <td className="px-3 py-3">{row.total_waves}</td>
+                        <td className="px-3 py-3">{row.gap_minutes} min</td>
+                        <td className="px-3 py-3">{row.variant_count ?? 0}</td>
                         <td className="px-3 py-3">
-                          <StatusChip kind={row.status} />
+                          <StatusChip status={row.status} />
                         </td>
-                        <td className="px-3 py-3">{getPartyLabel(row.targetPartyId) || '—'}</td>
-                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatMockDate(row.createdAt)}</td>
+                        <td className="px-3 py-3">{getPartyLabel(row.target_party) || '—'}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatMockDate(row.created_at)}</td>
                         <td className="px-3 py-3 text-right">
                           <div className="flex flex-wrap justify-end gap-1">
                             <button
                               type="button"
-                              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50"
-                              onClick={() => setToast(`View: “${row.name}” (scaffolding).`)}
-                            >
-                              <Eye className="mr-0.5 inline h-3.5 w-3.5 align-text-bottom" />
-                              View
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50"
-                              onClick={() => editMockRow(row)}
+                              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                              disabled={saving || row.status !== 'draft'}
+                              onClick={() => void editCampaign(row)}
                             >
                               <Pencil className="mr-0.5 inline h-3.5 w-3.5 align-text-bottom" />
                               Edit
                             </button>
                             <button
                               type="button"
-                              className="rounded-lg border border-red-200 bg-white px-2 py-1 text-[11px] font-bold text-red-700 hover:bg-red-50"
-                              onClick={() => deleteMockRow(row.id)}
+                              className="rounded-lg border border-red-200 bg-white px-2 py-1 text-[11px] font-bold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                              disabled={saving}
+                              onClick={() => void deleteCampaign(row.id)}
                             >
                               <Trash2 className="mr-0.5 inline h-3.5 w-3.5 align-text-bottom" />
                               Delete
