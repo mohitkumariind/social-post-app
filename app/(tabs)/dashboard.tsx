@@ -1,6 +1,7 @@
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -232,6 +233,7 @@ export default function DashboardScreen() {
   const postsSchemaOkRef = useRef<boolean | null>(null);
   const eventsSchemaOkRef = useRef<boolean | null>(null);
   const profileLoadedRef = useRef<boolean>(false);
+  const dashboardFocusCountRef = useRef(0);
   const safeUserInfo = userInfo ?? { name: '', phone: '', state: '', partyName: '' };
   const [isProfileLoading, setIsProfileLoading] = useState(true);
 
@@ -657,6 +659,15 @@ export default function DashboardScreen() {
       if (!quickChipSelected) await fetchEvents();
     })();
   }, [authReady, profileLoaded, profileRefreshSeq, quickChipSelected, fetchPosts, fetchEvents]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      dashboardFocusCountRef.current += 1;
+      if (dashboardFocusCountRef.current <= 1) return;
+      if (!authReady || !profileLoadedRef.current) return;
+      void fetchPosts('', '', true);
+    }, [authReady, fetchPosts])
+  );
 
   useEffect(() => {
     if (!authReady || !profileLoaded || !dashboardProfileLoaded) {

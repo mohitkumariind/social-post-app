@@ -25,29 +25,33 @@ type NotiItem = {
   assignmentId?: string;
 };
 
+const DEV_MOCK_NOTIFICATIONS: NotiItem[] = __DEV__
+  ? [
+      {
+        id: 'mock_twitter_tweet',
+        title: 'Twitter campaign',
+        message: 'Preview tweet campaign (mock assignment)',
+        time: 'Now',
+        isUnread: true,
+        type: 'twitter_campaign',
+        assignmentId: MOCK_TWITTER_ASSIGNMENT_IDS.TWEET_DEMO,
+      },
+      {
+        id: 'mock_twitter_retweet',
+        title: 'Twitter campaign',
+        message: 'Preview retweet campaign (mock assignment)',
+        time: 'Now',
+        isUnread: true,
+        type: 'twitter_campaign',
+        assignmentId: MOCK_TWITTER_ASSIGNMENT_IDS.RETWEET_DEMO,
+      },
+    ]
+  : [];
+
 export default function NotificationScreen() {
   const router = useRouter();
   const { t } = useLang();
-  const [notifications, setNotifications] = useState<NotiItem[]>([
-    {
-      id: 'mock_twitter_tweet',
-      title: 'Twitter campaign',
-      message: 'Preview tweet campaign (mock assignment)',
-      time: 'Now',
-      isUnread: true,
-      type: 'twitter_campaign',
-      assignmentId: MOCK_TWITTER_ASSIGNMENT_IDS.TWEET_DEMO,
-    },
-    {
-      id: 'mock_twitter_retweet',
-      title: 'Twitter campaign',
-      message: 'Preview retweet campaign (mock assignment)',
-      time: 'Now',
-      isUnread: true,
-      type: 'twitter_campaign',
-      assignmentId: MOCK_TWITTER_ASSIGNMENT_IDS.RETWEET_DEMO,
-    },
-  ]);
+  const [notifications, setNotifications] = useState<NotiItem[]>(DEV_MOCK_NOTIFICATIONS);
 
   const markAllRead = () => {
     const updated = notifications.map(n => ({ ...n, isUnread: false }));

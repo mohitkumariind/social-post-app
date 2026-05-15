@@ -11,6 +11,7 @@ type AdminPostRow = {
   status?: string | null;
   deleted_at?: string | null;
   scheduled_at?: string | null;
+  download_count?: number | null;
 };
 
 export default function AdminPostsPage() {
@@ -66,9 +67,10 @@ export default function AdminPostsPage() {
 
         <div className="overflow-hidden rounded-xl border border-zinc-800">
           <div className="grid grid-cols-12 border-b border-zinc-800 bg-zinc-900/40 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">
-            <div className="col-span-4">Title</div>
+            <div className="col-span-3">Title</div>
             <div className="col-span-2">Status</div>
-            <div className="col-span-3">Scheduled</div>
+            <div className="col-span-2">Downloads</div>
+            <div className="col-span-2">Scheduled</div>
             <div className="col-span-2">Created</div>
             <div className="col-span-1 text-right">Actions</div>
           </div>
@@ -80,9 +82,10 @@ export default function AdminPostsPage() {
             ) : (
               visibleRows.map((r) => (
                 <div key={String(r.id)} className="grid grid-cols-12 items-center px-4 py-3 text-sm text-zinc-200">
-                  <div className="col-span-4 truncate">{fmt(r.title)}</div>
+                  <div className="col-span-3 truncate">{fmt(r.title)}</div>
                   <div className="col-span-2">{fmt(r.status ?? 'published')}</div>
-                  <div className="col-span-3">{r.scheduled_at ? new Date(r.scheduled_at).toLocaleString() : '-'}</div>
+                  <div className="col-span-2 tabular-nums">{Number(r.download_count ?? 0)}</div>
+                  <div className="col-span-2">{r.scheduled_at ? new Date(r.scheduled_at).toLocaleString() : '-'}</div>
                   <div className="col-span-2 text-zinc-400">{r.created_at ? new Date(r.created_at).toLocaleDateString() : '-'}</div>
                   <div className="col-span-1 flex justify-end">
                     <button

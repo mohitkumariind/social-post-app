@@ -21,6 +21,7 @@ import {
   requireRole,
   requireScopeState,
 } from '@/lib/rbac/require';
+import { resolvePostEventId } from '@/lib/admin/resolvePostEventId';
 import { withAudit } from '@/lib/audit/withAudit';
 
 function json(body: unknown, status = 200) {
@@ -141,13 +142,19 @@ export async function GET(request: NextRequest) {
   // Always scope in SQL (no fetch-all-then-filter).
   const base = admin
     .from('posts')
-    .select('id,title,image_url,category,dashboard_category,created_at,scheduled_at,status,deleted_at,created_by,state_id,group_id')
+    .select(
+      'id,title,image_url,category,dashboard_category,created_at,scheduled_at,status,deleted_at,created_by,state_id,group_id,event_id,download_count'
+    )
     .order('created_at', { ascending: false })
     .limit(200) as any;
   const q = adminRole ? base : buildScopedQuery(scopedUser, base, 'posts');
   let res: any = await q;
-  if (res.error && isMissingColumnErr(res.error, 'scheduled_at')) {
-    const fallback = admin.from('posts').select('id,title,image_url,category,dashboard_category,created_at,state_id,group_id').order('created_at', { ascending: false }).limit(200) as any;
+  if (res.error && (isMissingColumnErr(res.error, 'scheduled_at') || isMissingColumnErr(res.error, 'download_count') || isMissingColumnErr(res.error, 'event_id'))) {
+    const fallback = admin
+      .from('posts')
+      .select('id,title,image_url,category,dashboard_category,created_at,state_id,group_id')
+      .order('created_at', { ascending: false })
+      .limit(200) as any;
     res = adminRole ? await fallback : await buildScopedQuery(scopedUser, fallback, 'posts');
   }
   if (res.error) return json({ error: res.error.message }, 500);
@@ -235,6 +242,19 @@ export const POST = withAudit(
     }
 
     if (insertRes.error) return json({ error: insertRes.error.message }, 500);
+
+    const inserted = insertRes.data as Record<string, unknown>;
+    const resolvedEventId = await resolvePostEventId(admin, payload);
+    if (resolvedEventId && String(inserted?.event_id ?? '').trim() !== resolvedEventId) {
+      const { data: linked } = await admin
+        .from('posts')
+        .update({ event_id: resolvedEventId })
+        .eq('id', inserted.id)
+        .select('*')
+        .single();
+      if (linked) return json({ post: linked });
+    }
+
     return json({ post: insertRes.data });
   },
   {
@@ -339,6 +359,9 @@ export const PATCH = withAudit(
       if (nextScope.group_id) nextPatch.group_id = nextScope.group_id;
       if (nextScope.group_ids.length > 0) nextPatch.target_groups = nextScope.group_ids;
     }
+
+    const resolvedEventId = await resolvePostEventId(admin, { ...before, ...nextPatch });
+    if (resolvedEventId) nextPatch.event_id = resolvedEventId;
 
     const { data, error } = await admin.from('posts').update(nextPatch).eq('id', id).select('*').single();
     if (error) return json({ error: error.message }, 500);

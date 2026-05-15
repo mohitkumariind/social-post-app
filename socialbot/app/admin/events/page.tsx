@@ -872,6 +872,7 @@ export default function App() {
         title: file.name.replace(ext, ''),
         image_url: imageUrl,
         category: selectedEvent.name,
+        event_id: String(selectedEvent.id),
         dashboard_category: dashFromEvent,
         /** Must match app/dashboard graphics filter (`is_video` false or null); DB default true would hide posts + break caption sync filters. */
         is_video: false,

@@ -32,6 +32,7 @@ import {
   incrementPostDownloadEngagement,
   type PostDownloadAction,
 } from '../../lib/postDownloadEngagement';
+import { resolvePostIdForEngagement } from '../../lib/resolvePostIdForEngagement';
 import { sortUserFramesByDisplayKey } from '../../lib/sortUserFramesByDisplayKey';
 import { supabase } from '../../lib/supabase';
 import { resolveUserFrameOverlayUrl } from '../../lib/userFrameUrl';
@@ -125,6 +126,7 @@ export default function PostDetailScreen() {
   const backNavLockRef = useRef(false);
   const isMountedRef = useRef(true);
   const isNavigatingAwayRef = useRef(false);
+  const engagementPostIdRef = useRef('');
 
   useEffect(() => {
     return () => {
@@ -311,9 +313,26 @@ export default function PostDetailScreen() {
     console.log('[frame-profile-debug] carousel activeIndex', activeIndex);
   }, [activeIndex]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const n = originalData.length;
+    const slideIdx = n > 0 ? ((activeIndex % n) + n) % n : 0;
+    const imageUrl = originalData[slideIdx] ?? '';
+    void (async () => {
+      const id = await resolvePostIdForEngagement({
+        routePostId: (params as any)?.postId,
+        imageUrl,
+      });
+      if (!cancelled) engagementPostIdRef.current = id;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [params, originalData, activeIndex]);
+
   const firePostDownloadEngagement = useCallback(
     async (action: PostDownloadAction) => {
-      const postId = routeParamStr((params as any)?.postId);
+      const postId = engagementPostIdRef.current || routeParamStr((params as any)?.postId);
       if (!postId) return;
       const n = originalData.length;
       const slideIdx = n > 0 ? ((activeIndex % n) + n) % n : 0;
