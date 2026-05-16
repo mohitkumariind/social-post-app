@@ -9,6 +9,8 @@ import {
   ActivityIndicator,
   Alert,
   BackHandler,
+  InteractionManager,
+  PixelRatio,
   ScrollView,
   Share,
   StyleSheet,
@@ -39,6 +41,25 @@ import { resolveUserFrameOverlayUrl } from '../../lib/userFrameUrl';
 import { savePerfEnd, savePerfStart, savePerfStep } from '../../utils/savePipelinePerf';
 
 const FRAME_STATIC_COLOR = Colors.primary;
+
+/** Production cap (legacy default); never upscale beyond device-native width. */
+const CAPTURE_MAX_WIDTH = 1080;
+const CAPTURE_JPEG_QUALITY = 0.97;
+
+function buildViewShotCaptureOptions(frameRenderWidth: number) {
+  const nativeW = Math.round(frameRenderWidth * PixelRatio.get());
+  const width = Math.min(CAPTURE_MAX_WIDTH, Math.max(nativeW, 1));
+  const height = Math.round((width * 5) / 4);
+  return { format: 'jpg' as const, quality: CAPTURE_JPEG_QUALITY, width, height };
+}
+
+function waitForPaintSettled(): Promise<void> {
+  return new Promise((resolve) => {
+    InteractionManager.runAfterInteractions(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
 
 function routeParamStr(v: unknown): string {
   if (v == null) return '';
@@ -93,9 +114,13 @@ export default function PostDetailScreen() {
   const captureIndexRef = useRef<number>(0);
   const lastCaptureDiagRef = useRef<string>('');
 
-  // Rendered "frame" size on-screen (same aspect ratio as ViewShot: 1080x1350 => 4/5).
+  // Rendered "frame" size on-screen (same aspect ratio as ViewShot capture: 4/5).
   const frameRenderWidth = width - 20;
   const frameRenderHeight = (frameRenderWidth * 5) / 4;
+  const viewShotCaptureOptions = useMemo(
+    () => buildViewShotCaptureOptions(frameRenderWidth),
+    [frameRenderWidth]
+  );
 
   // Dynamic micro-strip sizing derived from rendered frame height.
   const STRIP_HEIGHT = frameRenderHeight * 0.03; // 3% of frame height
@@ -119,11 +144,14 @@ export default function PostDetailScreen() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [isSharing, setIsSharing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [dynamicCaptions, setDynamicCaptions] = useState<string[]>([]);
   const scrollRef = useRef<ScrollView>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mediaLibraryGrantedRef = useRef<boolean | null>(null);
   const backNavLockRef = useRef(false);
   const isMountedRef = useRef(true);
   const isNavigatingAwayRef = useRef(false);
@@ -357,6 +385,59 @@ export default function PostDetailScreen() {
     Alert.alert(tt || 'Notice', mm || 'Please try again.');
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    void MediaLibrary.getPermissionsAsync().then(({ status }) => {
+      if (!cancelled) mediaLibraryGrantedRef.current = status === 'granted';
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const showSaveFeedback = useCallback((kind: 'saving' | 'saved' | 'error') => {
+    if (saveFeedbackTimerRef.current) {
+      clearTimeout(saveFeedbackTimerRef.current);
+      saveFeedbackTimerRef.current = null;
+    }
+    setSaveFeedback(kind);
+    if (kind !== 'saving') {
+      saveFeedbackTimerRef.current = setTimeout(() => {
+        if (isMountedRef.current) setSaveFeedback('idle');
+        saveFeedbackTimerRef.current = null;
+      }, 2600);
+    }
+  }, []);
+
+  const ensureGalleryPermission = useCallback(async (): Promise<boolean> => {
+    if (mediaLibraryGrantedRef.current) return true;
+    const existing = await MediaLibrary.getPermissionsAsync();
+    if (existing.status === 'granted') {
+      mediaLibraryGrantedRef.current = true;
+      return true;
+    }
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    const ok = status === 'granted';
+    mediaLibraryGrantedRef.current = ok;
+    return ok;
+  }, []);
+
+  const captureViewShotUri = useCallback(
+    async (shotRef: { capture: () => Promise<string> }, perfLabel: string): Promise<string | null> => {
+      await waitForPaintSettled();
+      savePerfStep(`${perfLabel}.viewShot.start`, viewShotCaptureOptions);
+      const capT0 = performance.now();
+      const rawUri = await shotRef.capture();
+      savePerfStep(`${perfLabel}.viewShot.done`, {
+        ms: Math.round(performance.now() - capT0),
+        ...viewShotCaptureOptions,
+      });
+      if (!rawUri || typeof rawUri !== 'string') return null;
+      return rawUri;
+    },
+    [viewShotCaptureOptions]
+  );
+
   const getBestViewShot = (): any | null => {
     const map = viewShotRefs.current;
     const idx = captureIndexRef.current;
@@ -402,12 +483,9 @@ export default function PostDetailScreen() {
     const fallbackFilename = `${filenameBase}.${ext}`;
 
     try {
-      savePerfStep('capture.viewShot.start', { format: 'jpg', w: 1080, h: 1350 });
-      const capT0 = performance.now();
-      const rawUri: string = await shotRef.capture();
-      savePerfStep('capture.viewShot.done', { ms: Math.round(performance.now() - capT0) });
-      if (!rawUri || typeof rawUri !== 'string') {
-        lastCaptureDiagRef.current = `step=ViewShot.capture\nerror=invalid capture uri (${String(rawUri)})`;
+      const rawUri = await captureViewShotUri(shotRef, 'capture');
+      if (!rawUri) {
+        lastCaptureDiagRef.current = `step=ViewShot.capture\nerror=invalid capture uri`;
         return null;
       }
       const cacheDir: string | null =
@@ -467,67 +545,48 @@ export default function PostDetailScreen() {
       hasOverlay: !!overlayUrl,
       captureIndex: captureIndexRef.current,
       activeIndex,
+      captureW: viewShotCaptureOptions.width,
+      captureH: viewShotCaptureOptions.height,
     });
+    showSaveFeedback('saving');
+    setIsDownloading(true);
     try {
-      setIsDownloading(true);
       savePerfStep('download.permission.start');
       const permT0 = performance.now();
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      savePerfStep('download.permission.done', { ms: Math.round(performance.now() - permT0), status });
-      if (status !== 'granted') {
+      const granted = await ensureGalleryPermission();
+      savePerfStep('download.permission.done', {
+        ms: Math.round(performance.now() - permT0),
+        granted,
+        cached: mediaLibraryGrantedRef.current === true,
+      });
+      if (!granted) {
+        showSaveFeedback('error');
         alertSafe(t('permission_required') || 'Permission required', t('permission_message') || 'Please allow access to save images.');
         return;
       }
 
-      // Android 10 friendly: avoid FileSystem path manipulation.
       const shotRef = getBestViewShot();
       if (!shotRef) {
+        showSaveFeedback('error');
         alertSafe(t('save_error_title') || 'Save failed', 'Capture not ready. Please try again.');
         return;
       }
-      savePerfStep('download.viewShot.start', { format: 'jpg', w: 1080, h: 1350 });
-      const capT0 = performance.now();
-      const rawUri: string = await shotRef.capture();
-      savePerfStep('download.viewShot.done', { ms: Math.round(performance.now() - capT0) });
-      if (!rawUri || typeof rawUri !== 'string') {
+
+      const rawUri = await captureViewShotUri(shotRef, 'download');
+      if (!rawUri) {
+        showSaveFeedback('error');
         alertSafe(t('save_error_title') || 'Save failed', t('save_error_message') || 'Something went wrong while saving.');
         return;
       }
 
-      const filenameBase = buildSocialPostSaveBasename(userInfo?.name);
-      const ext = 'png';
-      let uriToSave = rawUri;
-      const cacheDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? null;
-      if (cacheDir) {
-        try {
-          const dir = `${cacheDir}snapshots/`;
-          await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-          const { dest } = await resolveUniqueSnapshotDest({ dir, filenameBase, ext });
-          try {
-            savePerfStep('download.fileCopy.start');
-            const copyT0 = performance.now();
-            await FileSystem.copyAsync({ from: rawUri, to: dest });
-            savePerfStep('download.fileCopy.done', { ms: Math.round(performance.now() - copyT0) });
-            uriToSave = dest;
-          } catch {
-            savePerfStep('download.fileMove.start');
-            const moveT0 = performance.now();
-            await FileSystem.moveAsync({ from: rawUri, to: dest });
-            savePerfStep('download.fileMove.done', { ms: Math.round(performance.now() - moveT0) });
-            uriToSave = dest;
-          }
-        } catch (copyErr) {
-          if (__DEV__) console.warn('[PostDetail] gallery named file copy failed, saving capture URI', copyErr);
-        }
-      }
-
-      savePerfStep('download.mediaLibrary.start');
+      savePerfStep('download.mediaLibrary.start', { directUri: true });
       const libT0 = performance.now();
-      await MediaLibrary.saveToLibraryAsync(uriToSave);
+      await MediaLibrary.saveToLibraryAsync(rawUri);
       savePerfStep('download.mediaLibrary.done', { ms: Math.round(performance.now() - libT0) });
       void firePostDownloadEngagement('save');
-      alertSafe(t('save_success_title') || 'Saved', t('save_success_message') || 'Saved to gallery.');
+      showSaveFeedback('saved');
     } catch (error) {
+      showSaveFeedback('error');
       const msg = error instanceof Error ? error.message : String(error ?? '');
       alertSafe(t('save_error_title') || 'Save failed', msg || t('save_error_message') || 'Something went wrong while saving.');
     } finally {
@@ -544,6 +603,8 @@ export default function PostDetailScreen() {
       slides: originalData.length,
       frame: safeSelectedFrame,
       hasOverlay: !!overlayUrl,
+      captureW: viewShotCaptureOptions.width,
+      captureH: viewShotCaptureOptions.height,
     });
     try {
       setIsSharing(true);
@@ -737,6 +798,7 @@ export default function PostDetailScreen() {
 
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    if (saveFeedbackTimerRef.current) clearTimeout(saveFeedbackTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -791,12 +853,7 @@ export default function PostDetailScreen() {
                     if (ref) viewShotRefs.current[index] = ref;
                     else delete viewShotRefs.current[index];
                   }}
-                  options={{
-                    format: 'jpg',
-                    quality: 1.0,
-                    width: 1080,
-                    height: 1350,
-                  }}
+                  options={viewShotCaptureOptions}
                 >
                   <View
                     style={[
@@ -901,12 +958,34 @@ export default function PostDetailScreen() {
         </View>
       </View>
 
-      {showCopiedToast && (
+      {showCopiedToast ? (
         <View style={styles.toast}>
           <Ionicons name="checkmark-circle" size={20} color="#FFF" />
           <Text style={styles.toastText}>{t('caption_copied')}</Text>
         </View>
-      )}
+      ) : null}
+      {saveFeedback !== 'idle' ? (
+        <View style={styles.toast}>
+          <Ionicons
+            name={
+              saveFeedback === 'saving'
+                ? 'hourglass-outline'
+                : saveFeedback === 'saved'
+                  ? 'checkmark-circle'
+                  : 'alert-circle'
+            }
+            size={20}
+            color="#FFF"
+          />
+          <Text style={styles.toastText}>
+            {saveFeedback === 'saving'
+              ? 'Saving…'
+              : saveFeedback === 'saved'
+                ? t('save_success_message') || 'Saved to gallery.'
+                : t('save_error_message') || 'Save failed.'}
+          </Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
