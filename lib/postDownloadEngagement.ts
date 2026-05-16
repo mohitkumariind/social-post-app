@@ -1,4 +1,5 @@
 import * as Crypto from 'expo-crypto';
+import { savePerfStep } from '../utils/savePipelinePerf';
 import { supabase } from './supabase';
 
 export type PostDownloadAction = 'save' | 'whatsapp_share';
@@ -13,6 +14,8 @@ export async function hashRenderedPostVariant(parts: {
   frameLayoutVariant: number;
   imageUrl: string;
 }): Promise<string> {
+  savePerfStep('engagement.hashVariant.start');
+  const t0 = performance.now();
   const payload = [
     parts.postId,
     String(parts.selectedFrame),
@@ -20,7 +23,9 @@ export async function hashRenderedPostVariant(parts: {
     String(parts.frameLayoutVariant),
     parts.imageUrl,
   ].join('\u001e');
-  return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, payload);
+  const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, payload);
+  savePerfStep('engagement.hashVariant.done', { ms: Math.round(performance.now() - t0) });
+  return hash;
 }
 
 /**
@@ -35,12 +40,16 @@ export async function incrementPostDownloadEngagement(opts: {
 }): Promise<void> {
   const pid = String(opts.postId ?? '').trim();
   if (!pid) return;
+  savePerfStart('engagement', { action: opts.action });
   try {
+    savePerfStep('engagement.rpc.start');
+    const rpcStart = performance.now();
     const { data, error } = await supabase.rpc('increment_post_download', {
       p_post_id: pid,
       p_action_type: opts.action,
       p_rendered_variant_hash: opts.renderedVariantHash,
     });
+    savePerfStep('engagement.rpc.done', { ms: Math.round(performance.now() - rpcStart) });
     if (error) {
       if (__DEV__) console.warn('[postDownloadEngagement] RPC error:', error.message);
       return;
@@ -50,5 +59,7 @@ export async function incrementPostDownloadEngagement(opts: {
     }
   } catch (e) {
     if (__DEV__) console.warn('[postDownloadEngagement] exception:', e);
+  } finally {
+    savePerfEnd();
   }
 }

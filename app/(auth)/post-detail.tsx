@@ -36,6 +36,7 @@ import { resolvePostIdForEngagement } from '../../lib/resolvePostIdForEngagement
 import { sortUserFramesByDisplayKey } from '../../lib/sortUserFramesByDisplayKey';
 import { supabase } from '../../lib/supabase';
 import { resolveUserFrameOverlayUrl } from '../../lib/userFrameUrl';
+import { savePerfEnd, savePerfStart, savePerfStep } from '../../utils/savePipelinePerf';
 
 const FRAME_STATIC_COLOR = Colors.primary;
 
@@ -337,6 +338,7 @@ export default function PostDetailScreen() {
       const n = originalData.length;
       const slideIdx = n > 0 ? ((activeIndex % n) + n) % n : 0;
       const imageUrl = originalData[slideIdx] ?? '';
+      savePerfStep('engagement.prepare');
       const hash = await hashRenderedPostVariant({
         postId,
         selectedFrame: safeSelectedFrame,
@@ -389,6 +391,7 @@ export default function PostDetailScreen() {
 
   const captureSnapshotToNamedFile = async (): Promise<{ uri: string; filename: string } | null> => {
     lastCaptureDiagRef.current = '';
+    savePerfStep('capture.getViewShotRef');
     const shotRef = getBestViewShot();
     if (!shotRef) {
       lastCaptureDiagRef.current = 'step=getBestViewShot\nerror=no ViewShot ref (not mounted yet)';
@@ -399,7 +402,10 @@ export default function PostDetailScreen() {
     const fallbackFilename = `${filenameBase}.${ext}`;
 
     try {
+      savePerfStep('capture.viewShot.start', { format: 'jpg', w: 1080, h: 1350 });
+      const capT0 = performance.now();
       const rawUri: string = await shotRef.capture();
+      savePerfStep('capture.viewShot.done', { ms: Math.round(performance.now() - capT0) });
       if (!rawUri || typeof rawUri !== 'string') {
         lastCaptureDiagRef.current = `step=ViewShot.capture\nerror=invalid capture uri (${String(rawUri)})`;
         return null;
@@ -421,11 +427,17 @@ export default function PostDetailScreen() {
       // Create a stable, user-friendly filename for share sheets / downloads.
       // Some Android devices/providers may return a URI that cannot be copied; in that case fall back to rawUri.
       try {
+        savePerfStep('capture.fileCopy.start');
+        const copyT0 = performance.now();
         await FileSystem.copyAsync({ from: rawUri, to: dest });
+        savePerfStep('capture.fileCopy.done', { ms: Math.round(performance.now() - copyT0) });
         return { uri: dest, filename };
       } catch (copyErr) {
         try {
+          savePerfStep('capture.fileMove.start');
+          const moveT0 = performance.now();
           await FileSystem.moveAsync({ from: rawUri, to: dest });
+          savePerfStep('capture.fileMove.done', { ms: Math.round(performance.now() - moveT0) });
           return { uri: dest, filename };
         } catch {
           if (__DEV__) console.warn('[PostDetail] copy/move snapshot failed, using rawUri', copyErr);
@@ -447,9 +459,21 @@ export default function PostDetailScreen() {
 
   const handleDownload = async () => {
       if (!isMountedRef.current || isNavigatingAwayRef.current || isDownloading || isSharing) return;
+    savePerfStart('download', {
+      slides: originalData.length,
+      infiniteSlides: infiniteData.length,
+      viewShotRefs: Object.keys(viewShotRefs.current).length,
+      frame: safeSelectedFrame,
+      hasOverlay: !!overlayUrl,
+      captureIndex: captureIndexRef.current,
+      activeIndex,
+    });
     try {
       setIsDownloading(true);
+      savePerfStep('download.permission.start');
+      const permT0 = performance.now();
       const { status } = await MediaLibrary.requestPermissionsAsync();
+      savePerfStep('download.permission.done', { ms: Math.round(performance.now() - permT0), status });
       if (status !== 'granted') {
         alertSafe(t('permission_required') || 'Permission required', t('permission_message') || 'Please allow access to save images.');
         return;
@@ -461,7 +485,10 @@ export default function PostDetailScreen() {
         alertSafe(t('save_error_title') || 'Save failed', 'Capture not ready. Please try again.');
         return;
       }
+      savePerfStep('download.viewShot.start', { format: 'jpg', w: 1080, h: 1350 });
+      const capT0 = performance.now();
       const rawUri: string = await shotRef.capture();
+      savePerfStep('download.viewShot.done', { ms: Math.round(performance.now() - capT0) });
       if (!rawUri || typeof rawUri !== 'string') {
         alertSafe(t('save_error_title') || 'Save failed', t('save_error_message') || 'Something went wrong while saving.');
         return;
@@ -477,10 +504,16 @@ export default function PostDetailScreen() {
           await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
           const { dest } = await resolveUniqueSnapshotDest({ dir, filenameBase, ext });
           try {
+            savePerfStep('download.fileCopy.start');
+            const copyT0 = performance.now();
             await FileSystem.copyAsync({ from: rawUri, to: dest });
+            savePerfStep('download.fileCopy.done', { ms: Math.round(performance.now() - copyT0) });
             uriToSave = dest;
           } catch {
+            savePerfStep('download.fileMove.start');
+            const moveT0 = performance.now();
             await FileSystem.moveAsync({ from: rawUri, to: dest });
+            savePerfStep('download.fileMove.done', { ms: Math.round(performance.now() - moveT0) });
             uriToSave = dest;
           }
         } catch (copyErr) {
@@ -488,13 +521,17 @@ export default function PostDetailScreen() {
         }
       }
 
+      savePerfStep('download.mediaLibrary.start');
+      const libT0 = performance.now();
       await MediaLibrary.saveToLibraryAsync(uriToSave);
+      savePerfStep('download.mediaLibrary.done', { ms: Math.round(performance.now() - libT0) });
       void firePostDownloadEngagement('save');
       alertSafe(t('save_success_title') || 'Saved', t('save_success_message') || 'Saved to gallery.');
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error ?? '');
       alertSafe(t('save_error_title') || 'Save failed', msg || t('save_error_message') || 'Something went wrong while saving.');
     } finally {
+      savePerfEnd();
       if (isMountedRef.current) setIsDownloading(false);
     }
   };
@@ -503,6 +540,11 @@ export default function PostDetailScreen() {
       if (!isMountedRef.current || isNavigatingAwayRef.current || isSharing || isDownloading) return;
     let lastUri: string | null = null;
     let lastFilename: string | null = null;
+    savePerfStart('share', {
+      slides: originalData.length,
+      frame: safeSelectedFrame,
+      hasOverlay: !!overlayUrl,
+    });
     try {
       setIsSharing(true);
       const named = await captureSnapshotToNamedFile();
@@ -513,11 +555,14 @@ export default function PostDetailScreen() {
       }
       lastUri = named.uri;
       lastFilename = named.filename;
+      savePerfStep('share.sheet.start');
+      const shareT0 = performance.now();
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(named.uri, { dialogTitle: named.filename, mimeType: 'image/jpeg' });
       } else {
         await Share.share({ message: t('share_message') });
       }
+      savePerfStep('share.sheet.done', { ms: Math.round(performance.now() - shareT0) });
       void firePostDownloadEngagement('whatsapp_share');
     } catch (e) {
       if (__DEV__) console.warn('share failed', e);
@@ -529,6 +574,7 @@ export default function PostDetailScreen() {
       const diag = `step=Sharing.shareAsync\nuri=${lastUri ?? 'n/a'}\nfile=${lastFilename ?? 'n/a'}\nerror=${details || 'unknown'}`;
       alertSafe(t('save_error_title') || 'Share failed', diag);
     } finally {
+      savePerfEnd();
       if (isMountedRef.current) setIsSharing(false);
     }
   };
