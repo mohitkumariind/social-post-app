@@ -53,6 +53,29 @@ export async function POST(request: Request) {
     max_batches_per_wave: maxBatchesPerWave,
   });
 
+  const [{ count: pendingWaveCount }, { count: runningWaveCount }, { count: outboxQueueCount }] =
+    await Promise.all([
+      admin
+        .from('twitter_campaign_waves')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending'),
+      admin
+        .from('twitter_campaign_waves')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'running'),
+      admin
+        .from('notification_outbox')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['pending', 'failed', 'processing']),
+    ]);
+
+  logWorker('worker.twitter.pipeline.snapshot', {
+    pending_waves: pendingWaveCount ?? 0,
+    running_waves: runningWaveCount ?? 0,
+    outbox_rows: outboxQueueCount ?? 0,
+    due_now_iso: dueNowIso,
+  });
+
   const { data: dueRows, error: dueErr } = await admin
     .from('twitter_campaign_waves')
     .select(
@@ -78,6 +101,12 @@ export async function POST(request: Request) {
   }
 
   const candidates = (dueRows ?? []) as TwitterWaveRow[];
+  logWorker('worker.twitter.waves.due', {
+    due_count: candidates.length,
+    wave_ids: candidates.map((w) => w.id),
+    campaign_ids: [...new Set(candidates.map((w) => w.campaign_id))],
+    scheduled_at: candidates.map((w) => ({ id: w.id, at: w.scheduled_at, status: w.status })),
+  });
   const results: Record<string, unknown>[] = [];
   let claimed = 0;
   let completed = 0;
@@ -181,7 +210,12 @@ export async function POST(request: Request) {
 
     claimed++;
     const claimedWave = claimRes.data as TwitterWaveRow;
-    logWorker('worker.twitter_wave.claimed', { wave_id: waveId, status: claimedWave.status });
+    logWorker('worker.twitter_wave.claimed', {
+      wave_id: waveId,
+      status: claimedWave.status,
+      campaign_id: campaignId,
+      target_party: campaignFresh?.target_party ?? null,
+    });
 
     let campaignFresh: Awaited<ReturnType<typeof loadCampaignForWave>>;
     try {

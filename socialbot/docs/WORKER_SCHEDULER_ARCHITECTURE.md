@@ -10,9 +10,22 @@ This project uses a lease-based worker model for scheduled jobs.
 - `POST /api/jobs/analytics-daily-rollup`
 - `POST /api/jobs/cleanup-operational-data`
 - `POST /api/jobs/cleanup-scheduler-state`
-- `GET /api/cron/process-notifications` (cron health/trigger endpoint)
+- `GET /api/cron/process-notifications` (cron health check only)
+- `GET /api/cron/twitter-campaign` (runs wave worker + notification outbox worker)
+- `POST /api/jobs/process-twitter-campaign-waves`
+- `POST /api/jobs/process-twitter-campaign-notification-outbox`
+- `POST /api/admin/twitter-campaigns/run-workers` (admin manual trigger)
 
 All job/cron routes require `CRON_SECRET` via `validateCronRequest`.
+
+### Twitter campaign scheduling
+
+Production must invoke `GET /api/cron/twitter-campaign` every 1–2 minutes:
+
+- **Vercel Cron:** `socialbot/vercel.json` → `/api/cron/twitter-campaign` (`*/2 * * * *`)
+- **GitHub Actions fallback:** `.github/workflows/twitter-campaign-workers.yml` (set `SOCIALBOT_BASE_URL` + `CRON_SECRET` secrets)
+
+Vercel Cron sends `Authorization: Bearer $CRON_SECRET` when `CRON_SECRET` is set in project env.
 
 ## Standard Lease/Retry Model
 

@@ -79,6 +79,19 @@ export async function POST(request: Request) {
     cooldown_ms: cooldownMs,
   });
 
+  const [{ count: outboxPending }, { count: outboxFailed }, { count: pushTokenCount }] = await Promise.all([
+    admin.from('notification_outbox').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+    admin.from('notification_outbox').select('id', { count: 'exact', head: true }).eq('status', 'failed'),
+    admin.from('push_tokens').select('token', { count: 'exact', head: true }),
+  ]);
+
+  log('worker.twitter.outbox.snapshot', {
+    outbox_pending: outboxPending ?? 0,
+    outbox_failed: outboxFailed ?? 0,
+    push_tokens_registered: pushTokenCount ?? 0,
+    due_now_iso: dueNowIso,
+  });
+
   const { data: dueRows, error: dueErr } = await admin
     .from('notification_outbox')
     .select(
@@ -99,6 +112,12 @@ export async function POST(request: Request) {
   }
 
   const due = (dueRows ?? []) as any[];
+  log('worker.twitter.outbox.due', {
+    due_count: due.length,
+    outbox_ids: due.map((r) => r.id),
+    user_ids: [...new Set(due.map((r) => String(r?.user_id ?? '').trim()).filter(Boolean))],
+    assignment_ids: [...new Set(due.map((r) => String(r?.assignment_id ?? '').trim()).filter(Boolean))],
+  });
   const results: Record<string, unknown>[] = [];
   let sent = 0;
   let failed = 0;

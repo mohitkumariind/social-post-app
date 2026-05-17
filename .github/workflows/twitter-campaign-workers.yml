@@ -1,0 +1,30 @@
+# Fallback scheduler when Vercel Cron is unavailable or socialbot is hosted elsewhere.
+# Set repository secrets: SOCIALBOT_BASE_URL (e.g. https://your-admin.vercel.app), CRON_SECRET.
+name: Twitter campaign workers
+
+on:
+  schedule:
+    - cron: '*/2 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: twitter-campaign-workers
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run Twitter campaign cron pipeline
+        env:
+          BASE_URL: ${{ secrets.SOCIALBOT_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$BASE_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "Skip: SOCIALBOT_BASE_URL or CRON_SECRET not configured in GitHub secrets."
+            exit 0
+          fi
+          curl -sfS -X GET "${BASE_URL%/}/api/cron/twitter-campaign" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-cron-secret: ${CRON_SECRET}"
