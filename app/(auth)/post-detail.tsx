@@ -579,9 +579,36 @@ export default function PostDetailScreen() {
         return;
       }
 
-      savePerfStep('download.mediaLibrary.start', { directUri: true });
+      const filenameBase = buildSocialPostSaveBasename(userInfo?.name);
+      const ext = 'png';
+      let uriToSave = rawUri;
+      const cacheDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? null;
+      if (cacheDir) {
+        try {
+          const dir = `${cacheDir}snapshots/`;
+          await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+          const { dest } = await resolveUniqueSnapshotDest({ dir, filenameBase, ext });
+          try {
+            savePerfStep('download.fileCopy.start');
+            const copyT0 = performance.now();
+            await FileSystem.copyAsync({ from: rawUri, to: dest });
+            savePerfStep('download.fileCopy.done', { ms: Math.round(performance.now() - copyT0) });
+            uriToSave = dest;
+          } catch {
+            savePerfStep('download.fileMove.start');
+            const moveT0 = performance.now();
+            await FileSystem.moveAsync({ from: rawUri, to: dest });
+            savePerfStep('download.fileMove.done', { ms: Math.round(performance.now() - moveT0) });
+            uriToSave = dest;
+          }
+        } catch (copyErr) {
+          if (__DEV__) console.warn('[PostDetail] gallery named file copy failed, saving capture URI', copyErr);
+        }
+      }
+
+      savePerfStep('download.mediaLibrary.start', { namedFile: uriToSave !== rawUri });
       const libT0 = performance.now();
-      await MediaLibrary.saveToLibraryAsync(rawUri);
+      await MediaLibrary.saveToLibraryAsync(uriToSave);
       savePerfStep('download.mediaLibrary.done', { ms: Math.round(performance.now() - libT0) });
       void firePostDownloadEngagement('save');
       showSaveFeedback('saved');
