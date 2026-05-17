@@ -14,7 +14,7 @@ This project uses a lease-based worker model for scheduled jobs.
 - `GET /api/cron/twitter-campaign` (runs wave worker + notification outbox worker)
 - `POST /api/jobs/process-twitter-campaign-waves`
 - `POST /api/jobs/process-twitter-campaign-notification-outbox`
-- `POST /api/admin/twitter-campaigns/run-workers` (admin manual trigger)
+- `POST /api/admin/twitter-campaign-workers` (admin manual trigger; not under `[id]` — avoids dynamic route shadowing)
 
 All job/cron routes require `CRON_SECRET` via `validateCronRequest`.
 

@@ -13,6 +13,8 @@ function json(body: unknown, status = 200) {
 
 /**
  * Admin-only manual trigger for Twitter campaign workers (debug / recovery).
+ * Path is outside `/twitter-campaigns/[id]` so it is never captured as a campaign UUID.
+ *
  * POST body (optional): { "maxWaveRuns": 4, "maxOutboxRuns": 6 }
  */
 export async function POST(req: Request) {
@@ -49,13 +51,13 @@ export async function POST(req: Request) {
   }
 
   console.info(
-    '[admin.twitter-campaign.run-workers]',
+    '[admin.twitter-campaign-workers]',
     JSON.stringify({ user_id: auth.user.id, role: auth.role, maxWaveRuns, maxOutboxRuns })
   );
 
   try {
     const pipeline = await runTwitterCampaignWorkerPipeline({ maxWaveRuns, maxOutboxRuns });
-    return json({ ok: pipeline.ok, trigger: 'admin', ...pipeline });
+    return json({ trigger: 'admin', ...pipeline });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e ?? 'unknown');
     return json({ ok: false, error: msg }, 500);

@@ -28,7 +28,7 @@ export async function GET(request: Request) {
 
   try {
     const pipeline = await runTwitterCampaignWorkerPipeline();
-    return json({ ok: pipeline.ok, trigger: 'cron', ...pipeline });
+    return json({ trigger: 'cron', ...pipeline });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e ?? 'unknown');
     console.error('[cron.twitter-campaign.error]', JSON.stringify({ error: msg }));

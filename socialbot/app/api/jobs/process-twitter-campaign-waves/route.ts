@@ -214,7 +214,7 @@ export async function POST(request: Request) {
       wave_id: waveId,
       status: claimedWave.status,
       campaign_id: campaignId,
-      target_party: campaignFresh?.target_party ?? null,
+      target_party: campaign?.target_party ?? null,
     });
 
     let campaignFresh: Awaited<ReturnType<typeof loadCampaignForWave>>;

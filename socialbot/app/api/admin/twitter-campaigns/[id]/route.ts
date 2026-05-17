@@ -7,6 +7,7 @@ import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { withAudit } from '@/lib/audit/withAudit';
 import {
   TWITTER_CAMPAIGN_RESOURCE,
+  isReservedTwitterCampaignPathSegment,
   normalizeTargetParty,
   parseCampaignType,
   parseScheduledAt,
@@ -15,6 +16,8 @@ import {
   twitterCampaignIdFromRequest,
   type TwitterCampaignType,
 } from '@/app/api/admin/twitter-campaigns/_lib';
+
+const WORKERS_ENDPOINT_HINT = 'Use POST /api/admin/twitter-campaign-workers to run wave and notification workers.';
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -46,6 +49,9 @@ function rbacUser(auth: {
 export async function GET(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   if (!id?.trim()) return json({ error: 'Missing id' }, 400);
+  if (isReservedTwitterCampaignPathSegment(id)) {
+    return json({ error: 'Not a campaign id', hint: WORKERS_ENDPOINT_HINT }, 404);
+  }
 
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
@@ -100,6 +106,9 @@ export const PATCH = withAudit(
 
     const id = twitterCampaignIdFromRequest(req);
     if (!id) return json({ error: 'Missing id' }, 400);
+    if (isReservedTwitterCampaignPathSegment(id)) {
+      return json({ error: 'Not a campaign id', hint: WORKERS_ENDPOINT_HINT }, 404);
+    }
 
     const u = rbacUser(auth);
     if (
@@ -233,6 +242,9 @@ export const DELETE = withAudit(
 
     const id = twitterCampaignIdFromRequest(req);
     if (!id) return json({ error: 'Missing id' }, 400);
+    if (isReservedTwitterCampaignPathSegment(id)) {
+      return json({ error: 'Not a campaign id', hint: WORKERS_ENDPOINT_HINT }, 404);
+    }
 
     const u = rbacUser(auth);
     if (

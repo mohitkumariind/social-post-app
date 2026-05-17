@@ -31,7 +31,7 @@ For legacy edge function safety:
    - `/api/jobs/process-scheduled-posts`
    - `/api/jobs/process-scheduled-events`
    - `/api/jobs/process-scheduled-notifications`
-   - `/api/cron/twitter-campaign` (or `POST /api/admin/twitter-campaigns/run-workers` while logged in as admin)
+   - `/api/cron/twitter-campaign` (or `POST /api/admin/twitter-campaign-workers` while logged in as admin)
    - `/api/jobs/cleanup-operational-data`
    - `/api/jobs/cleanup-scheduler-state`
 5. Confirm logs include `*.start` and `*.done` structured events.

@@ -105,6 +105,13 @@ export function variantsToJsonb(variants: VariantInput[]): unknown[] {
   }));
 }
 
+/** Static path segments that must not be treated as campaign UUIDs (see `/api/admin/twitter-campaign-workers`). */
+export const TWITTER_CAMPAIGN_RESERVED_PATH_SEGMENTS = new Set(['run-workers', 'process-workers']);
+
+export function isReservedTwitterCampaignPathSegment(id: string): boolean {
+  return TWITTER_CAMPAIGN_RESERVED_PATH_SEGMENTS.has(String(id ?? '').trim().toLowerCase());
+}
+
 /** Path: `/api/admin/twitter-campaigns/:id` or `.../:id/publish`. */
 export function twitterCampaignIdFromRequest(req: NextRequest): string {
   const segments = req.nextUrl.pathname.split('/').filter(Boolean);

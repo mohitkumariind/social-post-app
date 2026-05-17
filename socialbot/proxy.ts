@@ -87,7 +87,18 @@ export async function proxy(request: NextRequest) {
         status: cronGate.status,
         reason: cronGate.reason,
       });
-      return jsonPreservingAuthCookies(sessionResponse, { error: cronGate.error }, cronGate.status);
+      return jsonPreservingAuthCookies(
+        sessionResponse,
+        {
+          error: cronGate.error,
+          reason: cronGate.reason,
+          hint:
+            cronGate.reason === 'missing-cron-auth-header'
+              ? 'Send Authorization: Bearer <CRON_SECRET> or x-cron-secret: <CRON_SECRET>'
+              : undefined,
+        },
+        cronGate.status
+      );
     }
     proxyLog('[proxy] Step: cron/jobs auth accepted', { pathname });
     return sessionResponse;
