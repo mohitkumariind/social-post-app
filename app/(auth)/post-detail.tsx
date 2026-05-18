@@ -1,6 +1,5 @@
-import { Ionicons } from '@expo/vector-icons';
+﻿import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
-import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
@@ -28,7 +27,6 @@ import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { useFrameCutout } from '../../hooks/useFrameCutout';
-import { getProfessionalFileName } from '../../lib/professionalFileName';
 import {
   hashRenderedPostVariant,
   incrementPostDownloadEngagement,
@@ -68,18 +66,6 @@ function routeParamStr(v: unknown): string {
   return String(v).trim();
 }
 
-function buildSnapshotFilename(params: Record<string, unknown>): string {
-  const category = routeParamStr(params?.category);
-  return getProfessionalFileName({ category, ext: 'jpg' }).replace(/\.jpg$/i, '');
-}
-
-/** Gallery save name: `SocialPost-[CleanName].png` (alphanumeric only in name segment). */
-function buildSocialPostSaveBasename(displayName: unknown): string {
-  const raw = String(displayName ?? '').trim() || 'User';
-  const cleanName = raw.replace(/[^a-zA-Z0-9]/g, '') || 'User';
-  return `SocialPost-${cleanName}`;
-}
-
 /** Normalize `posts.captions` / `events.captions` (jsonb, text JSON string, or plain string). */
 function parseCaptionsFromDb(raw: unknown): string[] {
   if (raw == null) return [];
@@ -112,7 +98,6 @@ export default function PostDetailScreen() {
   const { userInfo } = useUser();
   const viewShotRefs = useRef<Record<number, any>>({});
   const captureIndexRef = useRef<number>(0);
-  const lastCaptureDiagRef = useRef<string>('');
 
   // Rendered "frame" size on-screen (same aspect ratio as ViewShot capture: 4/5).
   const frameRenderWidth = width - 20;
@@ -227,7 +212,7 @@ export default function PostDetailScreen() {
       const clampedInitial = total > 0 ? Math.min(Math.max(0, initialIndex), total - 1) : 0;
       const jumpTo = total > 1 ? total + clampedInitial : 0;
       // IMPORTANT: `mountComposer` keys off `activeIndex`. Do not set `activeIndex` to `jumpTo`
-      // until after `scrollTo` — otherwise the on-screen slide (still at offset 0 for ~400ms)
+      // until after `scrollTo` â€” otherwise the on-screen slide (still at offset 0 for ~400ms)
       // mounts no FrameEngine and frames look "missing" for every user.
       const timer = setTimeout(() => {
         try {
@@ -333,7 +318,7 @@ export default function PostDetailScreen() {
       safeSelectedFrame,
       framesLen: frames.length,
       hasOverlayRow: !!row,
-      overlayUrlPreview: url ? `${url.slice(0, 80)}…` : '',
+      overlayUrlPreview: url ? `${url.slice(0, 80)}â€¦` : '',
     });
   }, [safeSelectedFrame, frames]);
 
@@ -451,89 +436,6 @@ export default function PostDetailScreen() {
     return map[keys[0]] ?? null;
   };
 
-  const resolveUniqueSnapshotDest = async (opts: {
-    dir: string;
-    filenameBase: string;
-    ext: string;
-  }): Promise<{ dest: string; filename: string }> => {
-    // Common failure mode on real phones: user taps save/share multiple times within the same minute.
-    // Our professional filename helper is minute-granular → the destination already exists → copyAsync throws.
-    for (let i = 0; i < 50; i++) {
-      const suffix = i === 0 ? '' : `_${i}`;
-      const filename = `${opts.filenameBase}${suffix}.${opts.ext}`;
-      const dest = `${opts.dir}${filename}`;
-      const info = await FileSystem.getInfoAsync(dest);
-      if (!info.exists) return { dest, filename };
-    }
-    // Fall back to a timestamped suffix as a last resort.
-    const filename = `${opts.filenameBase}_${Date.now()}.${opts.ext}`;
-    return { dest: `${opts.dir}${filename}`, filename };
-  };
-
-  const captureSnapshotToNamedFile = async (): Promise<{ uri: string; filename: string } | null> => {
-    lastCaptureDiagRef.current = '';
-    savePerfStep('capture.getViewShotRef');
-    const shotRef = getBestViewShot();
-    if (!shotRef) {
-      lastCaptureDiagRef.current = 'step=getBestViewShot\nerror=no ViewShot ref (not mounted yet)';
-      return null;
-    }
-    const filenameBase = buildSnapshotFilename(params as unknown as Record<string, unknown>);
-    const ext = 'jpg';
-    const fallbackFilename = `${filenameBase}.${ext}`;
-
-    try {
-      const rawUri = await captureViewShotUri(shotRef, 'capture');
-      if (!rawUri) {
-        lastCaptureDiagRef.current = `step=ViewShot.capture\nerror=invalid capture uri`;
-        return null;
-      }
-      const cacheDir: string | null =
-        FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? null;
-
-      // If cacheDirectory is unavailable on this runtime/device, do not block share/save.
-      // Use the raw capture URI and keep professional name only for the share sheet title.
-      if (!cacheDir) {
-        lastCaptureDiagRef.current = 'step=FileSystem.cacheDirectory\nwarn=cache directory unavailable; using rawUri';
-        return { uri: rawUri, filename: fallbackFilename };
-      }
-
-      const dir = `${cacheDir}snapshots/`;
-      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-      const { dest, filename } = await resolveUniqueSnapshotDest({ dir, filenameBase, ext });
-
-      // Create a stable, user-friendly filename for share sheets / downloads.
-      // Some Android devices/providers may return a URI that cannot be copied; in that case fall back to rawUri.
-      try {
-        savePerfStep('capture.fileCopy.start');
-        const copyT0 = performance.now();
-        await FileSystem.copyAsync({ from: rawUri, to: dest });
-        savePerfStep('capture.fileCopy.done', { ms: Math.round(performance.now() - copyT0) });
-        return { uri: dest, filename };
-      } catch (copyErr) {
-        try {
-          savePerfStep('capture.fileMove.start');
-          const moveT0 = performance.now();
-          await FileSystem.moveAsync({ from: rawUri, to: dest });
-          savePerfStep('capture.fileMove.done', { ms: Math.round(performance.now() - moveT0) });
-          return { uri: dest, filename };
-        } catch {
-          if (__DEV__) console.warn('[PostDetail] copy/move snapshot failed, using rawUri', copyErr);
-          return { uri: rawUri, filename: fallbackFilename };
-        }
-      }
-    } catch (e) {
-      if (__DEV__) console.warn('[PostDetail] captureSnapshotToNamedFile failed', e);
-      const details =
-        e instanceof Error
-          ? `${e.name}: ${e.message}`
-          : typeof e === 'object' && e != null
-            ? JSON.stringify(e)
-            : String(e ?? '');
-      lastCaptureDiagRef.current = `step=captureSnapshotToNamedFile\nerror=${details || 'unknown'}`;
-      return null;
-    }
-  };
 
   const handleDownload = async () => {
       if (!isMountedRef.current || isNavigatingAwayRef.current || isDownloading || isSharing) return;
@@ -579,36 +481,9 @@ export default function PostDetailScreen() {
         return;
       }
 
-      const filenameBase = buildSocialPostSaveBasename(userInfo?.name);
-      const ext = 'png';
-      let uriToSave = rawUri;
-      const cacheDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? null;
-      if (cacheDir) {
-        try {
-          const dir = `${cacheDir}snapshots/`;
-          await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-          const { dest } = await resolveUniqueSnapshotDest({ dir, filenameBase, ext });
-          try {
-            savePerfStep('download.fileCopy.start');
-            const copyT0 = performance.now();
-            await FileSystem.copyAsync({ from: rawUri, to: dest });
-            savePerfStep('download.fileCopy.done', { ms: Math.round(performance.now() - copyT0) });
-            uriToSave = dest;
-          } catch {
-            savePerfStep('download.fileMove.start');
-            const moveT0 = performance.now();
-            await FileSystem.moveAsync({ from: rawUri, to: dest });
-            savePerfStep('download.fileMove.done', { ms: Math.round(performance.now() - moveT0) });
-            uriToSave = dest;
-          }
-        } catch (copyErr) {
-          if (__DEV__) console.warn('[PostDetail] gallery named file copy failed, saving capture URI', copyErr);
-        }
-      }
-
-      savePerfStep('download.mediaLibrary.start', { namedFile: uriToSave !== rawUri });
+      savePerfStep('download.mediaLibrary.start', { directUri: true });
       const libT0 = performance.now();
-      await MediaLibrary.saveToLibraryAsync(uriToSave);
+      await MediaLibrary.saveToLibraryAsync(rawUri);
       savePerfStep('download.mediaLibrary.done', { ms: Math.round(performance.now() - libT0) });
       void firePostDownloadEngagement('save');
       showSaveFeedback('saved');
@@ -625,7 +500,6 @@ export default function PostDetailScreen() {
   const handleShare = async () => {
       if (!isMountedRef.current || isNavigatingAwayRef.current || isSharing || isDownloading) return;
     let lastUri: string | null = null;
-    let lastFilename: string | null = null;
     savePerfStart('share', {
       slides: originalData.length,
       frame: safeSelectedFrame,
@@ -635,18 +509,24 @@ export default function PostDetailScreen() {
     });
     try {
       setIsSharing(true);
-      const named = await captureSnapshotToNamedFile();
-      if (!named) {
-        const diag = lastCaptureDiagRef.current;
-        alertSafe(t('save_error_title') || 'Share failed', diag || t('save_error_message') || 'Something went wrong while sharing.');
+      const shotRef = getBestViewShot();
+      if (!shotRef) {
+        alertSafe(t('save_error_title') || 'Share failed', 'Capture not ready. Please try again.');
         return;
       }
-      lastUri = named.uri;
-      lastFilename = named.filename;
-      savePerfStep('share.sheet.start');
+      const rawUri = await captureViewShotUri(shotRef, 'share');
+      if (!rawUri) {
+        alertSafe(t('save_error_title') || 'Share failed', t('save_error_message') || 'Something went wrong while sharing.');
+        return;
+      }
+      lastUri = rawUri;
+      savePerfStep('share.sheet.start', { directUri: true });
       const shareT0 = performance.now();
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(named.uri, { dialogTitle: named.filename, mimeType: 'image/jpeg' });
+        await Sharing.shareAsync(rawUri, {
+          dialogTitle: t('share_whatsapp') || 'Share',
+          mimeType: 'image/jpeg',
+        });
       } else {
         await Share.share({ message: t('share_message') });
       }
@@ -659,7 +539,7 @@ export default function PostDetailScreen() {
         msg ||
         (typeof e === 'object' && e != null ? JSON.stringify(e) : String(e ?? '')) ||
         '';
-      const diag = `step=Sharing.shareAsync\nuri=${lastUri ?? 'n/a'}\nfile=${lastFilename ?? 'n/a'}\nerror=${details || 'unknown'}`;
+      const diag = `step=Sharing.shareAsync\nuri=${lastUri ?? 'n/a'}\nerror=${details || 'unknown'}`;
       alertSafe(t('save_error_title') || 'Share failed', diag);
     } finally {
       savePerfEnd();
@@ -742,14 +622,14 @@ export default function PostDetailScreen() {
       }
       setDynamicCaptions([v]);
     } catch {
-      // Not JSON (or invalid JSON) → treat as plain caption text.
+      // Not JSON (or invalid JSON) â†’ treat as plain caption text.
       setDynamicCaptions([v]);
     }
   }, [(params as any)?.captions, (params as any)?.caption]);
 
   /**
    * If route params lose/truncate `captions` (common with long JSON in URLs), load from DB.
-   * Prefer `postId` → `posts.image_url` → `events.name` (category).
+   * Prefer `postId` â†’ `posts.image_url` â†’ `events.name` (category).
    */
   useEffect(() => {
     if (dynamicCaptions.length > 0) return;
@@ -840,7 +720,7 @@ export default function PostDetailScreen() {
           <TouchableOpacity onPress={goBackToExpandedCategory} style={styles.backBtn}>
             <Ionicons name="chevron-back" size={24} color="#333" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>{t('ready_to_post')} 🚀</Text>
+          <Text style={styles.headerTitle}>{t('ready_to_post')} ðŸš€</Text>
           <View style={{ width: 40 }} />
         </View>
         <View style={{ flex: 1 }} />
@@ -854,7 +734,7 @@ export default function PostDetailScreen() {
         <TouchableOpacity onPress={goBackToExpandedCategory} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color="#333" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{t('ready_to_post')} 🚀</Text>
+        <Text style={styles.headerTitle}>{t('ready_to_post')} ðŸš€</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -980,7 +860,7 @@ export default function PostDetailScreen() {
           </TouchableOpacity>
           <TouchableOpacity style={[styles.downloadBtn, (isSharing || isDownloading) && { opacity: 0.7 }]} onPress={handleDownload} disabled={isSharing || isDownloading}>
             <Ionicons name="download-outline" size={22} color="#FFF" />
-            <Text style={styles.downloadBtnText}>{isDownloading ? 'Saving...' : `${t('save_to_gallery')} ✨`}</Text>
+            <Text style={styles.downloadBtnText}>{isDownloading ? 'Saving...' : `${t('save_to_gallery')} âœ¨`}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -1006,7 +886,7 @@ export default function PostDetailScreen() {
           />
           <Text style={styles.toastText}>
             {saveFeedback === 'saving'
-              ? 'Saving…'
+              ? 'Savingâ€¦'
               : saveFeedback === 'saved'
                 ? t('save_success_message') || 'Saved to gallery.'
                 : t('save_error_message') || 'Save failed.'}
