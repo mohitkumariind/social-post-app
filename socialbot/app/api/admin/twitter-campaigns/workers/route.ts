@@ -4,7 +4,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-/** Legacy path; Vercel rewrite also maps here → /api/admin/twitter-campaigns/workers */
 export async function GET() {
   return twitterCampaignWorkersGET();
 }

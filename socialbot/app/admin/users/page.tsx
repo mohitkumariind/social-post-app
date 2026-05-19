@@ -26,7 +26,7 @@ import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-clie
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 import { API_MAX_FRAMES_LIMIT } from '@/lib/perf-defaults';
-import { sortUserFramesByDisplayKey } from '../../../../lib/sortUserFramesByDisplayKey';
+import { sortUserFramesByDisplayKey } from '@/lib/sortUserFramesByDisplayKey';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
 

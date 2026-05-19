@@ -1,15 +1,17 @@
 import type { NextConfig } from 'next';
 import path from 'path';
 
-/**
- * Monorepo: socialbot imports shared modules from repo root (e.g. `lib/pushChannel.ts`).
- * Pin Turbopack + file tracing to the repo root so production builds match local resolution.
- */
+const socialbotRoot = path.resolve(__dirname);
 const monorepoRoot = path.resolve(__dirname, '..');
 
+/**
+ * Vercel / monorepo: never set turbopack.root to the repo root — it contains Expo's `app/`
+ * and can prevent App Router from registering socialbot API routes in production.
+ * Shared code lives under socialbot/lib (not ../../lib) for deterministic discovery.
+ */
 const nextConfig: NextConfig = {
   turbopack: {
-    root: monorepoRoot,
+    root: socialbotRoot,
   },
   outputFileTracingRoot: monorepoRoot,
 };

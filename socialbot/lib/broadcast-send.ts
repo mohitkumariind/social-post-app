@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import Expo, { type ExpoPushMessage } from 'expo-server-sdk';
-import { ANDROID_NOTIFICATION_CHANNEL_ID } from '../../lib/pushChannel';
+import { ANDROID_NOTIFICATION_CHANNEL_ID } from '@/lib/pushChannel';
 import {
   BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG,
   NOTIFICATION_DATA_TYPE_EVENT_CAMPAIGN,

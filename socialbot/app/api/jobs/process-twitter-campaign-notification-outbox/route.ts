@@ -9,7 +9,7 @@ import {
   resolveWorkerRuntime,
   staleIso,
 } from '@/lib/workers/runtime';
-import { ANDROID_NOTIFICATION_CHANNEL_ID } from '../../../../../lib/pushChannel';
+import { ANDROID_NOTIFICATION_CHANNEL_ID } from '@/lib/pushChannel';
 
 export const runtime = 'nodejs';
 

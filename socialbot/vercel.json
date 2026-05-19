@@ -1,8 +1,17 @@
 {
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
   "crons": [
     {
       "path": "/api/cron/twitter-campaign",
       "schedule": "*/2 * * * *"
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/admin/twitter-campaign-workers",
+      "destination": "/api/admin/twitter-campaigns/workers"
     }
   ],
   "headers": [

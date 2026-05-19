@@ -17,7 +17,8 @@ import {
   type TwitterCampaignType,
 } from '@/app/api/admin/twitter-campaigns/_lib';
 
-const WORKERS_ENDPOINT_HINT = 'Use POST /api/admin/twitter-campaign-workers to run wave and notification workers.';
+const WORKERS_ENDPOINT_HINT =
+  'Use POST /api/admin/twitter-campaigns/workers (or legacy /api/admin/twitter-campaign-workers) to run wave and notification workers.';
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
