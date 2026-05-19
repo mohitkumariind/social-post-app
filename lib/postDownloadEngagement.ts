@@ -1,6 +1,8 @@
 import * as Crypto from 'expo-crypto';
 import { savePerfEnd, savePerfStart, savePerfStep } from '../utils/savePipelinePerf';
-import { supabase } from './supabase';
+import { supabase, supabaseUrl } from './supabase';
+
+let engagementSupabaseUrlLogged = false;
 
 export type PostDownloadAction = 'save' | 'whatsapp_share';
 
@@ -64,6 +66,12 @@ export async function incrementPostDownloadEngagement(opts: {
     return;
   }
 
+  if (!engagementSupabaseUrlLogged) {
+    engagementSupabaseUrlLogged = true;
+    console.log('[ENGAGEMENT_DEBUG] SUPABASE_URL', process.env.EXPO_PUBLIC_SUPABASE_URL);
+    console.log('[ENGAGEMENT_DEBUG] SUPABASE_URL bundled', supabaseUrl);
+  }
+
   logEngagementDebug('engagement start', {
     action: opts.action,
     postId: pid,
@@ -81,6 +89,7 @@ export async function incrementPostDownloadEngagement(opts: {
       p_action_type: opts.action,
       p_rendered_variant_hash: opts.renderedVariantHash,
     });
+    console.log('[ENGAGEMENT_DEBUG] rpc response', { data, error });
     savePerfStep('engagement.rpc.done', { ms: Math.round(performance.now() - rpcStart) });
 
     if (error) {

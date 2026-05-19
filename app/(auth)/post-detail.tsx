@@ -34,7 +34,7 @@ import {
 } from '../../lib/postDownloadEngagement';
 import { resolvePostIdForEngagement } from '../../lib/resolvePostIdForEngagement';
 import { sortUserFramesByDisplayKey } from '../../lib/sortUserFramesByDisplayKey';
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseUrl } from '../../lib/supabase';
 import { resolveUserFrameOverlayUrl } from '../../lib/userFrameUrl';
 import { savePerfEnd, savePerfStart, savePerfStep } from '../../utils/savePipelinePerf';
 
@@ -347,7 +347,16 @@ export default function PostDetailScreen() {
   const firePostDownloadEngagement = useCallback(
     async (action: PostDownloadAction) => {
       const postId = engagementPostIdRef.current || routeParamStr((params as any)?.postId);
-      if (!postId) return;
+      console.log('[ENGAGEMENT_DEBUG] SUPABASE_URL env', process.env.EXPO_PUBLIC_SUPABASE_URL);
+      console.log('[ENGAGEMENT_DEBUG] SUPABASE_URL bundled', supabaseUrl);
+      console.log('[ENGAGEMENT_DEBUG] resolved postId:', postId);
+      console.log('[ENGAGEMENT_DEBUG] route postId:', routeParamStr((params as any)?.postId));
+      console.log('[ENGAGEMENT_DEBUG] ref postId:', engagementPostIdRef.current);
+      console.log('[ENGAGEMENT_DEBUG] action:', action);
+      if (!postId) {
+        console.log('[ENGAGEMENT_DEBUG] EMPTY_POST_ID');
+        return;
+      }
       const n = originalData.length;
       const slideIdx = n > 0 ? ((activeIndex % n) + n) % n : 0;
       const imageUrl = originalData[slideIdx] ?? '';
