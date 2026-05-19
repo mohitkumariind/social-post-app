@@ -7,7 +7,8 @@ import { isPartyOtherId, type Party, PARTIES_DATA } from '../constants/Parties';
 import { useLang } from '../context/LanguageContext';
 import { useUser } from '../context/UserContext';
 import { supabase } from '../lib/supabase';
-import { getPartiesSafe } from '../lib/parties';
+import { fetchPartiesFromSupabase, getPartiesSafe, mergePartyNumericIds } from '../lib/parties';
+import { toPartyDB } from '../lib/party-mapper';
 
 const PARTY_INDICATOR_COLOR = '#8A2BE2';
 const PRIORITY_PARTY_SHORTNAMES = ['BJP', 'INC', 'AAP', 'BSP', 'SAD', 'SP', 'Other'] as const;
@@ -83,10 +84,23 @@ export default function PartyScreen() {
     if (!selectedParty) return;
     setSaving(true);
     try {
-      setUserInfo((prev) => ({ ...prev, partyName: selectedParty }));
       const { data: authUser } = await supabase.auth.getUser();
       if (authUser?.user?.id) {
-        await supabase.from('profiles').update({ party: selectedParty }).eq('id', authUser.user.id);
+        let listForSave = parties;
+        const fresh = await fetchPartiesFromSupabase();
+        if (fresh?.length) {
+          listForSave = mergePartyNumericIds(parties, fresh);
+        }
+        const { party, party_id } = toPartyDB(selectedParty, listForSave);
+        await supabase
+          .from('profiles')
+          .update({ party, party_id })
+          .eq('id', authUser.user.id);
+        setUserInfo((prev) => ({
+          ...prev,
+          partyName: party ?? prev.partyName ?? '',
+          party_id: party_id ?? prev.party_id,
+        }));
       }
     } catch (e) {
       if (__DEV__) console.warn('Party backend update failed');

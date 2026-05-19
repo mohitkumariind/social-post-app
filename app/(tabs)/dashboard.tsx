@@ -29,7 +29,7 @@ import { fetchDashboardPosts } from '../../services/postsService';
 import { gfxLogCapped } from '../../utils/dashboardDebug';
 import { hasUsableProfileForVisibility } from '../../utils/visibility';
 import { Colors } from '../../constants/Colors';
-import { normalizePartyId } from '../../constants/Parties';
+import { fromPartyDB } from '../../lib/party-mapper';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { supabase } from '../../lib/supabase';
@@ -326,20 +326,18 @@ export default function DashboardScreen() {
 
       if (profile) {
         const langRaw = String((profile as { language?: string }).language ?? '').trim();
-        const rawParty = String(profile.party ?? '').trim();
-        const party = normalizePartyId(rawParty) || rawParty;
+        const parsedParty = fromPartyDB({
+          party: (profile as { party?: unknown }).party,
+          party_id: (profile as { party_id?: unknown }).party_id,
+        });
+        const party = parsedParty.selection || parsedParty.party || '';
         const stateIdFromDb =
           typeof (profile as any).state_id === 'number'
             ? (profile as any).state_id
             : (profile as any).state_id != null
               ? Number((profile as any).state_id)
               : null;
-        const partyIdFromDb =
-          typeof (profile as any).party_id === 'number'
-            ? (profile as any).party_id
-            : (profile as any).party_id != null
-              ? Number((profile as any).party_id)
-              : null;
+        const partyIdFromDb = parsedParty.party_id;
         const lokIdFromDb =
           typeof (profile as any).loksabha_id === 'number'
             ? (profile as any).loksabha_id

@@ -25,6 +25,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
+import { fromPartyDB, isNumeric } from '@/lib/party-mapper';
 import { API_MAX_FRAMES_LIMIT } from '@/lib/perf-defaults';
 import { sortUserFramesByDisplayKey } from '@/lib/sortUserFramesByDisplayKey';
 
@@ -214,17 +215,22 @@ export default function UserManagement() {
     return '';
   };
 
-  const resolvePartyText = (rawParty: unknown): { id: string; label: string } => {
-    const raw = String(rawParty ?? '').trim();
-    if (!raw) return { id: '', label: '' };
-    const id = normalizePartyId(raw);
+  const resolvePartyText = (row: { party?: unknown; party_id?: unknown }): { id: string; label: string } => {
+    const parsed = fromPartyDB(row, PARTIES_DATA);
+    const id = parsed.selection || parsed.party || '';
+    if (!id) {
+      if (parsed.party_id != null && isNumeric(String(parsed.party_id))) {
+        const fromDb = partyLabelMap[String(parsed.party_id)];
+        if (fromDb) return { id: String(parsed.party_id), label: fromDb };
+      }
+      return { id: '', label: '' };
+    }
     const fromDb = partyLabelMap[id];
     if (fromDb) return { id, label: fromDb };
-    const short = partyShortLabel(id || raw);
+    const short = partyShortLabel(id);
     if (short) return { id, label: short };
-
-    // Final fallback: use raw.
-    return { id, label: raw };
+    if (isNumeric(id)) return { id: '', label: '' };
+    return { id, label: id };
   };
 
   // When party labels arrive, retrofit already-loaded users (avoids showing numeric ids like "7").
@@ -249,7 +255,10 @@ export default function UserManagement() {
 
   const mapProfileToAppUser = (row: Record<string, unknown>): AppUser => ({
     ...(() => {
-      const p = resolvePartyText((row as any).party ?? (row as any).party_id ?? (row as any).partyName);
+      const p = resolvePartyText({
+        party: (row as any).party,
+        party_id: (row as any).party_id,
+      });
       return { party: p.id, party_label: p.label };
     })(),
     id: typeof row.id === 'string' || typeof row.id === 'number' ? row.id : String(row.id ?? row.user_id ?? ''),

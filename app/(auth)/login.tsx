@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 
 import { Colors } from '../../constants/Colors';
-import { normalizePartyId } from '../../constants/Parties';
+import { fromPartyDB } from '../../lib/party-mapper';
 import { SUPPORTED_LANGS, useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { ensurePushTokenRegisteredAndSaved } from '../../lib/notifications';
@@ -140,12 +140,13 @@ export default function LoginScreen() {
       const row = (profileRow ?? {}) as Record<string, unknown>;
       /** Relogin skip: both `profiles.language` and `profiles.party` must be set (not null / not empty). */
       const langCell = row.language;
-      const partyCell = row.party ?? row.party_id;
       const langRaw =
         langCell != null && String(langCell).trim() !== '' ? String(langCell).trim() : '';
-      const rawParty =
-        partyCell != null && String(partyCell).trim() !== '' ? String(partyCell).trim() : '';
-      const partyCanon = rawParty ? normalizePartyId(rawParty) || rawParty : '';
+      const parsedParty = fromPartyDB({
+        party: row.party,
+        party_id: row.party_id,
+      });
+      const partyCanon = parsedParty.selection || parsedParty.party || '';
       const hasLang =
         langRaw.length > 0 && (SUPPORTED_LANGS as readonly string[]).includes(langRaw);
       const hasParty = partyCanon.length > 0;
@@ -154,15 +155,13 @@ export default function LoginScreen() {
 
       if (hasLang && hasParty) {
         changeLanguage(langRaw);
-        const partyIdFromDb =
-          typeof row.party_id === 'number' ? row.party_id : row.party_id != null ? Number(row.party_id) : null;
         setUserInfo((prev) => ({
           ...prev,
           ...baseUser,
           profile_id: sbUser.id,
           language: langRaw,
           partyName: partyCanon,
-          party_id: Number.isNaN(partyIdFromDb as number) ? prev.party_id : partyIdFromDb,
+          party_id: parsedParty.party_id ?? prev.party_id,
           name: String(row.name ?? '').trim() || baseUser.name,
           phone: String(row.phone ?? '').trim() || prev.phone,
           state: String(row.state ?? '').trim() || prev.state,

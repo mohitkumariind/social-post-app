@@ -24,6 +24,7 @@ import { type UserInfo, useUser } from '../context/UserContext';
 import { supabase, supabaseAnonKey, supabaseUrl } from '../lib/supabase';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getPartiesSafe } from '../lib/parties';
+import { fromPartyDB, toPartyDB } from '../lib/party-mapper';
 
 const PROFILE_REDIRECT_DONE_KEY = '@profile_redirect_done';
 
@@ -278,14 +279,12 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       if (!row) return;
 
       const p = row as Record<string, unknown>;
-      const rawParty = String(p.party ?? '').trim();
-      const partyCanon = normalizePartyId(rawParty, parties) || rawParty;
+      const parsedParty = fromPartyDB({ party: p.party, party_id: p.party_id }, parties);
       const avatarUrl = String(p.avatar_url ?? '').trim();
 
       const stateIdNum =
         typeof p.state_id === 'number' ? p.state_id : p.state_id != null ? Number(p.state_id) : null;
-      const partyIdNum =
-        typeof p.party_id === 'number' ? p.party_id : p.party_id != null ? Number(p.party_id) : null;
+      const partyIdNum = parsedParty.party_id;
       const groupIdNum =
         typeof p.group_id === 'number' ? p.group_id : p.group_id != null ? Number(p.group_id) : null;
       const groupTags =
@@ -309,7 +308,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         designation3: String(p.designation3 ?? p.designation_3 ?? '').trim(),
         designation4: String(p.designation4 ?? p.designation_4 ?? '').trim(),
         avatar_url: avatarUrl,
-        partyName: partyCanon,
+        partyName: parsedParty.selection || parsedParty.party || '',
         party_id: partyIdNum,
         state: String(p.state ?? '').trim(),
         state_id: stateIdNum,
@@ -494,12 +493,15 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       const uid = authUser.user.id;
       const resolvedAvatarUrl = formData.avatar_url;
 
+      const { party, party_id } = toPartyDB(formData.partyName, parties);
+
       const payload: Record<string, unknown> = {
         id: uid,
         name: formData.name.trim(),
         phone: formData.phone.trim(),
         email: formData.email.trim(),
-        party: formData.partyName,
+        party,
+        party_id,
         designation1: (formData.designation1 ?? '').trim(),
         designation2: (formData.designation2 ?? '').trim(),
         designation3: (formData.designation3 ?? '').trim(),
@@ -539,8 +541,7 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
       }
 
       const row: any = latest;
-      const rawParty = String(row.party ?? '').trim();
-      const partyCanon = normalizePartyId(rawParty, parties) || rawParty;
+      const parsedLatest = fromPartyDB({ party: row.party, party_id: row.party_id }, parties);
       setUserInfo((prev) => ({
         ...prev,
         profile_id: String(row.id ?? uid),
@@ -548,8 +549,8 @@ export function EditProfileScreen({ embedMode = false, onSaved, isVisible = true
         name: String(row.name ?? '').trim(),
         phone: String(row.phone ?? '').trim(),
         email: String(row.email ?? '').trim(),
-        partyName: partyCanon,
-        party_id: typeof row.party_id === 'number' ? row.party_id : row.party_id != null ? Number(row.party_id) : null,
+        partyName: parsedLatest.selection || parsedLatest.party || '',
+        party_id: parsedLatest.party_id,
         state: String(row.state ?? '').trim(),
         state_id: typeof row.state_id === 'number' ? row.state_id : row.state_id != null ? Number(row.state_id) : null,
         loksabha_id:

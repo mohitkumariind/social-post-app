@@ -3,9 +3,12 @@
  * Order and list as specified.
  */
 export interface Party {
+  /** Canonical slug for `profiles.party` (e.g. bjp, aap). Used as UI selection key. */
   id: string;
   shortName: string;
   fullName: string;
+  /** Numeric `parties` table id → `profiles.party_id` when the DB uses bigint/text numeric ids. */
+  numericId?: number | null;
 }
 
 /**
