@@ -1,101 +1,52 @@
-import * as Crypto from 'expo-crypto';
-import { savePerfEnd, savePerfStart, savePerfStep } from '../utils/savePipelinePerf';
 import { supabase, supabaseUrl } from './supabase';
-
-let engagementSupabaseUrlLogged = false;
 
 export type PostDownloadAction = 'save' | 'whatsapp_share';
 
-type IncrementPostDownloadResult = {
-  ok?: boolean;
-  deduped?: boolean;
-  reason?: string;
-};
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const LOG_PREFIX = '[postDownloadEngagement]';
 
-function logEngagementDebug(message: string, meta?: Record<string, unknown>): void {
-  if (meta && Object.keys(meta).length > 0) {
-    console.log(`${LOG_PREFIX} ${message}`, meta);
-  } else {
-    console.log(`${LOG_PREFIX} ${message}`);
-  }
-}
-
-function logEngagementError(message: string, meta?: Record<string, unknown>): void {
-  console.error(`${LOG_PREFIX} ${message}`, meta ?? {});
-}
+type RecordPostDownloadResult = {
+  ok?: boolean;
+  reason?: string;
+  id?: string;
+  post_id?: string;
+  user_id?: string;
+  event_id?: string | null;
+  created_at?: string;
+};
 
 /**
- * Stable fingerprint for "same render" dedup on server (frame + overlay + layout + slide).
+ * Phase 0 ingestion: one row per save/share via record_post_download_simple.
+ * No hash, dedupe, visibility gate, or posts.download_count update.
  */
-export async function hashRenderedPostVariant(parts: {
-  postId: string;
-  selectedFrame: number;
-  overlayUrl: string;
-  frameLayoutVariant: number;
-  imageUrl: string;
-}): Promise<string> {
-  savePerfStep('engagement.hashVariant.start');
-  const t0 = performance.now();
-  const payload = [
-    parts.postId,
-    String(parts.selectedFrame),
-    parts.overlayUrl,
-    String(parts.frameLayoutVariant),
-    parts.imageUrl,
-  ].join('\u001e');
-  const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, payload);
-  savePerfStep('engagement.hashVariant.done', { ms: Math.round(performance.now() - t0) });
-  return hash;
-}
-
-/**
- * Server-side unified counter (does not throw — save/share must not fail if tracking fails).
- * Dedupe and cooldown are enforced only in `increment_post_download` (same user+post+variant within 1h;
- * save vs whatsapp_share both count once per window; `action` is still sent for audit rows).
- */
-export async function incrementPostDownloadEngagement(opts: {
+export async function recordPostDownload(opts: {
   postId: string;
   action: PostDownloadAction;
-  renderedVariantHash: string;
 }): Promise<void> {
-  const pid = String(opts.postId ?? '').trim();
-  if (!pid) {
-    logEngagementError('skipped: missing postId', { action: opts.action });
+  const postId = String(opts.postId ?? '').trim();
+  if (!UUID_RE.test(postId)) {
+    console.error(`${LOG_PREFIX} skipped: invalid postId`, { postId: opts.postId, action: opts.action });
     return;
   }
 
-  if (!engagementSupabaseUrlLogged) {
-    engagementSupabaseUrlLogged = true;
-    console.log('[ENGAGEMENT_DEBUG] SUPABASE_URL', process.env.EXPO_PUBLIC_SUPABASE_URL);
-    console.log('[ENGAGEMENT_DEBUG] SUPABASE_URL bundled', supabaseUrl);
-  }
-
-  logEngagementDebug('engagement start', {
+  console.log(`${LOG_PREFIX} ingest start`, {
+    postId,
     action: opts.action,
-    postId: pid,
-    variantHashPrefix: opts.renderedVariantHash.slice(0, 12),
+    supabaseUrl,
   });
 
-  savePerfStart('engagement', { action: opts.action });
   try {
-    savePerfStep('engagement.rpc.start');
-    logEngagementDebug('RPC start', { rpc: 'increment_post_download', action: opts.action, postId: pid });
-
-    const rpcStart = performance.now();
-    const { data, error } = await supabase.rpc('increment_post_download', {
-      p_post_id: pid,
+    const { data, error } = await supabase.rpc('record_post_download_simple', {
+      p_post_id: postId,
       p_action_type: opts.action,
-      p_rendered_variant_hash: opts.renderedVariantHash,
     });
-    console.log('[ENGAGEMENT_DEBUG] rpc response', { data, error });
-    savePerfStep('engagement.rpc.done', { ms: Math.round(performance.now() - rpcStart) });
+
+    console.log(`${LOG_PREFIX} ingest response`, { data, error });
 
     if (error) {
-      logEngagementError('RPC failure', {
-        action: opts.action,
-        postId: pid,
+      console.error(`${LOG_PREFIX} RPC error`, {
         message: error.message,
         code: (error as { code?: string }).code,
         details: (error as { details?: string }).details,
@@ -105,34 +56,33 @@ export async function incrementPostDownloadEngagement(opts: {
 
     const result =
       data != null && typeof data === 'object' && !Array.isArray(data)
-        ? (data as IncrementPostDownloadResult)
+        ? (data as RecordPostDownloadResult)
         : null;
 
     if (result?.ok === false) {
-      logEngagementError('RPC declined', {
-        action: opts.action,
-        postId: pid,
-        reason: result.reason ?? 'unknown',
-        result,
-      });
+      console.error(`${LOG_PREFIX} RPC declined`, { reason: result.reason ?? 'unknown', result });
       return;
     }
 
-    logEngagementDebug('RPC success', {
-      action: opts.action,
-      postId: pid,
-      ok: result?.ok ?? true,
-      deduped: result?.deduped ?? false,
-      inserted: result?.deduped === false,
-      result,
+    console.log(`${LOG_PREFIX} ingest ok`, {
+      id: result?.id,
+      post_id: result?.post_id,
+      user_id: result?.user_id,
+      event_id: result?.event_id,
+      created_at: result?.created_at,
     });
   } catch (e) {
-    logEngagementError('exception', {
-      action: opts.action,
-      postId: pid,
+    console.error(`${LOG_PREFIX} exception`, {
       message: e instanceof Error ? e.message : String(e ?? 'unknown'),
     });
-  } finally {
-    savePerfEnd();
   }
+}
+
+/** @deprecated Use recordPostDownload — kept for call-site compatibility during phase 0. */
+export async function incrementPostDownloadEngagement(opts: {
+  postId: string;
+  action: PostDownloadAction;
+  renderedVariantHash?: string;
+}): Promise<void> {
+  await recordPostDownload({ postId: opts.postId, action: opts.action });
 }

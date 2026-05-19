@@ -27,14 +27,10 @@ import { Colors } from '../../constants/Colors';
 import { useLang } from '../../context/LanguageContext';
 import { useUser } from '../../context/UserContext';
 import { useFrameCutout } from '../../hooks/useFrameCutout';
-import {
-  hashRenderedPostVariant,
-  incrementPostDownloadEngagement,
-  type PostDownloadAction,
-} from '../../lib/postDownloadEngagement';
+import { recordPostDownload, type PostDownloadAction } from '../../lib/postDownloadEngagement';
 import { resolvePostIdForEngagement } from '../../lib/resolvePostIdForEngagement';
 import { sortUserFramesByDisplayKey } from '../../lib/sortUserFramesByDisplayKey';
-import { supabase, supabaseUrl } from '../../lib/supabase';
+import { supabase } from '../../lib/supabase';
 import { resolveUserFrameOverlayUrl } from '../../lib/userFrameUrl';
 import { savePerfEnd, savePerfStart, savePerfStep } from '../../utils/savePipelinePerf';
 
@@ -347,30 +343,14 @@ export default function PostDetailScreen() {
   const firePostDownloadEngagement = useCallback(
     async (action: PostDownloadAction) => {
       const postId = engagementPostIdRef.current || routeParamStr((params as any)?.postId);
-      console.log('[ENGAGEMENT_DEBUG] SUPABASE_URL env', process.env.EXPO_PUBLIC_SUPABASE_URL);
-      console.log('[ENGAGEMENT_DEBUG] SUPABASE_URL bundled', supabaseUrl);
-      console.log('[ENGAGEMENT_DEBUG] resolved postId:', postId);
-      console.log('[ENGAGEMENT_DEBUG] route postId:', routeParamStr((params as any)?.postId));
-      console.log('[ENGAGEMENT_DEBUG] ref postId:', engagementPostIdRef.current);
-      console.log('[ENGAGEMENT_DEBUG] action:', action);
+      console.log('[postDownloadEngagement] resolved postId:', postId, 'action:', action);
       if (!postId) {
-        console.log('[ENGAGEMENT_DEBUG] EMPTY_POST_ID');
+        console.error('[postDownloadEngagement] EMPTY_POST_ID — no RPC');
         return;
       }
-      const n = originalData.length;
-      const slideIdx = n > 0 ? ((activeIndex % n) + n) % n : 0;
-      const imageUrl = originalData[slideIdx] ?? '';
-      savePerfStep('engagement.prepare');
-      const hash = await hashRenderedPostVariant({
-        postId,
-        selectedFrame: safeSelectedFrame,
-        overlayUrl: String(overlayUrl ?? ''),
-        frameLayoutVariant,
-        imageUrl,
-      });
-      await incrementPostDownloadEngagement({ postId, action, renderedVariantHash: hash });
+      await recordPostDownload({ postId, action });
     },
-    [params, activeIndex, originalData, safeSelectedFrame, overlayUrl, frameLayoutVariant]
+    [params]
   );
 
   const alertSafe = (title: string | undefined | null, message: string | undefined | null) => {
