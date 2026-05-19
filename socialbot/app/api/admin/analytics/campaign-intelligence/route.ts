@@ -5,11 +5,8 @@ import {
   parseAnalyticsDateRange,
   parseAnalyticsPagination,
 } from '@/lib/admin/analyticsApi';
-import { assertEventReadableForAdminAnalytics } from '@/lib/admin/assert-event-analytics-scope';
 import { adminAnalyticsScopeCacheKey } from '@/lib/admin/rbac';
 import { requireAdminAnalyticsContext } from '../_lib';
-
-const EVENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** Server-side cache TTL for aggregated metrics (seconds). */
 const CI_METRICS_REVALIDATE_SEC = 45;
@@ -17,7 +14,7 @@ const CI_METRICS_REVALIDATE_SEC = 45;
 /**
  * GET /api/admin/analytics/campaign-intelligence
  *
- * Query: date_from, date_to (both or neither), event_id (optional UUID), search, offset, limit.
+ * Query: date_from, date_to (required), search, offset, limit. Phase 1: raw event download counts only.
  * RBAC scope is resolved in {@link requireAdminAnalyticsContext} before any metrics work.
  * Optional `fresh=1` bypasses the short-lived server cache (debugging).
  */
@@ -37,20 +34,8 @@ export async function GET(request: NextRequest) {
   const { offset, limit } = parseAnalyticsPagination(sp);
   const searchRaw = sp.get('search');
   const searchNorm = searchRaw != null && String(searchRaw).trim() !== '' ? String(searchRaw).trim() : null;
-  const rawEventId = (sp.get('event_id') ?? '').trim();
-  let eventId: string | null = null;
-  if (rawEventId !== '') {
-    if (!EVENT_ID_RE.test(rawEventId)) {
-      return NextResponse.json({ error: 'Invalid event_id' }, { status: 400 });
-    }
-    eventId = rawEventId;
-  }
-
-  if (eventId) {
-    const evOk = await assertEventReadableForAdminAnalytics(ctx.admin, ctx.scope, eventId);
-    if (!evOk.ok) {
-      return NextResponse.json({ error: evOk.error }, { status: evOk.status });
-    }
+  if (!dateFrom || !dateTo) {
+    return NextResponse.json({ error: 'date_from and date_to are required' }, { status: 400 });
   }
 
   const bypassCache = sp.get('fresh') === '1';
@@ -58,19 +43,17 @@ export async function GET(request: NextRequest) {
   const opts = {
     dateFrom,
     dateTo,
-    eventId,
     search: searchNorm,
     offset,
     limit,
   };
 
   const cacheKey = [
-    'campaign-intelligence',
-    'v2',
+    'raw-download-events',
+    'v1',
     adminAnalyticsScopeCacheKey(ctx.scope),
-    dateFrom ? dateFrom.toISOString() : 'none',
-    dateTo ? dateTo.toISOString() : 'none',
-    eventId ?? '',
+    dateFrom.toISOString(),
+    dateTo.toISOString(),
     searchNorm ?? '',
     String(offset),
     String(limit),

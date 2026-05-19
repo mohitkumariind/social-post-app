@@ -3,14 +3,9 @@ import type { VerifiedAdminAuth } from '@/lib/admin-gate';
 import { isCampaignManager } from '@/lib/admin-gate';
 import type { AdminAnalyticsScope } from '@/lib/admin/rbac';
 import { getScopedFilters, toAdminAnalyticsUserContext } from '@/lib/admin/rbac';
-import { getEventCampaignMetrics } from '@/lib/admin/campaign-intelligence';
+import { fetchRawDownloadEventsPage, fetchRawDownloadKpis } from '@/lib/admin/rawDownloadAnalytics';
 import {
   getEventNotDownloadedUsersPage,
-  getEventStats,
-  getNotDownloadedUsers,
-  getTimeBasedStats,
-  getTotalPoints,
-  type CampaignTimeBucketStats,
   type EventNotDownloadedUserRow,
 } from '@/lib/admin/analyticsService';
 import { resolveEffectiveGroupIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
@@ -25,7 +20,12 @@ export type AnalyticsKpisPayload = {
   all_time: { total_points: number };
   /** Present when both `date_from` and `date_to` are valid. */
   range: { date_from: string; date_to: string; total_points: number } | null;
-  time_buckets: CampaignTimeBucketStats;
+  time_buckets: {
+    today: number;
+    yesterday: number;
+    last7Days: number;
+    lastMonth: number;
+  };
 };
 
 export type AnalyticsEventPerformanceRow = {
@@ -133,49 +133,44 @@ export async function resolveAdminAnalyticsScope(
 }
 
 /**
- * All-time total, optional date-range total, and fixed UTC time buckets — all via `analyticsService`.
+ * Phase 1: raw download KPIs — COUNT(post_downloads) by created_at only (see admin_raw_download_kpis).
  */
 export async function fetchAnalyticsKpis(
   admin: SupabaseClient,
   scope: AdminAnalyticsScope,
   opts?: { dateFrom?: Date | null; dateTo?: Date | null }
 ): Promise<{ ok: true; data: AnalyticsKpisPayload } | { ok: false; error: string }> {
-  const epoch = new Date('2000-01-01T00:00:00.000Z');
-  const now = new Date();
   const from = opts?.dateFrom ?? null;
   const to = opts?.dateTo ?? null;
-  const [allTime, buckets, rangeMaybe] = await Promise.all([
-    getTotalPoints(admin, epoch, now, scope),
-    getTimeBasedStats(admin, scope),
-    from && to ? getTotalPoints(admin, from, to, scope) : Promise.resolve(null),
-  ]);
-  if (!allTime.ok) return { ok: false, error: allTime.error };
-  if (!buckets.ok) return { ok: false, error: buckets.error };
-  if (rangeMaybe != null && !rangeMaybe.ok) return { ok: false, error: rangeMaybe.error };
+  const result = await fetchRawDownloadKpis(admin, scope, { dateFrom: from, dateTo: to });
+  if (!result.ok) return { ok: false, error: result.error };
 
   let range: AnalyticsKpisPayload['range'] = null;
-  if (from && to && rangeMaybe != null && rangeMaybe.ok) {
+  if (from && to && result.data.range_count != null) {
     range = {
       date_from: from.toISOString(),
       date_to: to.toISOString(),
-      total_points: rangeMaybe.count,
+      total_points: result.data.range_count,
     };
   }
 
   return {
     ok: true,
     data: {
-      all_time: { total_points: allTime.count },
+      all_time: { total_points: result.data.all_time },
       range,
-      time_buckets: buckets.stats,
+      time_buckets: {
+        today: result.data.today,
+        yesterday: result.data.yesterday,
+        last7Days: result.data.last7_days,
+        lastMonth: result.data.last_month,
+      },
     },
   };
 }
 
 /**
- * Per-event downloads + notification metrics with RBAC from {@link getScopedFilters} / `ctx.scope`
- * (resolved in {@link resolveAdminAnalyticsScope}). Date filters apply server-side to downloads and
- * notification_broadcasts; search and optional `event_id` are enforced in SQL only (no client-side filtering).
+ * Phase 1: per-event raw download counts (post_downloads → posts → events, dashboard_category excluded).
  */
 export async function fetchCampaignIntelligencePage(
   admin: SupabaseClient,
@@ -189,28 +184,28 @@ export async function fetchCampaignIntelligencePage(
     limit: number;
   }
 ): Promise<{ ok: true; data: CampaignIntelligenceApiPayload } | { ok: false; error: string }> {
-  const result = await getEventCampaignMetrics(admin, scope, {
-    downloadDateFrom: opts.dateFrom,
-    downloadDateTo: opts.dateTo,
-    notificationDateFrom: opts.dateFrom,
-    notificationDateTo: opts.dateTo,
-    search: opts.search != null && String(opts.search).trim() !== '' ? String(opts.search).trim() : null,
-    eventId: opts.eventId ?? null,
-    limit: opts.limit,
+  if (!opts.dateFrom || !opts.dateTo) {
+    return { ok: false, error: 'date_from and date_to are required' };
+  }
+  const result = await fetchRawDownloadEventsPage(admin, scope, {
+    dateFrom: opts.dateFrom,
+    dateTo: opts.dateTo,
+    search: opts.search,
     offset: opts.offset,
+    limit: opts.limit,
   });
   if (!result.ok) return { ok: false, error: result.error };
   const events: CampaignIntelligenceApiEventRow[] = result.rows.map((r) => ({
     event_id: r.event_id,
-    title: r.event_title,
-    raw_downloads: r.total_downloads,
-    engaged_users: r.engaged_users,
-    sent: r.total_notifications_sent,
-    delivered: r.total_notifications_delivered,
-    opened: r.total_notifications_opened,
-    not_downloaded: r.not_downloaded_count,
-    open_rate: r.open_rate,
-    download_rate: r.download_rate,
+    title: r.title,
+    raw_downloads: r.downloads,
+    engaged_users: 0,
+    sent: 0,
+    delivered: 0,
+    opened: 0,
+    not_downloaded: 0,
+    open_rate: null,
+    download_rate: null,
   }));
   return { ok: true, data: { events, total: result.total } };
 }
@@ -286,42 +281,39 @@ function eventDisplayTitle(m: EventMeta | undefined): string {
 export async function fetchAnalyticsEventsPage(
   admin: SupabaseClient,
   scope: AdminAnalyticsScope,
-  opts: { search?: string; offset: number; limit: number }
-): Promise<{ ok: true; data: AnalyticsEventsResponse } | { ok: false; error: string }> {
-  const stats = await getEventStats(admin, scope);
-  if (!stats.ok) return { ok: false, error: stats.error };
-  const capped = stats.rows.slice(0, ADMIN_ANALYTICS_LIST_CAP);
-  const ids = capped.map((r) => r.event_id).filter(Boolean);
-  const labels = await loadEventLabels(admin, ids);
-
-  const search = normalizeSearch(opts.search);
-  const merged: AnalyticsEventPerformanceRow[] = capped.map((r) => {
-    const meta = labels.get(r.event_id);
-    return {
-      event_id: r.event_id,
-      download_count: r.download_count,
-      title: eventDisplayTitle(meta),
-    };
-  });
-
-  let filtered = merged;
-  if (search) {
-    filtered = merged.filter((row) => {
-      const hay = `${row.title} ${row.event_id}`.toLowerCase();
-      return hay.includes(search);
-    });
+  opts: {
+    search?: string;
+    offset: number;
+    limit: number;
+    dateFrom?: Date | null;
+    dateTo?: Date | null;
   }
-  filtered.sort((a, b) => b.download_count - a.download_count || a.event_id.localeCompare(b.event_id));
+): Promise<{ ok: true; data: AnalyticsEventsResponse } | { ok: false; error: string }> {
+  const from = opts.dateFrom ?? new Date('2000-01-01T00:00:00.000Z');
+  const to = opts.dateTo ?? new Date();
+  const result = await fetchRawDownloadEventsPage(admin, scope, {
+    dateFrom: from,
+    dateTo: to,
+    search: opts.search,
+    offset: 0,
+    limit: ADMIN_ANALYTICS_LIST_CAP,
+  });
+  if (!result.ok) return { ok: false, error: result.error };
 
-  const total = filtered.length;
+  const rows: AnalyticsEventPerformanceRow[] = result.rows.map((r) => ({
+    event_id: r.event_id,
+    download_count: r.downloads,
+    title: r.title,
+  }));
+
+  const total = rows.length;
   const offset = Math.min(opts.offset, total);
   const limit = opts.limit;
-  const rows = filtered.slice(offset, offset + limit);
 
   return {
     ok: true,
     data: {
-      rows,
+      rows: rows.slice(offset, offset + limit),
       pagination: { total, offset, limit },
     },
   };
@@ -422,6 +414,8 @@ export async function buildAnalyticsExportCsv(
       search: opts.search,
       offset: 0,
       limit: ADMIN_ANALYTICS_EXPORT_MAX_ROWS,
+      dateFrom: opts.dateFrom,
+      dateTo: opts.dateTo,
     });
     if (!page.ok) return { ok: false, error: page.error };
     const rows = page.data.rows.slice(0, ADMIN_ANALYTICS_EXPORT_MAX_ROWS);
