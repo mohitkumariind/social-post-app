@@ -1,8 +1,28 @@
 import * as Crypto from 'expo-crypto';
-import { savePerfStep } from '../utils/savePipelinePerf';
+import { savePerfEnd, savePerfStart, savePerfStep } from '../utils/savePipelinePerf';
 import { supabase } from './supabase';
 
 export type PostDownloadAction = 'save' | 'whatsapp_share';
+
+type IncrementPostDownloadResult = {
+  ok?: boolean;
+  deduped?: boolean;
+  reason?: string;
+};
+
+const LOG_PREFIX = '[postDownloadEngagement]';
+
+function logEngagementDebug(message: string, meta?: Record<string, unknown>): void {
+  if (meta && Object.keys(meta).length > 0) {
+    console.log(`${LOG_PREFIX} ${message}`, meta);
+  } else {
+    console.log(`${LOG_PREFIX} ${message}`);
+  }
+}
+
+function logEngagementError(message: string, meta?: Record<string, unknown>): void {
+  console.error(`${LOG_PREFIX} ${message}`, meta ?? {});
+}
 
 /**
  * Stable fingerprint for "same render" dedup on server (frame + overlay + layout + slide).
@@ -29,7 +49,7 @@ export async function hashRenderedPostVariant(parts: {
 }
 
 /**
- * Server-side unified counter (never throws; failures are dev-logged only).
+ * Server-side unified counter (does not throw — save/share must not fail if tracking fails).
  * Dedupe and cooldown are enforced only in `increment_post_download` (same user+post+variant within 1h;
  * save vs whatsapp_share both count once per window; `action` is still sent for audit rows).
  */
@@ -39,10 +59,22 @@ export async function incrementPostDownloadEngagement(opts: {
   renderedVariantHash: string;
 }): Promise<void> {
   const pid = String(opts.postId ?? '').trim();
-  if (!pid) return;
+  if (!pid) {
+    logEngagementError('skipped: missing postId', { action: opts.action });
+    return;
+  }
+
+  logEngagementDebug('engagement start', {
+    action: opts.action,
+    postId: pid,
+    variantHashPrefix: opts.renderedVariantHash.slice(0, 12),
+  });
+
   savePerfStart('engagement', { action: opts.action });
   try {
     savePerfStep('engagement.rpc.start');
+    logEngagementDebug('RPC start', { rpc: 'increment_post_download', action: opts.action, postId: pid });
+
     const rpcStart = performance.now();
     const { data, error } = await supabase.rpc('increment_post_download', {
       p_post_id: pid,
@@ -50,15 +82,47 @@ export async function incrementPostDownloadEngagement(opts: {
       p_rendered_variant_hash: opts.renderedVariantHash,
     });
     savePerfStep('engagement.rpc.done', { ms: Math.round(performance.now() - rpcStart) });
+
     if (error) {
-      if (__DEV__) console.warn('[postDownloadEngagement] RPC error:', error.message);
+      logEngagementError('RPC failure', {
+        action: opts.action,
+        postId: pid,
+        message: error.message,
+        code: (error as { code?: string }).code,
+        details: (error as { details?: string }).details,
+      });
       return;
     }
-    if (__DEV__ && data && typeof data === 'object' && (data as { ok?: boolean }).ok === false) {
-      console.warn('[postDownloadEngagement] RPC declined:', data);
+
+    const result =
+      data != null && typeof data === 'object' && !Array.isArray(data)
+        ? (data as IncrementPostDownloadResult)
+        : null;
+
+    if (result?.ok === false) {
+      logEngagementError('RPC declined', {
+        action: opts.action,
+        postId: pid,
+        reason: result.reason ?? 'unknown',
+        result,
+      });
+      return;
     }
+
+    logEngagementDebug('RPC success', {
+      action: opts.action,
+      postId: pid,
+      ok: result?.ok ?? true,
+      deduped: result?.deduped ?? false,
+      inserted: result?.deduped === false,
+      result,
+    });
   } catch (e) {
-    if (__DEV__) console.warn('[postDownloadEngagement] exception:', e);
+    logEngagementError('exception', {
+      action: opts.action,
+      postId: pid,
+      message: e instanceof Error ? e.message : String(e ?? 'unknown'),
+    });
   } finally {
     savePerfEnd();
   }
