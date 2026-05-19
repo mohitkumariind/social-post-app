@@ -52,17 +52,4 @@ export function getMockTwitterCampaignAssignment(assignmentId: string): MockTwit
   return MOCK_ASSIGNMENTS[key] ?? null;
 }
 
-/** Build https://twitter.com/intent/tweet?text=… (X / Twitter web intent). */
-export function buildTwitterWebIntentTweetUrl(args: { text: string; hashtags: string[] }): string {
-  const tagLine = args.hashtags
-    .map((h) => {
-      const t = String(h).trim();
-      if (!t) return '';
-      return t.startsWith('#') ? t : `#${t}`;
-    })
-    .filter(Boolean)
-    .join(' ');
-  const combined = [args.text.trim(), tagLine].filter(Boolean).join('\n\n');
-  const params = new URLSearchParams({ text: combined });
-  return `https://twitter.com/intent/tweet?${params.toString()}`;
-}
+export { buildTwitterWebIntentTweetUrl } from '../lib/twitterCampaignAssignment';

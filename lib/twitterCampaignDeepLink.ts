@@ -1,6 +1,5 @@
 import * as ExpoLinking from 'expo-linking';
 
-import { getMockTwitterCampaignAssignment } from '../constants/twitterCampaignMock';
 import { isTwitterCampaignAssignmentUuid } from './twitterCampaignAnalytics';
 
 /** Push `data.type` and deep-link host path for Twitter campaign assignments (Phase 3 mock). */
@@ -44,11 +43,8 @@ export function getTwitterCampaignAssignmentIdFromPayload(data: unknown): string
   return s || null;
 }
 
-/** UUID assignment or known in-app mock id only — blocks arbitrary deep-link / push spoof paths. */
+/** UUID assignment only — blocks arbitrary deep-link / push spoof paths. */
 export function isNavigableTwitterCampaignAssignmentId(id: string | null | undefined): boolean {
   if (!id || typeof id !== 'string') return false;
-  const t = id.trim();
-  if (!t) return false;
-  if (isTwitterCampaignAssignmentUuid(t)) return true;
-  return getMockTwitterCampaignAssignment(t) != null;
+  return isTwitterCampaignAssignmentUuid(id.trim());
 }
