@@ -37,7 +37,7 @@ import { EditProfileScreen } from '../edit-profile';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 /** Dashboard par aane + profile load ke baad, incomplete users ko itni der baad edit-profile modal */
-const EDIT_PROFILE_GATE_DELAY_MS = 30_000;
+const EDIT_PROFILE_GATE_DELAY_MS = 10_000;
 
 /** Solid skeleton while graphics thumbnails load (no blurhash). */
 const IMAGE_SKELETON_BG = '#E8E8E8';
