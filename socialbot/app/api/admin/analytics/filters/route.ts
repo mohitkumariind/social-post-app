@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   assertAnalyticsGeoFiltersAllowed,
-  fetchAnalyticsKpis,
+  fetchAnalyticsFilterOptions,
   parseAnalyticsGeoFilters,
 } from '@/lib/admin/analyticsApi';
 import { requireAdminAnalyticsContext } from '../_lib';
@@ -10,13 +10,14 @@ export async function GET(request: NextRequest) {
   const ctx = await requireAdminAnalyticsContext();
   if (!ctx.ok) return ctx.response;
 
-  const filters = parseAnalyticsGeoFilters(request.nextUrl.searchParams);
-  const allowed = assertAnalyticsGeoFiltersAllowed(ctx.auth, filters);
+  const sp = request.nextUrl.searchParams;
+  const { stateId } = parseAnalyticsGeoFilters(sp);
+  const allowed = assertAnalyticsGeoFiltersAllowed(ctx.auth, { stateId, party: null });
   if (!allowed.ok) {
     return NextResponse.json({ error: allowed.message }, { status: allowed.status });
   }
 
-  const result = await fetchAnalyticsKpis(ctx.admin, ctx.scope, filters);
+  const result = await fetchAnalyticsFilterOptions(ctx.admin, ctx.auth, stateId);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 500 });
   }

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  assertAnalyticsGeoFiltersAllowed,
   buildAnalyticsExportCsv,
   parseAnalyticsDateRange,
+  parseAnalyticsGeoFilters,
   type AnalyticsExportKind,
 } from '@/lib/admin/analyticsApi';
 import { assertEventReadableForAdminAnalytics } from '@/lib/admin/assert-event-analytics-scope';
@@ -42,11 +44,21 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  const geo = parseAnalyticsGeoFilters(sp);
+  if (kind === 'kpis') {
+    const allowed = assertAnalyticsGeoFiltersAllowed(ctx.auth, geo);
+    if (!allowed.ok) {
+      return NextResponse.json({ error: allowed.message }, { status: allowed.status });
+    }
+  }
+
   const pack = await buildAnalyticsExportCsv(ctx.admin, ctx.scope, kind, {
     dateFrom,
     dateTo,
     search,
     eventId: eventId || null,
+    stateId: geo.stateId,
+    party: geo.party,
   });
   if (!pack.ok) {
     return NextResponse.json({ error: pack.error }, { status: 400 });

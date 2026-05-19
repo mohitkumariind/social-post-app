@@ -1,34 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { unstable_cache } from 'next/cache';
-import { fetchCampaignIntelligencePage, parseAnalyticsPagination } from '@/lib/admin/analyticsApi';
+import {
+  assertAnalyticsGeoFiltersAllowed,
+  fetchCampaignIntelligencePage,
+  parseAnalyticsGeoFilters,
+  parseAnalyticsPagination,
+} from '@/lib/admin/analyticsApi';
 import { adminAnalyticsScopeCacheKey } from '@/lib/admin/rbac';
 import { requireAdminAnalyticsContext } from '../_lib';
 
-/** Server-side cache TTL for aggregated metrics (seconds). */
 const CI_METRICS_REVALIDATE_SEC = 45;
 
 /**
  * GET /api/admin/analytics/campaign-intelligence
- *
- * Query: search, offset, limit. Fixed last-7-day event metrics (posts, raw downloads, engaged users).
+ * Fixed last-7-day event metrics; optional state_id + party filters.
  */
 export async function GET(request: NextRequest) {
   const ctx = await requireAdminAnalyticsContext();
   if (!ctx.ok) return ctx.response;
 
   const sp = request.nextUrl.searchParams;
+  const filters = parseAnalyticsGeoFilters(sp);
+  const allowed = assertAnalyticsGeoFiltersAllowed(ctx.auth, filters);
+  if (!allowed.ok) {
+    return NextResponse.json({ error: allowed.message }, { status: allowed.status });
+  }
+
   const { offset, limit } = parseAnalyticsPagination(sp);
-  const searchRaw = sp.get('search');
-  const searchNorm = searchRaw != null && String(searchRaw).trim() !== '' ? String(searchRaw).trim() : null;
   const bypassCache = sp.get('fresh') === '1';
 
-  const opts = { search: searchNorm, offset, limit };
+  const opts = { filters, offset, limit };
 
   const cacheKey = [
     'event-metrics-7d',
-    'v1',
+    'v3',
     adminAnalyticsScopeCacheKey(ctx.scope),
-    searchNorm ?? '',
+    String(filters.stateId ?? ''),
+    filters.party ?? '',
     String(offset),
     String(limit),
   ];

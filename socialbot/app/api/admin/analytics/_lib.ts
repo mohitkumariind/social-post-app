@@ -17,7 +17,7 @@ import {
  * before any analytics RPC or scoped query runs. Call this first in every `/api/admin/analytics/*` route.
  */
 export async function requireAdminAnalyticsContext(): Promise<
-  | { ok: true; admin: SupabaseClient; scope: AdminAnalyticsScope }
+  | { ok: true; admin: SupabaseClient; scope: AdminAnalyticsScope; auth: VerifiedAdminAuth }
   | { ok: false; response: NextResponse }
 > {
   const supabase = await createSupabaseServerClient();
@@ -58,5 +58,5 @@ export async function requireAdminAnalyticsContext(): Promise<
   if (!scoped.ok) {
     return { ok: false, response: NextResponse.json({ error: scoped.error }, { status: scoped.status }) };
   }
-  return { ok: true, admin, scope: scoped.scope };
+  return { ok: true, admin, scope: scoped.scope, auth };
 }

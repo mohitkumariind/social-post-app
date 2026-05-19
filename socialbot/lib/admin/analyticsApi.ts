@@ -1,9 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
-import { isCampaignManager } from '@/lib/admin-gate';
+import { isCampaignManager, isModerator } from '@/lib/admin-gate';
 import type { AdminAnalyticsScope } from '@/lib/admin/rbac';
 import { getScopedFilters, toAdminAnalyticsUserContext } from '@/lib/admin/rbac';
-import { fetchEngagedUsersKpis, fetchEventMetrics7dPage } from '@/lib/admin/rawDownloadAnalytics';
+import { getPartyLabel } from '@/lib/constants';
+import {
+  fetchAnalyticsKpisRpc,
+  fetchDistinctPartiesForState,
+  fetchEventMetrics7dPage,
+  type AnalyticsGeoFilters,
+  type AnalyticsTimeBuckets,
+} from '@/lib/admin/rawDownloadAnalytics';
+import { fetchStateFilterOptions } from '@/lib/admin/leaderboardService';
 import {
   getEventNotDownloadedUsersPage,
   type EventNotDownloadedUserRow,
@@ -16,16 +24,25 @@ export const ADMIN_ANALYTICS_LIST_CAP = 20_000;
 export const ADMIN_ANALYTICS_MAX_OFFSET = 50_000;
 export const ADMIN_ANALYTICS_EXPORT_MAX_ROWS = 10_000;
 
+export type AnalyticsKpiBuckets = {
+  today: number;
+  yesterday: number;
+  last7Days: number;
+  last30Days: number;
+  currentMonth: number;
+  lastMonth: number;
+  allTime: number;
+};
+
 export type AnalyticsKpisPayload = {
-  time_buckets: {
-    today: number;
-    yesterday: number;
-    last7Days: number;
-    last30Days: number;
-    currentMonth: number;
-    lastMonth: number;
-    allTime: number;
-  };
+  engaged_users: AnalyticsKpiBuckets;
+  raw_downloads: AnalyticsKpiBuckets;
+};
+
+export type AnalyticsFilterOption = { id: string; label: string };
+export type AnalyticsFiltersPayload = {
+  states: { state_id: number; state: string }[];
+  parties: AnalyticsFilterOption[];
 };
 
 export type AnalyticsEventPerformanceRow = {
@@ -125,28 +142,87 @@ export async function resolveAdminAnalyticsScope(
   return { ok: true, scope: getScopedFilters(ctx) };
 }
 
+function mapTimeBuckets(b: AnalyticsTimeBuckets): AnalyticsKpiBuckets {
+  return {
+    today: b.today,
+    yesterday: b.yesterday,
+    last7Days: b.last7_days,
+    last30Days: b.last_30_days,
+    currentMonth: b.current_month,
+    lastMonth: b.last_month,
+    allTime: b.all_time,
+  };
+}
+
+export function parseAnalyticsGeoFilters(sp: URLSearchParams): AnalyticsGeoFilters {
+  const stateRaw = sp.get('state_id');
+  const stateId =
+    stateRaw != null && String(stateRaw).trim() !== '' && Number.isFinite(Number(stateRaw))
+      ? Number(stateRaw)
+      : null;
+  const partyRaw = sp.get('party');
+  const party =
+    partyRaw != null && String(partyRaw).trim() !== '' ? String(partyRaw).trim() : null;
+  return { stateId, party };
+}
+
+export function assertAnalyticsGeoFiltersAllowed(
+  auth: Pick<VerifiedAdminAuth, 'role' | 'assigned_state_ids'>,
+  filters: AnalyticsGeoFilters
+): { ok: true } | { ok: false; message: string; status: number } {
+  if (isModerator(auth)) {
+    if (filters.party) {
+      return { ok: false, message: 'Forbidden: party filter not allowed for moderator', status: 403 };
+    }
+    if (filters.stateId != null) {
+      const allowed = auth.assigned_state_ids.some((x) => Number(x) === Number(filters.stateId));
+      if (!allowed) {
+        return { ok: false, message: 'Forbidden: state filter outside assigned states', status: 403 };
+      }
+    }
+  }
+  if (isCampaignManager(auth)) {
+    if (filters.stateId != null || filters.party) {
+      return { ok: false, message: 'Forbidden: state/party filters not allowed for campaign manager', status: 403 };
+    }
+  }
+  return { ok: true };
+}
+
+export async function fetchAnalyticsFilterOptions(
+  admin: SupabaseClient,
+  auth: VerifiedAdminAuth,
+  stateId: number | null
+): Promise<{ ok: true; data: AnalyticsFiltersPayload } | { ok: false; error: string }> {
+  const states = await fetchStateFilterOptions(admin, auth);
+  if (stateId == null) {
+    return { ok: true, data: { states, parties: [] } };
+  }
+  const partiesRes = await fetchDistinctPartiesForState(admin, stateId);
+  if (!partiesRes.ok) return { ok: false, error: partiesRes.error };
+  const parties = partiesRes.parties.map((p) => ({
+    id: p.id,
+    label: getPartyLabel(p.id) || p.label,
+  }));
+  return { ok: true, data: { states, parties } };
+}
+
 /**
- * Global unique engaged users KPIs — COUNT(DISTINCT user_id) from post_downloads (UTC windows).
+ * Global KPIs: unique engaged users + raw downloads (UTC windows), filterable by state/party.
  */
 export async function fetchAnalyticsKpis(
   admin: SupabaseClient,
-  scope: AdminAnalyticsScope
+  scope: AdminAnalyticsScope,
+  filters: AnalyticsGeoFilters
 ): Promise<{ ok: true; data: AnalyticsKpisPayload } | { ok: false; error: string }> {
-  const result = await fetchEngagedUsersKpis(admin, scope);
+  const result = await fetchAnalyticsKpisRpc(admin, scope, filters);
   if (!result.ok) return { ok: false, error: result.error };
 
   return {
     ok: true,
     data: {
-      time_buckets: {
-        today: result.data.today,
-        yesterday: result.data.yesterday,
-        last7Days: result.data.last7_days,
-        last30Days: result.data.last_30_days,
-        currentMonth: result.data.current_month,
-        lastMonth: result.data.last_month,
-        allTime: result.data.all_time,
-      },
+      engaged_users: mapTimeBuckets(result.data.engaged_users),
+      raw_downloads: mapTimeBuckets(result.data.raw_downloads),
     },
   };
 }
@@ -161,12 +237,14 @@ export async function fetchCampaignIntelligencePage(
     search?: string | null;
     offset: number;
     limit: number;
+    filters: AnalyticsGeoFilters;
   }
 ): Promise<{ ok: true; data: CampaignIntelligenceApiPayload } | { ok: false; error: string }> {
   const result = await fetchEventMetrics7dPage(admin, scope, {
     search: opts.search,
     offset: opts.offset,
     limit: opts.limit,
+    filters: opts.filters,
   });
   if (!result.ok) return { ok: false, error: result.error };
   const events: CampaignIntelligenceApiEventRow[] = result.rows.map((r) => ({
@@ -260,6 +338,7 @@ export async function fetchAnalyticsEventsPage(
     search: opts.search,
     offset: 0,
     limit: ADMIN_ANALYTICS_LIST_CAP,
+    filters: { stateId: null, party: null },
   });
   if (!result.ok) return { ok: false, error: result.error };
 
@@ -346,23 +425,31 @@ export async function buildAnalyticsExportCsv(
     dateTo?: Date | null;
     search?: string;
     eventId?: string | null;
+    stateId?: number | null;
+    party?: string | null;
   }
 ): Promise<{ ok: true; csv: string; filename: string } | { ok: false; error: string }> {
   const stamp = new Date().toISOString().slice(0, 10);
 
   if (kind === 'kpis') {
-    const k = await fetchAnalyticsKpis(admin, scope);
+    const filters: AnalyticsGeoFilters = {
+      stateId:
+        opts.stateId != null && Number.isFinite(Number(opts.stateId)) ? Number(opts.stateId) : null,
+      party: opts.party?.trim() ? opts.party.trim() : null,
+    };
+    const k = await fetchAnalyticsKpis(admin, scope, filters);
     if (!k.ok) return { ok: false, error: k.error };
-    const b = k.data.time_buckets;
+    const eu = k.data.engaged_users;
+    const rd = k.data.raw_downloads;
     const lines = [
-      ['period', 'engaged_users'].map(csvEscapeCell).join(','),
-      ['today', String(b.today)].map(csvEscapeCell).join(','),
-      ['yesterday', String(b.yesterday)].map(csvEscapeCell).join(','),
-      ['last_7_days', String(b.last7Days)].map(csvEscapeCell).join(','),
-      ['last_30_days', String(b.last30Days)].map(csvEscapeCell).join(','),
-      ['current_month', String(b.currentMonth)].map(csvEscapeCell).join(','),
-      ['last_month', String(b.lastMonth)].map(csvEscapeCell).join(','),
-      ['all_time', String(b.allTime)].map(csvEscapeCell).join(','),
+      ['period', 'engaged_users', 'raw_downloads'].map(csvEscapeCell).join(','),
+      ['today', String(eu.today), String(rd.today)].map(csvEscapeCell).join(','),
+      ['yesterday', String(eu.yesterday), String(rd.yesterday)].map(csvEscapeCell).join(','),
+      ['last_7_days', String(eu.last7Days), String(rd.last7Days)].map(csvEscapeCell).join(','),
+      ['last_30_days', String(eu.last30Days), String(rd.last30Days)].map(csvEscapeCell).join(','),
+      ['current_month', String(eu.currentMonth), String(rd.currentMonth)].map(csvEscapeCell).join(','),
+      ['last_month', String(eu.lastMonth), String(rd.lastMonth)].map(csvEscapeCell).join(','),
+      ['all_time', String(eu.allTime), String(rd.allTime)].map(csvEscapeCell).join(','),
     ];
     return { ok: true, csv: lines.join('\n') + '\n', filename: `analytics-kpis-${stamp}.csv` };
   }
