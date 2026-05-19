@@ -5,6 +5,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { RbacError, requireRole } from '@/lib/rbac/require';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 function json(body: unknown, status = 200) {
@@ -17,6 +18,38 @@ function json(body: unknown, status = 200) {
  *
  * POST body (optional): { "maxWaveRuns": 4, "maxOutboxRuns": 6 }
  */
+
+/** Browser / health checks use GET; workers run only on POST. */
+export async function GET() {
+  const supabase = await createSupabaseServerClient();
+  const auth = await validateAdminSession(supabase);
+  if (!auth.ok) {
+    return json(
+      {
+        error: auth.status === 401 ? 'Unauthorized' : 'Forbidden',
+        methods: ['POST'],
+        hint: 'Sign in to the admin panel, then POST to this URL.',
+      },
+      auth.status
+    );
+  }
+
+  try {
+    requireRole(auth, ['admin']);
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message, methods: ['POST'] }, e.status);
+    return json({ error: 'Forbidden', methods: ['POST'] }, 403);
+  }
+
+  return json({
+    ok: true,
+    endpoint: '/api/admin/twitter-campaign-workers',
+    methods: ['POST'],
+    cron_secret_configured: Boolean(process.env.CRON_SECRET?.trim()),
+    hint: 'POST with optional JSON body: { "maxWaveRuns": 4, "maxOutboxRuns": 6 }',
+  });
+}
+
 export async function POST(req: Request) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);

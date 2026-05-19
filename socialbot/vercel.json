@@ -4,5 +4,16 @@
       "path": "/api/cron/twitter-campaign",
       "schedule": "*/2 * * * *"
     }
+  ],
+  "headers": [
+    {
+      "source": "/api/admin/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "private, no-cache, no-store, must-revalidate"
+        }
+      ]
+    }
   ]
 }
