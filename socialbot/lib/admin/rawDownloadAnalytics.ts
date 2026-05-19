@@ -18,6 +18,7 @@ export type RawDownloadEventRow = {
   event_id: string;
   title: string;
   downloads: number;
+  engaged_users: number;
 };
 
 function clampRange(from: Date, to: Date): { fromIso: string; toIso: string } | { error: string } {
@@ -133,6 +134,7 @@ export async function fetchRawDownloadEventsPage(
       event_id: String(r.event_id ?? ''),
       title: String(r.title ?? '—'),
       downloads: Number(r.downloads ?? 0),
+      engaged_users: Number(r.engaged_users ?? 0),
     }));
     return { ok: true, rows, total: Number.isFinite(total) ? total : 0 };
   }

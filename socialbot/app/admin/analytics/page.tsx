@@ -3,23 +3,31 @@
 import { Download, LineChart, Loader2 } from 'lucide-react';
 import React, { useCallback, useEffect, useState } from 'react';
 
-type KpisResponse = {
-  all_time: { total_points: number };
-  range: { date_from: string; date_to: string; total_points: number } | null;
-  time_buckets: {
-    today: number;
-    yesterday: number;
-    last7Days: number;
-    last30Days: number;
-    currentMonth: number;
-    lastMonth: number;
-  };
+type KpiBuckets = {
+  today: number;
+  yesterday: number;
+  last7Days: number;
+  last30Days: number;
+  currentMonth: number;
+  lastMonth: number;
+  allTime: number;
 };
+
+const KPI_CARDS: { key: keyof KpiBuckets; label: string; hint: string }[] = [
+  { key: 'today', label: 'Today', hint: 'UTC calendar day' },
+  { key: 'yesterday', label: 'Yesterday', hint: 'UTC calendar day' },
+  { key: 'last7Days', label: 'Last 7 Days', hint: 'Rolling window' },
+  { key: 'last30Days', label: 'Last 30 Days', hint: 'Rolling window' },
+  { key: 'currentMonth', label: 'Current Month', hint: 'Calendar month (UTC)' },
+  { key: 'lastMonth', label: 'Last Month', hint: 'Calendar month (UTC)' },
+  { key: 'allTime', label: 'All Time', hint: 'Entire dataset' },
+];
 
 type EventDownloadRow = {
   event_id: string;
   title: string;
   downloads: number;
+  engagedUsers: number;
 };
 
 const EVENTS_PAGE_SIZE = 50;
@@ -39,7 +47,7 @@ function num(n: number): string {
 }
 
 export default function AdminAnalyticsPage() {
-  const [kpis, setKpis] = useState<KpisResponse | null>(null);
+  const [kpiBuckets, setKpiBuckets] = useState<KpiBuckets | null>(null);
   const [kpisLoading, setKpisLoading] = useState(true);
   const [kpisError, setKpisError] = useState<string | null>(null);
 
@@ -60,31 +68,30 @@ export default function AdminAnalyticsPage() {
     setKpisLoading(true);
     setKpisError(null);
     try {
-      const sp = new URLSearchParams();
-      sp.set('date_from', new Date(`${dateFrom}T00:00:00.000Z`).toISOString());
-      sp.set('date_to', new Date(`${dateTo}T23:59:59.999Z`).toISOString());
-      const res = await fetch(`/api/admin/analytics/kpis?${sp}`, { credentials: 'same-origin' });
-      const d = (await res.json().catch(() => ({}))) as { error?: string } & Partial<KpisResponse>;
+      const res = await fetch('/api/admin/analytics/kpis', { credentials: 'same-origin' });
+      const d = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        all_time?: { total_points?: number };
+        time_buckets?: Partial<KpiBuckets>;
+      };
       if (!res.ok) throw new Error(d?.error || 'Failed to load KPIs');
-      setKpis({
-        all_time: d.all_time ?? { total_points: 0 },
-        range: d.range ?? null,
-        time_buckets: d.time_buckets ?? {
-          today: 0,
-          yesterday: 0,
-          last7Days: 0,
-          last30Days: 0,
-          currentMonth: 0,
-          lastMonth: 0,
-        },
+      const tb = d.time_buckets ?? {};
+      setKpiBuckets({
+        today: Number(tb.today ?? 0),
+        yesterday: Number(tb.yesterday ?? 0),
+        last7Days: Number(tb.last7Days ?? 0),
+        last30Days: Number(tb.last30Days ?? 0),
+        currentMonth: Number(tb.currentMonth ?? 0),
+        lastMonth: Number(tb.lastMonth ?? 0),
+        allTime: Number(d.all_time?.total_points ?? 0),
       });
     } catch (e) {
       setKpisError(e instanceof Error ? e.message : 'Failed to load KPIs');
-      setKpis(null);
+      setKpiBuckets(null);
     } finally {
       setKpisLoading(false);
     }
-  }, [dateFrom, dateTo]);
+  }, []);
 
   const loadEvents = useCallback(
     async (offset: number) => {
@@ -102,7 +109,7 @@ export default function AdminAnalyticsPage() {
         });
         const d = (await res.json().catch(() => ({}))) as {
           error?: string;
-          events?: { event_id?: string; title?: string; raw_downloads?: number }[];
+          events?: { event_id?: string; title?: string; raw_downloads?: number; engaged_users?: number }[];
           total?: number;
         };
         if (!res.ok) throw new Error(d?.error || 'Failed to load event downloads');
@@ -112,6 +119,7 @@ export default function AdminAnalyticsPage() {
                 event_id: String(row.event_id ?? ''),
                 title: String(row.title ?? '—'),
                 downloads: Number(row.raw_downloads ?? 0),
+                engagedUsers: Number(row.engaged_users ?? 0),
               }))
             : []
         );
@@ -147,7 +155,6 @@ export default function AdminAnalyticsPage() {
 
   const onApplyFilters = () => {
     setSearchApplied(filterSearch.trim());
-    void loadKpis();
   };
 
   const downloadExport = async () => {
@@ -170,8 +177,6 @@ export default function AdminAnalyticsPage() {
     URL.revokeObjectURL(url);
   };
 
-  const buckets = kpis?.time_buckets;
-
   return (
     <div className="mx-auto max-w-7xl space-y-8 text-zinc-100">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -180,7 +185,9 @@ export default function AdminAnalyticsPage() {
             <LineChart className="h-7 w-7 text-zinc-400" strokeWidth={1.75} />
             Analytics
           </h1>
-          <p className="mt-1 text-sm text-zinc-500">Phase 1 — raw graphic downloads only.</p>
+          <p className="mt-1 text-sm text-zinc-500">
+            Raw downloads (KPI strip) and unique engaged users per event (event table).
+          </p>
         </div>
         <button
           type="button"
@@ -192,44 +199,26 @@ export default function AdminAnalyticsPage() {
         </button>
       </div>
 
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        {[
-          { label: 'Today', hint: 'UTC calendar day', value: buckets?.today },
-          { label: 'Yesterday', hint: 'UTC calendar day', value: buckets?.yesterday },
-          { label: 'Last 7 days', hint: 'Rolling window', value: buckets?.last7Days },
-          { label: 'Last 30 days', hint: 'Rolling window', value: buckets?.last30Days },
-          { label: 'Current month', hint: 'Calendar month (UTC)', value: buckets?.currentMonth },
-          { label: 'Last month', hint: 'Previous calendar month (UTC)', value: buckets?.lastMonth },
-        ].map((k) => (
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-7">
+        {KPI_CARDS.map((k) => (
           <div
-            key={k.label}
-            className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-4 py-3 shadow-sm"
+            key={k.key}
+            className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-900/60 px-4 py-3 shadow-sm"
           >
             <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">{k.label}</div>
             <div className="mt-1 text-2xl font-semibold tabular-nums text-white">
-              {kpisLoading ? <Loader2 className="h-6 w-6 animate-spin text-zinc-500" /> : num(k.value ?? 0)}
+              {kpisLoading ? (
+                <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
+              ) : (
+                num(kpiBuckets?.[k.key] ?? 0)
+              )}
             </div>
-            <div className="mt-0.5 text-[11px] text-zinc-600">{k.hint}</div>
+            <div className="mt-0.5 text-[11px] leading-snug text-zinc-600">{k.hint}</div>
           </div>
         ))}
       </section>
 
       {kpisError ? <div className="text-sm text-red-400">{kpisError}</div> : null}
-
-      {kpis && !kpisLoading ? (
-        <div className="flex flex-wrap gap-6 text-sm text-zinc-400">
-          <span>
-            All-time raw downloads:{' '}
-            <span className="font-medium text-zinc-200">{num(kpis.all_time.total_points)}</span>
-          </span>
-          {kpis.range ? (
-            <span>
-              Selected range:{' '}
-              <span className="font-medium text-zinc-200">{num(kpis.range.total_points)}</span>
-            </span>
-          ) : null}
-        </div>
-      ) : null}
 
       <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
         <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">Filters</div>
@@ -307,16 +296,17 @@ export default function AdminAnalyticsPage() {
 
       <section>
         <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Event downloads</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Event metrics</h2>
           {eventsLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-zinc-500" /> : null}
         </div>
         {eventsError ? <div className="mb-2 text-sm text-red-400">{eventsError}</div> : null}
         <div className="overflow-x-auto overflow-hidden rounded-lg border border-zinc-800">
-          <table className="w-full min-w-[480px] text-left text-sm">
+          <table className="w-full min-w-[560px] text-left text-sm">
             <thead className="border-b border-zinc-800 bg-zinc-900/80 text-xs uppercase text-zinc-500">
               <tr>
                 <th className="px-3 py-2 font-medium">Event name</th>
                 <th className="px-3 py-2 font-medium tabular-nums">Raw downloads</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Engaged users</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/80">
@@ -326,11 +316,12 @@ export default function AdminAnalyticsPage() {
                     {row.title}
                   </td>
                   <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.downloads)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.engagedUsers)}</td>
                 </tr>
               ))}
               {events.length === 0 && !eventsLoading ? (
                 <tr>
-                  <td colSpan={2} className="px-3 py-8 text-center text-zinc-500">
+                  <td colSpan={3} className="px-3 py-8 text-center text-zinc-500">
                     No events with downloads in this range.
                   </td>
                 </tr>

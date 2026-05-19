@@ -14,7 +14,7 @@ const CI_METRICS_REVALIDATE_SEC = 45;
 /**
  * GET /api/admin/analytics/campaign-intelligence
  *
- * Query: date_from, date_to (required), search, offset, limit. Phase 1: raw event download counts only.
+ * Query: date_from, date_to (required), search, offset, limit. Raw downloads + engaged users per event.
  * RBAC scope is resolved in {@link requireAdminAnalyticsContext} before any metrics work.
  * Optional `fresh=1` bypasses the short-lived server cache (debugging).
  */
@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
 
   const cacheKey = [
     'raw-download-events',
-    'v1',
+    'v2',
     adminAnalyticsScopeCacheKey(ctx.scope),
     dateFrom.toISOString(),
     dateTo.toISOString(),

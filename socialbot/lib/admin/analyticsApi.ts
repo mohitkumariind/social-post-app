@@ -174,7 +174,7 @@ export async function fetchAnalyticsKpis(
 }
 
 /**
- * Phase 1: per-event raw download counts (post_downloads → posts → events, dashboard_category excluded).
+ * Per-event raw downloads and unique engaged users (post_downloads → posts → events, dashboard_category excluded).
  */
 export async function fetchCampaignIntelligencePage(
   admin: SupabaseClient,
@@ -203,7 +203,7 @@ export async function fetchCampaignIntelligencePage(
     event_id: r.event_id,
     title: r.title,
     raw_downloads: r.downloads,
-    engaged_users: 0,
+    engaged_users: r.engaged_users,
     sent: 0,
     delivered: 0,
     opened: 0,
