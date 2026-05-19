@@ -81,7 +81,7 @@ export default function Sidebar() {
       );
     }
     // Admin (and only admin) can see Activity Center. Safe-by-default: hide until role is known.
-    if (r === 'admin' || r === 'super_admin') return navItems;
+    if (r === 'admin') return navItems;
     return navItems.filter(
       (i) =>
         i.href !== '/admin/activity-center' &&

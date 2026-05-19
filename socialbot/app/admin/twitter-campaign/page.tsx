@@ -143,7 +143,7 @@ export default function TwitterCampaignPage() {
 
   const canAccess = useMemo(() => {
     const r = (role ?? '').toLowerCase();
-    return r === 'admin' || r === 'super_admin' || r === 'moderator';
+    return r === 'admin';
   }, [role]);
 
   const variants = campaignType === 'tweet' ? tweetVariants : retweetVariants;

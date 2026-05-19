@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import { isAdmin } from '@/lib/permissions';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
 
@@ -224,9 +225,9 @@ export async function fetchProfileAccessForMiddleware(
   };
 }
 
+/** Canonical admin check — only `profiles.role = 'admin'`. */
 export function isAdminRole(role: string | null): boolean {
-  const r = role?.trim().toLowerCase() ?? '';
-  return r === 'admin' || r === 'super_admin';
+  return isAdmin(role);
 }
 
 export function isModeratorRole(role: string | null): boolean {

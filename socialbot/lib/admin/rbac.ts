@@ -50,7 +50,7 @@ function uniqueSortedInts(ids: number[]): number[] {
  */
 export function getScopedFilters(user: AdminAnalyticsUserContext): AdminAnalyticsScope {
   const role = String(user.role ?? '').trim().toLowerCase();
-  if (role === 'admin' || role === 'super_admin') {
+  if (role === 'admin') {
     return { kind: 'unrestricted' };
   }
 

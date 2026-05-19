@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   if (!auth.ok) return json({ error: 'Unauthorized' }, auth.status);
 
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireRole(auth, ['admin']);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);

@@ -9,7 +9,7 @@ function json(body: unknown, status = 200) {
 }
 
 function requireAdminOnly(auth: Extract<Awaited<ReturnType<typeof validateAdminSession>>, { ok: true }>) {
-  // validateAdminSession canonicalizes super_admin -> admin.
+  // Admin-only surface (validateAdminSession requires profiles.role = 'admin').
   try {
     requireRole(auth, ['admin']);
   } catch (e) {
