@@ -7,6 +7,8 @@ export type RawDownloadKpis = {
   today: number;
   yesterday: number;
   last7_days: number;
+  last_30_days: number;
+  current_month: number;
   last_month: number;
   all_time: number;
   range_count: number | null;
@@ -36,6 +38,8 @@ export async function fetchRawDownloadKpis(
         today: 0,
         yesterday: 0,
         last7_days: 0,
+        last_30_days: 0,
+        current_month: 0,
         last_month: 0,
         all_time: 0,
         range_count: opts?.dateFrom && opts?.dateTo ? 0 : null,
@@ -73,6 +77,8 @@ export async function fetchRawDownloadKpis(
       today: Number(payload.today ?? 0),
       yesterday: Number(payload.yesterday ?? 0),
       last7_days: Number(payload.last7_days ?? 0),
+      last_30_days: Number(payload.last_30_days ?? 0),
+      current_month: Number(payload.current_month ?? 0),
       last_month: Number(payload.last_month ?? 0),
       all_time: Number(payload.all_time ?? 0),
       range_count:

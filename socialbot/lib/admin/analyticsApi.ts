@@ -24,6 +24,8 @@ export type AnalyticsKpisPayload = {
     today: number;
     yesterday: number;
     last7Days: number;
+    last30Days: number;
+    currentMonth: number;
     lastMonth: number;
   };
 };
@@ -163,6 +165,8 @@ export async function fetchAnalyticsKpis(
         today: result.data.today,
         yesterday: result.data.yesterday,
         last7Days: result.data.last7_days,
+        last30Days: result.data.last_30_days,
+        currentMonth: result.data.current_month,
         lastMonth: result.data.last_month,
       },
     },
@@ -404,6 +408,8 @@ export async function buildAnalyticsExportCsv(
       ['today', String(b.today)].map(csvEscapeCell).join(','),
       ['yesterday', String(b.yesterday)].map(csvEscapeCell).join(','),
       ['last_7_days', String(b.last7Days)].map(csvEscapeCell).join(','),
+      ['last_30_days', String(b.last30Days)].map(csvEscapeCell).join(','),
+      ['current_month', String(b.currentMonth)].map(csvEscapeCell).join(','),
       ['last_month', String(b.lastMonth)].map(csvEscapeCell).join(',')
     );
     return { ok: true, csv: lines.join('\n') + '\n', filename: `analytics-kpis-${stamp}.csv` };

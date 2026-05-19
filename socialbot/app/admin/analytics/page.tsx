@@ -10,6 +10,8 @@ type KpisResponse = {
     today: number;
     yesterday: number;
     last7Days: number;
+    last30Days: number;
+    currentMonth: number;
     lastMonth: number;
   };
 };
@@ -71,6 +73,8 @@ export default function AdminAnalyticsPage() {
           today: 0,
           yesterday: 0,
           last7Days: 0,
+          last30Days: 0,
+          currentMonth: 0,
           lastMonth: 0,
         },
       });
@@ -188,12 +192,14 @@ export default function AdminAnalyticsPage() {
         </button>
       </div>
 
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {[
-          { label: 'Today', value: buckets?.today },
-          { label: 'Yesterday', value: buckets?.yesterday },
-          { label: 'Last 7 days', value: buckets?.last7Days },
-          { label: 'Last month', value: buckets?.lastMonth },
+          { label: 'Today', hint: 'UTC calendar day', value: buckets?.today },
+          { label: 'Yesterday', hint: 'UTC calendar day', value: buckets?.yesterday },
+          { label: 'Last 7 days', hint: 'Rolling window', value: buckets?.last7Days },
+          { label: 'Last 30 days', hint: 'Rolling window', value: buckets?.last30Days },
+          { label: 'Current month', hint: 'Calendar month (UTC)', value: buckets?.currentMonth },
+          { label: 'Last month', hint: 'Previous calendar month (UTC)', value: buckets?.lastMonth },
         ].map((k) => (
           <div
             key={k.label}
@@ -203,7 +209,7 @@ export default function AdminAnalyticsPage() {
             <div className="mt-1 text-2xl font-semibold tabular-nums text-white">
               {kpisLoading ? <Loader2 className="h-6 w-6 animate-spin text-zinc-500" /> : num(k.value ?? 0)}
             </div>
-            <div className="mt-0.5 text-[11px] text-zinc-600">Raw downloads (UTC)</div>
+            <div className="mt-0.5 text-[11px] text-zinc-600">{k.hint}</div>
           </div>
         ))}
       </section>

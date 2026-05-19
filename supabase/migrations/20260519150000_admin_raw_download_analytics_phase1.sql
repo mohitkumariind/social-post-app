@@ -68,10 +68,12 @@ DECLARE
   v_start_yesterday timestamptz := v_start_today - interval '1 day';
   v_end_yesterday timestamptz := v_start_today - interval '1 microsecond';
   v_start_7d timestamptz := v_now - interval '7 days';
-  v_prev_month_start timestamptz :=
+  v_start_30d timestamptz := v_now - interval '30 days';
+  v_start_current_month timestamptz :=
+    date_trunc('month', v_now AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+  v_start_last_month timestamptz :=
     (date_trunc('month', (v_now AT TIME ZONE 'UTC')::timestamp) - interval '1 month') AT TIME ZONE 'UTC';
-  v_prev_month_end timestamptz :=
-    date_trunc('month', (v_now AT TIME ZONE 'UTC')::timestamp) AT TIME ZONE 'UTC' - interval '1 microsecond';
+  v_end_last_month timestamptz := v_start_current_month - interval '1 microsecond';
   v_epoch timestamptz := '2000-01-01T00:00:00Z'::timestamptz;
 BEGIN
   RETURN jsonb_build_object(
@@ -90,9 +92,19 @@ BEGIN
         v_start_7d, v_now,
         p_scope_mode, p_moderator_state_ids, p_cm_viewer, p_cm_profile_group_ids, p_cm_event_group_text
       ),
+    'last_30_days',
+      public.admin_raw_download_count_scoped(
+        v_start_30d, v_now,
+        p_scope_mode, p_moderator_state_ids, p_cm_viewer, p_cm_profile_group_ids, p_cm_event_group_text
+      ),
+    'current_month',
+      public.admin_raw_download_count_scoped(
+        v_start_current_month, v_now,
+        p_scope_mode, p_moderator_state_ids, p_cm_viewer, p_cm_profile_group_ids, p_cm_event_group_text
+      ),
     'last_month',
       public.admin_raw_download_count_scoped(
-        v_prev_month_start, v_prev_month_end,
+        v_start_last_month, v_end_last_month,
         p_scope_mode, p_moderator_state_ids, p_cm_viewer, p_cm_profile_group_ids, p_cm_event_group_text
       ),
     'all_time',
