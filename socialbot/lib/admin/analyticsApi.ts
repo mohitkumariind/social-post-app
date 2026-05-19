@@ -3,7 +3,7 @@ import type { VerifiedAdminAuth } from '@/lib/admin-gate';
 import { isCampaignManager } from '@/lib/admin-gate';
 import type { AdminAnalyticsScope } from '@/lib/admin/rbac';
 import { getScopedFilters, toAdminAnalyticsUserContext } from '@/lib/admin/rbac';
-import { fetchRawDownloadEventsPage, fetchRawDownloadKpis } from '@/lib/admin/rawDownloadAnalytics';
+import { fetchEngagedUsersKpis, fetchEventMetrics7dPage } from '@/lib/admin/rawDownloadAnalytics';
 import {
   getEventNotDownloadedUsersPage,
   type EventNotDownloadedUserRow,
@@ -17,9 +17,6 @@ export const ADMIN_ANALYTICS_MAX_OFFSET = 50_000;
 export const ADMIN_ANALYTICS_EXPORT_MAX_ROWS = 10_000;
 
 export type AnalyticsKpisPayload = {
-  all_time: { total_points: number };
-  /** Present when both `date_from` and `date_to` are valid. */
-  range: { date_from: string; date_to: string; total_points: number } | null;
   time_buckets: {
     today: number;
     yesterday: number;
@@ -27,14 +24,16 @@ export type AnalyticsKpisPayload = {
     last30Days: number;
     currentMonth: number;
     lastMonth: number;
+    allTime: number;
   };
 };
 
 export type AnalyticsEventPerformanceRow = {
   event_id: string;
-  download_count: number;
-  /** Display label from events.name / title (never raw table rows). */
   title: string;
+  posts: number;
+  raw_downloads: number;
+  engaged_users: number;
 };
 
 export type PaginatedMeta = {
@@ -59,21 +58,13 @@ export type AnalyticsNotDownloadedResponse = {
   pagination: PaginatedMeta;
 };
 
-/** Event-level campaign intelligence row (API / export shape). */
+/** Event-level metrics row (last 7 days, fixed window). */
 export type CampaignIntelligenceApiEventRow = {
-  /** `null` = global bucket from SQL; any other value = event-linked row. */
-  event_id: string | null;
+  event_id: string;
   title: string;
-  /** Raw graphic download rows in range. */
+  posts: number;
   raw_downloads: number;
-  /** Distinct users engaged (≥1 download) in range. */
   engaged_users: number;
-  sent: number;
-  delivered: number;
-  opened: number;
-  not_downloaded: number;
-  open_rate: number | null;
-  download_rate: number | null;
 };
 
 export type CampaignIntelligenceApiPayload = {
@@ -135,32 +126,18 @@ export async function resolveAdminAnalyticsScope(
 }
 
 /**
- * Phase 1: raw download KPIs — COUNT(post_downloads) by created_at only (see admin_raw_download_kpis).
+ * Global unique engaged users KPIs — COUNT(DISTINCT user_id) from post_downloads (UTC windows).
  */
 export async function fetchAnalyticsKpis(
   admin: SupabaseClient,
-  scope: AdminAnalyticsScope,
-  opts?: { dateFrom?: Date | null; dateTo?: Date | null }
+  scope: AdminAnalyticsScope
 ): Promise<{ ok: true; data: AnalyticsKpisPayload } | { ok: false; error: string }> {
-  const from = opts?.dateFrom ?? null;
-  const to = opts?.dateTo ?? null;
-  const result = await fetchRawDownloadKpis(admin, scope, { dateFrom: from, dateTo: to });
+  const result = await fetchEngagedUsersKpis(admin, scope);
   if (!result.ok) return { ok: false, error: result.error };
-
-  let range: AnalyticsKpisPayload['range'] = null;
-  if (from && to && result.data.range_count != null) {
-    range = {
-      date_from: from.toISOString(),
-      date_to: to.toISOString(),
-      total_points: result.data.range_count,
-    };
-  }
 
   return {
     ok: true,
     data: {
-      all_time: { total_points: result.data.all_time },
-      range,
       time_buckets: {
         today: result.data.today,
         yesterday: result.data.yesterday,
@@ -168,32 +145,25 @@ export async function fetchAnalyticsKpis(
         last30Days: result.data.last_30_days,
         currentMonth: result.data.current_month,
         lastMonth: result.data.last_month,
+        allTime: result.data.all_time,
       },
     },
   };
 }
 
 /**
- * Per-event raw downloads and unique engaged users (post_downloads → posts → events, dashboard_category excluded).
+ * Per-event metrics for the last 7 days (posts, raw downloads, engaged users).
  */
 export async function fetchCampaignIntelligencePage(
   admin: SupabaseClient,
   scope: AdminAnalyticsScope,
   opts: {
-    dateFrom: Date | null;
-    dateTo: Date | null;
-    eventId?: string | null;
     search?: string | null;
     offset: number;
     limit: number;
   }
 ): Promise<{ ok: true; data: CampaignIntelligenceApiPayload } | { ok: false; error: string }> {
-  if (!opts.dateFrom || !opts.dateTo) {
-    return { ok: false, error: 'date_from and date_to are required' };
-  }
-  const result = await fetchRawDownloadEventsPage(admin, scope, {
-    dateFrom: opts.dateFrom,
-    dateTo: opts.dateTo,
+  const result = await fetchEventMetrics7dPage(admin, scope, {
     search: opts.search,
     offset: opts.offset,
     limit: opts.limit,
@@ -202,14 +172,9 @@ export async function fetchCampaignIntelligencePage(
   const events: CampaignIntelligenceApiEventRow[] = result.rows.map((r) => ({
     event_id: r.event_id,
     title: r.title,
-    raw_downloads: r.downloads,
+    posts: r.posts,
+    raw_downloads: r.raw_downloads,
     engaged_users: r.engaged_users,
-    sent: 0,
-    delivered: 0,
-    opened: 0,
-    not_downloaded: 0,
-    open_rate: null,
-    download_rate: null,
   }));
   return { ok: true, data: { events, total: result.total } };
 }
@@ -289,15 +254,9 @@ export async function fetchAnalyticsEventsPage(
     search?: string;
     offset: number;
     limit: number;
-    dateFrom?: Date | null;
-    dateTo?: Date | null;
   }
 ): Promise<{ ok: true; data: AnalyticsEventsResponse } | { ok: false; error: string }> {
-  const from = opts.dateFrom ?? new Date('2000-01-01T00:00:00.000Z');
-  const to = opts.dateTo ?? new Date();
-  const result = await fetchRawDownloadEventsPage(admin, scope, {
-    dateFrom: from,
-    dateTo: to,
+  const result = await fetchEventMetrics7dPage(admin, scope, {
     search: opts.search,
     offset: 0,
     limit: ADMIN_ANALYTICS_LIST_CAP,
@@ -306,8 +265,10 @@ export async function fetchAnalyticsEventsPage(
 
   const rows: AnalyticsEventPerformanceRow[] = result.rows.map((r) => ({
     event_id: r.event_id,
-    download_count: r.downloads,
     title: r.title,
+    posts: r.posts,
+    raw_downloads: r.raw_downloads,
+    engaged_users: r.engaged_users,
   }));
 
   const total = rows.length;
@@ -390,28 +351,19 @@ export async function buildAnalyticsExportCsv(
   const stamp = new Date().toISOString().slice(0, 10);
 
   if (kind === 'kpis') {
-    const k = await fetchAnalyticsKpis(admin, scope, { dateFrom: opts.dateFrom, dateTo: opts.dateTo });
+    const k = await fetchAnalyticsKpis(admin, scope);
     if (!k.ok) return { ok: false, error: k.error };
-    const lines = [
-      ['period', 'total_points'].map(csvEscapeCell).join(','),
-      ['all_time', String(k.data.all_time.total_points)].map(csvEscapeCell).join(','),
-    ];
-    if (k.data.range) {
-      lines.push(
-        [`range_${k.data.range.date_from}_${k.data.range.date_to}`, String(k.data.range.total_points)]
-          .map(csvEscapeCell)
-          .join(',')
-      );
-    }
     const b = k.data.time_buckets;
-    lines.push(
+    const lines = [
+      ['period', 'engaged_users'].map(csvEscapeCell).join(','),
       ['today', String(b.today)].map(csvEscapeCell).join(','),
       ['yesterday', String(b.yesterday)].map(csvEscapeCell).join(','),
       ['last_7_days', String(b.last7Days)].map(csvEscapeCell).join(','),
       ['last_30_days', String(b.last30Days)].map(csvEscapeCell).join(','),
       ['current_month', String(b.currentMonth)].map(csvEscapeCell).join(','),
-      ['last_month', String(b.lastMonth)].map(csvEscapeCell).join(',')
-    );
+      ['last_month', String(b.lastMonth)].map(csvEscapeCell).join(','),
+      ['all_time', String(b.allTime)].map(csvEscapeCell).join(','),
+    ];
     return { ok: true, csv: lines.join('\n') + '\n', filename: `analytics-kpis-${stamp}.csv` };
   }
 
@@ -420,14 +372,16 @@ export async function buildAnalyticsExportCsv(
       search: opts.search,
       offset: 0,
       limit: ADMIN_ANALYTICS_EXPORT_MAX_ROWS,
-      dateFrom: opts.dateFrom,
-      dateTo: opts.dateTo,
     });
     if (!page.ok) return { ok: false, error: page.error };
     const rows = page.data.rows.slice(0, ADMIN_ANALYTICS_EXPORT_MAX_ROWS);
-    const header = ['event_id', 'title', 'download_count'].map(csvEscapeCell).join(',');
-    const body = rows.map((r) => [r.event_id, r.title, String(r.download_count)].map(csvEscapeCell).join(','));
-    return { ok: true, csv: [header, ...body].join('\n') + '\n', filename: `analytics-events-${stamp}.csv` };
+    const header = ['event_id', 'title', 'posts', 'raw_downloads', 'engaged_users'].map(csvEscapeCell).join(',');
+    const body = rows.map((r) =>
+      [r.event_id, r.title, String(r.posts), String(r.raw_downloads), String(r.engaged_users)]
+        .map(csvEscapeCell)
+        .join(',')
+    );
+    return { ok: true, csv: [header, ...body].join('\n') + '\n', filename: `analytics-events-7d-${stamp}.csv` };
   }
 
   const eid = (opts.eventId ?? '').trim();
