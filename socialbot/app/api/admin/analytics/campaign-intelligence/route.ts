@@ -59,15 +59,7 @@ export async function GET(request: NextRequest) {
     String(limit),
   ];
 
-  const runFetch = () =>
-    fetchCampaignIntelligencePage(ctx.admin, ctx.scope, {
-      dateFrom: opts.dateFrom,
-      dateTo: opts.dateTo,
-      eventId: opts.eventId,
-      search: opts.search,
-      offset: opts.offset,
-      limit: opts.limit,
-    });
+  const runFetch = () => fetchCampaignIntelligencePage(ctx.admin, ctx.scope, opts);
 
   let result: Awaited<ReturnType<typeof fetchCampaignIntelligencePage>>;
   try {
