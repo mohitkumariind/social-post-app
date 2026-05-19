@@ -149,9 +149,6 @@ export default function AdminAnalyticsPage() {
             <LineChart className="h-7 w-7 text-zinc-400" strokeWidth={1.75} />
             Analytics
           </h1>
-          <p className="mt-1 text-sm text-zinc-500">
-            Global unique engaged users (KPI strip) and per-event metrics for the last 7 days.
-          </p>
         </div>
         <button
           type="button"
