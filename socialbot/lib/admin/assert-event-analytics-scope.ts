@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AdminAnalyticsScope } from '@/lib/admin/rbac';
+import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 
 /**
  * Minimal `events` row fields for analytics RBAC (aligned with `sqlEventsWhere` in `lib/admin/rbac.ts`).
@@ -59,11 +60,14 @@ export async function assertEventReadableForAdminAnalytics(
   if (scope.kind === 'unrestricted') return { ok: true };
   const { data, error } = await admin
     .from('events')
-    .select('id, state_id, target_groups, created_by')
+    .select('id, state_id, target_groups, created_by, dashboard_category')
     .eq('id', eventId)
     .maybeSingle();
   if (error) return { ok: false, status: 403, error: error.message };
   if (!data) return { ok: false, status: 404, error: 'Event not found' };
+  if (isActiveEventDashboardCategory((data as { dashboard_category?: unknown }).dashboard_category)) {
+    return { ok: false, status: 404, error: 'Event excluded from campaign analytics' };
+  }
   if (!eventRowReadableInAdminAnalyticsScope(scope, data as EventRowForAnalyticsScope)) {
     return { ok: false, status: 403, error: 'Forbidden: event outside your scope' };
   }

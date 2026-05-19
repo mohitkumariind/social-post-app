@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchEventUsersNotDownloadedPage, parseAnalyticsPagination } from '@/lib/admin/analyticsApi';
+import { fetchEventUsersNotDownloadedPage, parseAnalyticsDateRange, parseAnalyticsPagination } from '@/lib/admin/analyticsApi';
 import { assertEventReadableForAdminAnalytics } from '@/lib/admin/assert-event-analytics-scope';
 import { requireAdminAnalyticsContext } from '../../_lib';
 
@@ -28,11 +28,17 @@ export async function GET(request: NextRequest) {
 
   const { offset, limit } = parseAnalyticsPagination(sp);
   const searchRaw = sp.get('search');
+  const { dateFrom, dateTo } = parseAnalyticsDateRange(sp);
+  if ((dateFrom == null) !== (dateTo == null)) {
+    return NextResponse.json({ error: 'Provide both date_from and date_to, or neither' }, { status: 400 });
+  }
 
   const result = await fetchEventUsersNotDownloadedPage(ctx.admin, ctx.scope, eventId, {
     search: searchRaw != null ? String(searchRaw) : null,
     offset,
     limit,
+    dateFrom,
+    dateTo,
   });
   if (!result.ok) {
     const st = /invalid event_id/i.test(result.error) ? 400 : 500;

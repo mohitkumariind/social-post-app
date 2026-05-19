@@ -62,7 +62,10 @@ export type CampaignIntelligenceApiEventRow = {
   /** `null` = global bucket from SQL; any other value = event-linked row. */
   event_id: string | null;
   title: string;
-  downloads: number;
+  /** Raw graphic download rows in range. */
+  raw_downloads: number;
+  /** Distinct users engaged (≥1 download) in range. */
+  engaged_users: number;
   sent: number;
   delivered: number;
   opened: number;
@@ -200,7 +203,8 @@ export async function fetchCampaignIntelligencePage(
   const events: CampaignIntelligenceApiEventRow[] = result.rows.map((r) => ({
     event_id: r.event_id,
     title: r.event_title,
-    downloads: r.total_downloads,
+    raw_downloads: r.total_downloads,
+    engaged_users: r.engaged_users,
     sent: r.total_notifications_sent,
     delivered: r.total_notifications_delivered,
     opened: r.total_notifications_opened,
@@ -219,7 +223,13 @@ export async function fetchEventUsersNotDownloadedPage(
   admin: SupabaseClient,
   scope: AdminAnalyticsScope,
   eventId: string,
-  opts: { search?: string | null; offset: number; limit: number }
+  opts: {
+    search?: string | null;
+    offset: number;
+    limit: number;
+    dateFrom?: Date | null;
+    dateTo?: Date | null;
+  }
 ): Promise<{ ok: true; data: EventUsersNotDownloadedResponse } | { ok: false; error: string }> {
   const res = await getEventNotDownloadedUsersPage(admin, eventId, scope, opts);
   if (!res.ok) return { ok: false, error: res.error };
@@ -336,21 +346,31 @@ export async function fetchAnalyticsNotDownloadedPage(
   admin: SupabaseClient,
   scope: AdminAnalyticsScope,
   eventId: string,
-  opts: { search?: string; offset: number; limit: number }
+  opts: {
+    search?: string;
+    offset: number;
+    limit: number;
+    dateFrom?: Date | null;
+    dateTo?: Date | null;
+  }
 ): Promise<{ ok: true; data: AnalyticsNotDownloadedResponse } | { ok: false; error: string }> {
-  const full = await getNotDownloadedUsers(admin, eventId, scope, { limit: ADMIN_ANALYTICS_LIST_CAP });
-  if (!full.ok) return { ok: false, error: full.error };
-  const search = normalizeSearch(opts.search);
-  const filtered = filterNotDownloadedRows(full.rows, search);
-  const total = filtered.length;
-  const offset = Math.min(opts.offset, total);
-  const limit = opts.limit;
-  const rows = filtered.slice(offset, offset + limit);
+  const res = await getEventNotDownloadedUsersPage(admin, eventId, scope, {
+    search: opts.search ?? null,
+    offset: opts.offset,
+    limit: opts.limit,
+    dateFrom: opts.dateFrom ?? null,
+    dateTo: opts.dateTo ?? null,
+  });
+  if (!res.ok) return { ok: false, error: res.error };
   return {
     ok: true,
     data: {
-      rows,
-      pagination: { total, offset, limit },
+      rows: res.users.map((u) => ({
+        profile_id: u.user_id,
+        name: u.name,
+        phone: u.phone,
+      })),
+      pagination: { total: res.total, offset: opts.offset, limit: opts.limit },
     },
   };
 }
@@ -416,6 +436,8 @@ export async function buildAnalyticsExportCsv(
     search: opts.search,
     offset: 0,
     limit: ADMIN_ANALYTICS_EXPORT_MAX_ROWS,
+    dateFrom: opts.dateFrom,
+    dateTo: opts.dateTo,
   });
   if (!page.ok) return { ok: false, error: page.error };
   const rows = page.data.rows.slice(0, ADMIN_ANALYTICS_EXPORT_MAX_ROWS);

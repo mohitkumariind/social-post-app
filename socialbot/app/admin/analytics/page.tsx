@@ -17,7 +17,8 @@ type KpisResponse = {
 type CiEventRow = {
   event_id: string | null;
   title: string;
-  downloads: number;
+  raw_downloads: number;
+  engaged_users: number;
   sent: number;
   delivered: number;
   opened: number;
@@ -154,7 +155,21 @@ export default function AdminAnalyticsPage() {
           total?: number;
         };
         if (!res.ok) throw new Error(d?.error || 'Failed to load campaign intelligence');
-        setCiEvents(Array.isArray(d.events) ? d.events : []);
+        setCiEvents(
+          Array.isArray(d.events)
+            ? d.events.map((row) => ({
+                event_id: row.event_id ?? null,
+                title: String((row as { title?: string }).title ?? ''),
+                raw_downloads: Number((row as { raw_downloads?: number }).raw_downloads ?? (row as { downloads?: number }).downloads ?? 0),
+                engaged_users: Number((row as { engaged_users?: number }).engaged_users ?? 0),
+                sent: Number(row.sent ?? 0),
+                delivered: Number(row.delivered ?? 0),
+                opened: Number(row.opened ?? 0),
+                not_downloaded: Number(row.not_downloaded ?? 0),
+                open_rate: row.open_rate ?? null,
+              }))
+            : []
+        );
         setCiTotal(Number(d.total ?? 0));
         setCiOffset(offset);
       } catch (e) {
@@ -190,6 +205,8 @@ export default function AdminAnalyticsPage() {
       try {
         const sp = new URLSearchParams();
         sp.set('event_id', drillEventId);
+        sp.set('date_from', new Date(`${dateFrom}T00:00:00.000Z`).toISOString());
+        sp.set('date_to', new Date(`${dateTo}T23:59:59.999Z`).toISOString());
         sp.set('offset', String(drillOffset));
         sp.set('limit', String(USERS_PAGE_SIZE));
         if (drillQuerySent.trim()) sp.set('search', drillQuerySent.trim());
@@ -219,7 +236,7 @@ export default function AdminAnalyticsPage() {
     return () => {
       cancelled = true;
     };
-  }, [drillOpen, drillEventId, drillOffset, drillQuerySent, drillNonce]);
+  }, [drillOpen, drillEventId, drillOffset, drillQuerySent, drillNonce, dateFrom, dateTo]);
 
   const openDrill = (row: CiEventRow) => {
     if (row.event_id === null) return;
@@ -394,7 +411,7 @@ export default function AdminAnalyticsPage() {
             <div className="mt-1 text-2xl font-semibold tabular-nums text-white">
               {kpisLoading ? <Loader2 className="h-6 w-6 animate-spin text-zinc-500" /> : num(k.value ?? 0)}
             </div>
-            <div className="mt-0.5 text-[11px] text-zinc-600">Download points (UTC windows)</div>
+            <div className="mt-0.5 text-[11px] text-zinc-600">Raw downloads (UTC)</div>
           </div>
         ))}
       </section>
@@ -404,11 +421,11 @@ export default function AdminAnalyticsPage() {
       {kpis && !kpisLoading ? (
         <div className="flex flex-wrap gap-6 text-sm text-zinc-400">
           <span>
-            All-time: <span className="font-medium text-zinc-200">{num(kpis.all_time.total_points)}</span> points
+            All-time raw downloads: <span className="font-medium text-zinc-200">{num(kpis.all_time.total_points)}</span>
           </span>
           {kpis.range ? (
             <span>
-              Selected range: <span className="font-medium text-zinc-200">{num(kpis.range.total_points)}</span> points
+              Range raw downloads: <span className="font-medium text-zinc-200">{num(kpis.range.total_points)}</span>
             </span>
           ) : null}
         </div>
@@ -507,7 +524,8 @@ export default function AdminAnalyticsPage() {
                 <th className="px-3 py-2 font-medium tabular-nums">Sent</th>
                 <th className="px-3 py-2 font-medium tabular-nums">Delivered</th>
                 <th className="px-3 py-2 font-medium tabular-nums">Opened</th>
-                <th className="px-3 py-2 font-medium tabular-nums">Downloads</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Raw downloads</th>
+                <th className="px-3 py-2 font-medium tabular-nums">Engaged users</th>
                 <th className="px-3 py-2 font-medium tabular-nums">Not downloaded</th>
                 <th className="px-3 py-2 font-medium tabular-nums">Open rate</th>
               </tr>
@@ -536,14 +554,15 @@ export default function AdminAnalyticsPage() {
                   <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.sent)}</td>
                   <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.delivered)}</td>
                   <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.opened)}</td>
-                  <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.downloads)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.raw_downloads)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-zinc-300">{num(row.engaged_users)}</td>
                   <td className="px-3 py-2.5 tabular-nums text-zinc-400">{num(row.not_downloaded)}</td>
                   <td className="px-3 py-2.5 tabular-nums text-zinc-400">{fmtOpenRatePct(row.open_rate)}</td>
                 </tr>
               ))}
               {ciEvents.length === 0 && !ciLoading ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-8 text-center text-zinc-500">
+                  <td colSpan={9} className="px-3 py-8 text-center text-zinc-500">
                     No events in scope.
                   </td>
                 </tr>

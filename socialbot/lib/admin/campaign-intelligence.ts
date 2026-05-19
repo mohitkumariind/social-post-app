@@ -26,7 +26,10 @@ export type EventCampaignMetricRow = {
   /** `null` only for the SQL global bucket (`event_id` IS NULL). */
   event_id: string | null;
   event_title: string;
+  /** Raw `post_downloads` row count in range. */
   total_downloads: number;
+  /** Distinct users with ≥1 download for the event in range. */
+  engaged_users: number;
   total_notifications_sent: number;
   total_notifications_delivered: number;
   total_notifications_opened: number;
@@ -86,7 +89,7 @@ export function describeCampaignIntelligenceRbacSql(scope: AdminAnalyticsScope):
  * - **Sent:** `SUM(notification_broadcasts.target_user_count)` per `notification_broadcasts.event_id`
  * - **Delivered:** `COUNT(notifications_history)` where `delivery_status = 'sent'`, per parent broadcast `event_id`
  * - **Opened:** `COUNT(notification_open)` per parent broadcast `event_id`
- * - **Downloads:** `COUNT(post_downloads)` via `posts.event_id`, per `posts.event_id`
+ * - **Raw downloads:** `COUNT(post_downloads)`; **engaged users:** `COUNT(DISTINCT user_id)` per event (campaign events only, `dashboard_category IS NULL`)
  *
  * **RBAC:** Same predicates as {@link sqlEventsWhere} / {@link sqlProfilesWhere} in `lib/admin/rbac.ts`
  * (see migration header).
@@ -100,6 +103,7 @@ function mapMetricRow(r: Record<string, unknown>): EventCampaignMetricRow {
     event_id,
     event_title: String(r.event_title ?? '—'),
     total_downloads: Number(r.total_downloads ?? 0),
+    engaged_users: Number(r.engaged_users ?? 0),
     total_notifications_sent: Number(r.total_notifications_sent ?? 0),
     total_notifications_delivered: Number(r.total_notifications_delivered ?? 0),
     total_notifications_opened: Number(r.total_notifications_opened ?? 0),

@@ -236,7 +236,13 @@ export async function getEventNotDownloadedUsersPage(
   admin: SupabaseClient,
   eventId: string,
   scope: AdminAnalyticsScope,
-  opts: { search?: string | null; offset: number; limit: number }
+  opts: {
+    search?: string | null;
+    offset: number;
+    limit: number;
+    dateFrom?: Date | null;
+    dateTo?: Date | null;
+  }
 ): Promise<{ ok: true; users: EventNotDownloadedUserRow[]; total: number } | { ok: false; error: string }> {
   const eid = String(eventId ?? '').trim();
   if (!UUID_RE.test(eid)) return { ok: false, error: 'Invalid event_id' };
@@ -245,6 +251,8 @@ export async function getEventNotDownloadedUsersPage(
   const lim = Math.min(200, Math.max(1, Math.trunc(Number(opts.limit)) || 50));
   const off = Math.min(50_000, Math.max(0, Math.trunc(Number(opts.offset)) || 0));
   const search = opts.search != null && String(opts.search).trim() !== '' ? String(opts.search).trim() : null;
+  const downloadFrom = opts.dateFrom instanceof Date && !Number.isNaN(opts.dateFrom.getTime()) ? opts.dateFrom.toISOString() : null;
+  const downloadTo = opts.dateTo instanceof Date && !Number.isNaN(opts.dateTo.getTime()) ? opts.dateTo.toISOString() : null;
 
   const { data, error } = await admin.rpc('admin_event_users_not_downloaded_page', {
     p_event_id: eid,
@@ -253,6 +261,10 @@ export async function getEventNotDownloadedUsersPage(
     p_cm_viewer: rpc.p_cm_viewer,
     p_cm_profile_group_ids: rpc.p_cm_profile_group_ids,
     p_cm_event_group_text: rpc.p_cm_event_group_text,
+    p_download_from: downloadFrom,
+    p_download_to: downloadTo,
+    p_notify_from: downloadFrom,
+    p_notify_to: downloadTo,
     p_search: search,
     p_offset: off,
     p_limit: lim,

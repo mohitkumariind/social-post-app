@@ -17,6 +17,7 @@ import type { UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireStandardRbacContext } from '@/lib/rbac/require';
 import { applyCanonicalNotificationTargeting, filterRecipientProfileIdsForAdmin, type NotificationAuth } from '@/lib/rbac/notification-targeting';
 import { normalizeBroadcastIncomingRequest } from '@/lib/broadcast-api-request';
+import { filterUsersAllowedForEventResend } from '@/lib/admin/notification-resend-cooldown';
 
 export const runtime = 'nodejs';
 
@@ -124,6 +125,31 @@ export async function POST(request: Request) {
         return json({ error: 'No recipients remain in your scope for the selected users' }, 400);
       }
       payload = { ...payload, target_user_ids: filtered.ids, all_workers: false };
+    }
+
+    const eventIdForCooldown = optionalEventIdFromPayload(payload);
+    const targetsAfterScope = (payload as { target_user_ids?: unknown }).target_user_ids;
+    if (
+      eventIdForCooldown &&
+      Array.isArray(targetsAfterScope) &&
+      targetsAfterScope.length > 0
+    ) {
+      const cooldown = await filterUsersAllowedForEventResend(
+        admin,
+        eventIdForCooldown,
+        targetsAfterScope as string[]
+      );
+      if (!cooldown.ok) return json({ error: cooldown.error }, 500);
+      if (cooldown.allowed.length === 0) {
+        return json(
+          {
+            error:
+              'All selected users were notified for this event within the last hour. Wait before resending.',
+          },
+          429
+        );
+      }
+      payload = { ...payload, target_user_ids: cooldown.allowed, all_workers: false };
     }
 
     payload = remergeLockedEventCampaignAttribution(payload, lockedEventCampaignId);
