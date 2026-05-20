@@ -8,6 +8,7 @@ import {
   isModerator,
   isSuperAdmin,
   validateAdminSession,
+  type VerifiedAdminAuth,
 } from '@/lib/admin-gate';
 import { applyEditorEventCreatePayload, assertNotEditor } from '@/lib/editor-access';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
@@ -131,7 +132,7 @@ function parseMissingColumnName(err: { message?: string } | null | undefined): s
 
 async function resolveCmEffectiveGroupsOrError(
   db: NonNullable<ReturnType<typeof createServiceRoleClient>>,
-  auth: { user: { id: string }; role: 'admin' | 'moderator' | 'campaign_manager'; assigned_group_ids: string[] }
+  auth: Pick<VerifiedAdminAuth, 'user' | 'role' | 'assigned_group_ids'>
 ): Promise<{ error: ReturnType<typeof json> | null; ids: string[] | undefined }> {
   if (!isCampaignManager(auth)) return { error: null, ids: undefined };
   const eff = await resolveEffectiveGroupIdsForCampaignManager(db, auth.user.id, auth.assigned_group_ids);
@@ -141,7 +142,7 @@ async function resolveCmEffectiveGroupsOrError(
 }
 
 function rbacUserForMutation(
-  auth: { user: { id: string }; role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[]; assigned_group_ids: string[] },
+  auth: Pick<VerifiedAdminAuth, 'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids'>,
   cmEffective?: string[]
 ) {
   return {
