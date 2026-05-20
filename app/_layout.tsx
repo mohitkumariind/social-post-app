@@ -119,7 +119,8 @@ function PushNotificationLayer() {
       handleNotification: async () => ({
         shouldShowAlert: true,
         shouldShowBanner: true,
-        shouldShowList: false,
+        // Android: allow the system to show the notification in the tray/list (especially while app is foregrounded).
+        shouldShowList: true,
         shouldPlaySound: true,
         shouldSetBadge: false,
       }),
