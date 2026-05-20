@@ -23,7 +23,11 @@ import {
   requireScopeState,
 } from '@/lib/rbac/require';
 import { resolvePostEventId } from '@/lib/admin/resolvePostEventId';
-import { assertPostEventOwnedByActor, inheritEventScopeForPostPayload, isEventsFullAdmin } from '@/lib/event-access';
+import {
+  assertPostEventAccessibleForPostUpload,
+  inheritEventScopeForPostPayload,
+  isEventsFullAdmin,
+} from '@/lib/event-access';
 import { isEditor } from '@/lib/admin-gate';
 import { withAudit } from '@/lib/audit/withAudit';
 import {
@@ -274,26 +278,44 @@ export const POST = withAudit(
       },
     });
 
-    const eventOwn = await assertPostEventOwnedByActor(admin, resolvedEventId, auth.user.id);
+    const eventAccess = await assertPostEventAccessibleForPostUpload(admin, resolvedEventId, auth);
     trace.push({
-      step: 'assertPostEventOwnedByActor',
-      ok: eventOwn.ok,
-      detail: eventOwn.ok
+      step: 'assertPostEventAccessibleForPostUpload',
+      ok: eventAccess.ok,
+      detail: eventAccess.ok
         ? {
-            event_id: eventOwn.event.id,
-            event_created_by: eventOwn.event.created_by,
+            auth_role: auth.role,
+            event_id: eventAccess.event.id,
+            event_created_by: eventAccess.event.created_by,
             actor_user_id: auth.user.id,
-            ownership_match:
-              String(eventOwn.event.created_by ?? '').trim() === String(auth.user.id).trim(),
+            ownership_match: eventAccess.ownership_match,
+            scope_match: eventAccess.scope_match,
+            access_reason: eventAccess.access_reason,
           }
-        : { error: eventOwn.error },
+        : {
+            auth_role: auth.role,
+            event_id: resolvedEventId,
+            event_created_by: eventAccess.event_created_by ?? null,
+            ownership_match: eventAccess.ownership_match ?? false,
+            scope_match: eventAccess.scope_match ?? false,
+            failing_rbac_step: 'assertPostEventAccessibleForPostUpload',
+            reason: eventAccess.reason,
+            error: eventAccess.error,
+          },
     });
-    if (!eventOwn.ok) {
-      return postUploadErrorResponse(trace, 'assertPostEventOwnedByActor', 403, eventOwn.error);
+    if (!eventAccess.ok) {
+      return postUploadErrorResponse(trace, 'assertPostEventAccessibleForPostUpload', 403, eventAccess.error, {
+        reason: eventAccess.reason,
+        auth_role: auth.role,
+        event_id: resolvedEventId,
+        event_created_by: eventAccess.event_created_by ?? null,
+        ownership_match: eventAccess.ownership_match ?? false,
+        scope_match: eventAccess.scope_match ?? false,
+      });
     }
 
     payload.event_id = resolvedEventId;
-    if (!String(payload.category ?? '').trim()) payload.category = eventOwn.event.name;
+    if (!String(payload.category ?? '').trim()) payload.category = eventAccess.event.name;
 
     const { data: eventScopeRow, error: eventScopeErr } = await admin
       .from('events')
@@ -342,21 +364,28 @@ export const POST = withAudit(
         requireNonEmptyScopeForPosts(auth as any, scope);
       }
     } catch (e) {
-      if (e instanceof RbacError) {
-        canPerformMutation(
-          { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
-          'posts.create',
-          null,
-          payload as any,
-          { resourceType: 'posts', resourceName: String((payload as any)?.title ?? '') }
-        );
-        return postUploadErrorResponse(trace, 'scope_validation', e.status, e.message);
-      }
-      return postUploadErrorResponse(trace, 'scope_validation', 403, 'Forbidden');
+      const msg = e instanceof RbacError ? e.message : 'Forbidden';
+      trace.push({
+        step: 'scope_validation',
+        ok: false,
+        detail: {
+          auth_role: auth.role,
+          event_id: resolvedEventId,
+          failing_rbac_step: 'scope_validation',
+          reason: msg,
+          scope_state_ids: scope.state_ids,
+          scope_group_ids: scope.group_ids,
+        },
+      });
+      return postUploadErrorResponse(trace, 'scope_validation', e instanceof RbacError ? e.status : 403, msg, {
+        auth_role: auth.role,
+        event_id: resolvedEventId,
+        failing_rbac_step: 'scope_validation',
+      });
     }
 
     const mutationOwner =
-      eventOwn.event.created_by != null ? String(eventOwn.event.created_by).trim() : auth.user.id;
+      eventAccess.event.created_by != null ? String(eventAccess.event.created_by).trim() : auth.user.id;
     const decision = canPerformMutation(
       { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
       'posts.create',
@@ -368,13 +397,25 @@ export const POST = withAudit(
       step: 'canPerformMutation',
       ok: decision.ok,
       detail: {
+        auth_role: auth.role,
+        event_id: resolvedEventId,
         action: 'posts.create',
         mutation_owner: mutationOwner,
+        ownership_match: eventAccess.ownership_match,
+        scope_match: eventAccess.scope_match,
+        failing_rbac_step: decision.ok ? undefined : 'canPerformMutation',
         reason: decision.ok ? undefined : decision.reason,
       },
     });
     if (!decision.ok) {
-      return postUploadErrorResponse(trace, 'canPerformMutation', 403, decision.reason);
+      return postUploadErrorResponse(trace, 'canPerformMutation', 403, decision.reason, {
+        auth_role: auth.role,
+        event_id: resolvedEventId,
+        event_created_by: eventAccess.event.created_by,
+        ownership_match: eventAccess.ownership_match,
+        scope_match: eventAccess.scope_match,
+        failing_rbac_step: 'canPerformMutation',
+      });
     }
 
     let insertBody: Record<string, unknown> = { ...payload };
@@ -518,15 +559,31 @@ export const PATCH = withAudit(
 
     let eventOwnerForMutation: string | null = null;
     if (!isEventsFullAdmin(auth)) {
-      const postOwner = String(before?.created_by ?? '').trim();
-      if (postOwner && postOwner !== auth.user.id) {
-        return json({ error: 'Forbidden: post not owned by you' }, 403);
-      }
       const eid = String(before?.event_id ?? '').trim();
       if (eid) {
-        const own = await assertPostEventOwnedByActor(admin, eid, auth.user.id);
-        if (!own.ok) return json({ error: own.error }, 403);
-        eventOwnerForMutation = own.event.created_by;
+        const access = await assertPostEventAccessibleForPostUpload(admin, eid, auth);
+        if (!access.ok) {
+          return json(
+            {
+              error: access.error,
+              reason: access.reason,
+              failing_rbac_step: 'assertPostEventAccessibleForPostUpload',
+              auth_role: auth.role,
+              event_id: eid,
+              event_created_by: access.event_created_by ?? null,
+              ownership_match: access.ownership_match ?? false,
+              scope_match: access.scope_match ?? false,
+            },
+            403
+          );
+        }
+        eventOwnerForMutation = access.event.created_by;
+      }
+      if (isEditor(auth)) {
+        const postOwner = String(before?.created_by ?? '').trim();
+        if (postOwner && postOwner !== auth.user.id) {
+          return json({ error: 'Forbidden: post not owned by you', failing_rbac_step: 'post_ownership' }, 403);
+        }
       }
     }
 
@@ -601,8 +658,21 @@ export const PATCH = withAudit(
     const resolvedEventId = await resolvePostEventId(admin, { ...before, ...nextPatch });
     if (resolvedEventId) {
       if (!isEventsFullAdmin(auth)) {
-        const own = await assertPostEventOwnedByActor(admin, resolvedEventId, auth.user.id);
-        if (!own.ok) return json({ error: own.error }, 403);
+        const access = await assertPostEventAccessibleForPostUpload(admin, resolvedEventId, auth);
+        if (!access.ok) {
+          return json(
+            {
+              error: access.error,
+              reason: access.reason,
+              failing_rbac_step: 'assertPostEventAccessibleForPostUpload',
+              auth_role: auth.role,
+              event_id: resolvedEventId,
+              ownership_match: access.ownership_match ?? false,
+              scope_match: access.scope_match ?? false,
+            },
+            403
+          );
+        }
       }
       nextPatch.event_id = resolvedEventId;
     }

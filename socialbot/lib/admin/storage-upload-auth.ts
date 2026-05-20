@@ -143,7 +143,7 @@ export async function assertStorageUploadAllowed(args: {
     }
     const { data: ev, error: evErr } = await admin
       .from('events')
-      .select('id, created_by')
+      .select('id, created_by, target_groups')
       .eq('id', eventId)
       .maybeSingle();
     if (evErr) {
@@ -158,18 +158,42 @@ export async function assertStorageUploadAllowed(args: {
         },
       };
     }
-    const owner = String((ev as { created_by?: string | null } | null)?.created_by ?? '').trim();
+    if (!ev) {
+      return {
+        ok: false,
+        status: 404,
+        body: { ...base, step: 'campaign_manager_event_lookup', reason: 'event_not_found', error: 'Event not found' },
+      };
+    }
+    const owner = String((ev as { created_by?: string | null }).created_by ?? '').trim();
     const owns = owner.length > 0 && owner === auth.user.id;
-    logStorageAuth('campaign_manager_event_ownership', { ok: owns, ...base, event_id: eventId, event_created_by: owner || null });
-    if (!owns) {
+    const scopeOk = canAccessResource(
+      {
+        id: auth.user.id,
+        role: auth.role,
+        assigned_state_ids: auth.assigned_state_ids,
+        assigned_group_ids: auth.assigned_group_ids,
+      },
+      { group_ids: (ev as { target_groups?: unknown }).target_groups, created_by: owner || undefined },
+      { resourceType: 'events', audit: { resourceType: 'events', action: 'storage.upload.event.scope.validate' } }
+    );
+    logStorageAuth('campaign_manager_event_scope', {
+      ok: owns || scopeOk,
+      ...base,
+      event_id: eventId,
+      event_created_by: owner || null,
+      ownership_match: owns,
+      scope_match: scopeOk,
+    });
+    if (!owns && !scopeOk) {
       return {
         ok: false,
         status: 403,
         body: {
           ...base,
-          step: 'campaign_manager_event_ownership',
-          reason: 'event_not_owned',
-          error: 'Forbidden: event not owned by campaign_manager',
+          step: 'campaign_manager_event_scope',
+          reason: 'event_outside_assigned_groups',
+          error: 'Forbidden: event outside campaign_manager assigned groups',
         },
       };
     }
@@ -285,12 +309,18 @@ export async function assertStorageUploadAllowed(args: {
         { state_ids: (ev as { state_id?: unknown }).state_id },
         { resourceType: 'events', audit: { resourceType: 'events', action: 'storage.upload.event.scope.validate' } }
       );
+      const owner = String((ev as { created_by?: string | null }).created_by ?? '').trim();
+      const owns = owner.length > 0 && owner === auth.user.id;
       logStorageAuth('moderator_event_scope', {
-        ok: scopeOk,
+        ok: scopeOk || owns,
         ...base,
         event_id: eventId,
+        event_created_by: owner || null,
+        ownership_match: owns,
+        scope_match: scopeOk,
         event_state_id: (ev as { state_id?: unknown }).state_id,
       });
+      if (owns) return { ok: true };
       if (!scopeOk) {
         return {
           ok: false,

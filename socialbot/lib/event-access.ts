@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
-import { isAdmin, isSuperAdmin } from '@/lib/permissions';
+import { isAdmin, isCampaignManager, isEditor, isModerator, isSuperAdmin } from '@/lib/permissions';
+import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { RbacError } from '@/lib/rbac/require';
 import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 import { validateEditorPartyScope } from '@/lib/admin/editor-party-scope';
@@ -154,6 +155,222 @@ export function stripNonAdminPublishFields(
 function isMissingCreatedByColumn(err: { message?: string } | null | undefined): boolean {
   const msg = String(err?.message ?? '').toLowerCase();
   return msg.includes('created_by') && (msg.includes('does not exist') || msg.includes('column') || msg.includes('schema cache'));
+}
+
+export type PostEventAccessOk = {
+  ok: true;
+  event: { id: string; created_by: string | null; name: string };
+  ownership_match: boolean;
+  scope_match: boolean;
+  access_reason: string;
+};
+
+export type PostEventAccessFail = {
+  ok: false;
+  error: string;
+  reason: string;
+  event_created_by?: string | null;
+  ownership_match?: boolean;
+  scope_match?: boolean;
+};
+
+export function logPostEventAccess(phase: string, detail: Record<string, unknown>) {
+  console.log('[post-event-access]', phase, detail);
+}
+
+/**
+ * Role-scoped event gate for post upload/update (not editor-only ownership).
+ * - editor: must own event
+ * - moderator: own event OR event state_id ⊆ assigned states
+ * - campaign_manager: own event OR event target_groups ⊆ assigned groups
+ * - admin/super_admin: any event
+ */
+export async function assertPostEventAccessibleForPostUpload(
+  admin: SupabaseClient,
+  eventId: string,
+  auth: Pick<VerifiedAdminAuth, 'role' | 'user' | 'assigned_state_ids' | 'assigned_group_ids'>
+): Promise<PostEventAccessOk | PostEventAccessFail> {
+  const id = String(eventId ?? '').trim();
+  const actorId = String(auth.user.id).trim();
+  if (!id) {
+    return { ok: false, error: 'event_id is required', reason: 'missing_event_id' };
+  }
+
+  if (isAdmin(auth.role) || isSuperAdmin(auth.role)) {
+    const { data, error } = await admin.from('events').select('id, created_by, name').eq('id', id).maybeSingle();
+    if (error) return { ok: false, error: error.message, reason: 'event_lookup_error' };
+    if (!data) return { ok: false, error: 'Event not found', reason: 'event_not_found' };
+    const owner = (data as { created_by?: string | null }).created_by;
+    logPostEventAccess('admin_allow', {
+      auth_role: auth.role,
+      event_id: id,
+      event_created_by: owner ?? null,
+      ownership_match: true,
+      scope_match: true,
+    });
+    return {
+      ok: true,
+      event: {
+        id: String((data as { id: string }).id),
+        created_by: owner != null ? String(owner).trim() : null,
+        name: String((data as { name?: string }).name ?? ''),
+      },
+      ownership_match: true,
+      scope_match: true,
+      access_reason: 'admin_unrestricted',
+    };
+  }
+
+  let selectCols = 'id, created_by, name, state_id, target_groups';
+  let { data, error } = await admin.from('events').select(selectCols).eq('id', id).maybeSingle();
+  if (error && isMissingCreatedByColumn(error)) {
+    selectCols = 'id, name, state_id, target_groups';
+    ({ data, error } = await admin.from('events').select(selectCols).eq('id', id).maybeSingle());
+  }
+  if (error) return { ok: false, error: error.message, reason: 'event_lookup_error' };
+  if (!data) return { ok: false, error: 'Event not found', reason: 'event_not_found' };
+
+  let ownerStr =
+    (data as { created_by?: string | null }).created_by != null
+      ? String((data as { created_by?: string | null }).created_by).trim()
+      : '';
+
+  if (!ownerStr) {
+    const { error: backfillErr } = await admin
+      .from('events')
+      .update({ created_by: actorId })
+      .eq('id', id)
+      .is('created_by', null);
+    if (!backfillErr) ownerStr = actorId;
+    else if (isMissingCreatedByColumn(backfillErr)) ownerStr = actorId;
+    else return { ok: false, error: backfillErr.message, reason: 'created_by_backfill_failed' };
+  }
+
+  const ownership_match = ownerStr.length > 0 && ownerStr === actorId;
+  const rbacUser = {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids ?? [],
+  };
+
+  const baseLog = {
+    auth_role: auth.role,
+    event_id: id,
+    event_created_by: ownerStr || null,
+    ownership_match,
+  };
+
+  if (isEditor(auth.role)) {
+    if (!ownership_match) {
+      logPostEventAccess('editor_denied', { ...baseLog, scope_match: false, reason: 'editor_event_not_owned' });
+      return {
+        ok: false,
+        error: 'Forbidden: post must belong to an event you created',
+        reason: 'editor_event_not_owned',
+        event_created_by: ownerStr || null,
+        ownership_match: false,
+        scope_match: false,
+      };
+    }
+    logPostEventAccess('editor_allow', { ...baseLog, scope_match: true, access_reason: 'editor_ownership' });
+    return {
+      ok: true,
+      event: { id, created_by: ownerStr, name: String((data as { name?: string }).name ?? '') },
+      ownership_match: true,
+      scope_match: true,
+      access_reason: 'editor_ownership',
+    };
+  }
+
+  if (isModerator(auth.role)) {
+    if (ownership_match) {
+      logPostEventAccess('moderator_allow', { ...baseLog, scope_match: true, access_reason: 'moderator_ownership' });
+      return {
+        ok: true,
+        event: { id, created_by: ownerStr, name: String((data as { name?: string }).name ?? '') },
+        ownership_match: true,
+        scope_match: true,
+        access_reason: 'moderator_ownership',
+      };
+    }
+    const scope_match = canAccessResource(
+      rbacUser,
+      { state_ids: (data as { state_id?: unknown }).state_id },
+      { resourceType: 'events', allowOwnershipFallback: false, audit: { resourceType: 'events', action: 'posts.upload.event.scope' } }
+    );
+    if (scope_match) {
+      logPostEventAccess('moderator_allow', { ...baseLog, scope_match: true, access_reason: 'moderator_state_scope' });
+      return {
+        ok: true,
+        event: { id, created_by: ownerStr, name: String((data as { name?: string }).name ?? '') },
+        ownership_match: false,
+        scope_match: true,
+        access_reason: 'moderator_state_scope',
+      };
+    }
+    logPostEventAccess('moderator_denied', { ...baseLog, scope_match: false, reason: 'moderator_event_scope_denied' });
+    return {
+      ok: false,
+      error: 'Forbidden: event outside moderator assigned states',
+      reason: 'moderator_event_scope_denied',
+      event_created_by: ownerStr || null,
+      ownership_match: false,
+      scope_match: false,
+    };
+  }
+
+  if (isCampaignManager(auth.role)) {
+    if (ownership_match) {
+      logPostEventAccess('campaign_manager_allow', {
+        ...baseLog,
+        scope_match: true,
+        access_reason: 'campaign_manager_ownership',
+      });
+      return {
+        ok: true,
+        event: { id, created_by: ownerStr, name: String((data as { name?: string }).name ?? '') },
+        ownership_match: true,
+        scope_match: true,
+        access_reason: 'campaign_manager_ownership',
+      };
+    }
+    const scope_match = canAccessResource(
+      rbacUser,
+      { group_ids: (data as { target_groups?: unknown }).target_groups, created_by: ownerStr },
+      { resourceType: 'events', allowOwnershipFallback: false, audit: { resourceType: 'events', action: 'posts.upload.event.scope' } }
+    );
+    if (scope_match) {
+      logPostEventAccess('campaign_manager_allow', {
+        ...baseLog,
+        scope_match: true,
+        access_reason: 'campaign_manager_group_scope',
+      });
+      return {
+        ok: true,
+        event: { id, created_by: ownerStr, name: String((data as { name?: string }).name ?? '') },
+        ownership_match: false,
+        scope_match: true,
+        access_reason: 'campaign_manager_group_scope',
+      };
+    }
+    logPostEventAccess('campaign_manager_denied', {
+      ...baseLog,
+      scope_match: false,
+      reason: 'campaign_manager_event_scope_denied',
+    });
+    return {
+      ok: false,
+      error: 'Forbidden: event outside campaign_manager assigned groups',
+      reason: 'campaign_manager_event_scope_denied',
+      event_created_by: ownerStr || null,
+      ownership_match: false,
+      scope_match: false,
+    };
+  }
+
+  logPostEventAccess('denied', { ...baseLog, reason: 'role_not_allowed_for_post_upload' });
+  return { ok: false, error: 'Forbidden: role cannot upload posts for this event', reason: 'role_not_allowed' };
 }
 
 export async function assertPostEventOwnedByActor(
