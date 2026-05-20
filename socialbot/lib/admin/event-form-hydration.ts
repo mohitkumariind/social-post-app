@@ -44,12 +44,17 @@ export function resolveStateSelectionsFromEvent(
     .filter(Boolean);
 }
 
+/**
+ * @param forEditor — editors cannot use ALL/global party wildcard; empty DB party → no selection.
+ */
 export function resolvePartySelectionsFromEvent(
   row: Record<string, unknown>,
-  parties: PartyLike[] = []
+  parties: PartyLike[] = [],
+  opts?: { forEditor?: boolean }
 ): string[] {
+  const forEditor = opts?.forEditor === true;
   const fromIds = toNumArr(row.party_id);
-  if (fromIds.includes(0)) return ['ALL'];
+  if (fromIds.includes(0)) return forEditor ? [] : ['ALL'];
   if (fromIds.length > 0) {
     const out: string[] = [];
     for (const n of fromIds) {
@@ -59,32 +64,49 @@ export function resolvePartySelectionsFromEvent(
     if (out.length > 0) return out;
   }
   const legacy = toStrArr(row.party as string | string[] | undefined);
-  if (legacy.length === 0) return ['ALL'];
-  if (legacy.length === 1 && legacy[0] === 'ALL') return ['ALL'];
+  if (legacy.length === 0) return forEditor ? [] : ['ALL'];
+  if (legacy.length === 1 && legacy[0] === 'ALL') return forEditor ? [] : ['ALL'];
   return legacy.map((v) => {
     const parsed = fromPartyDB({ party: v, party_id: null }, parties);
     return parsed.selection || String(v).trim();
   }).filter(Boolean);
 }
 
-export function resolveLoksabhaSelectionsFromEvent(row: Record<string, unknown>): string[] {
+export function resolveLoksabhaSelectionsFromEvent(
+  row: Record<string, unknown>,
+  opts?: { forEditor?: boolean }
+): string[] {
+  const forEditor = opts?.forEditor === true;
   const fromIds = toNumArr(row.loksabha_id);
-  if (fromIds.includes(0)) return ['ALL'];
+  if (fromIds.includes(0)) return forEditor ? [] : ['ALL'];
   if (fromIds.length > 0) return fromIds.map((n) => String(n));
   const legacy = toStrArr(row.loksabha as string | string[] | undefined);
   if (legacy.length === 0) return [];
-  if (legacy.length === 1 && legacy[0] === 'ALL') return ['ALL'];
+  if (legacy.length === 1 && legacy[0] === 'ALL') return forEditor ? [] : ['ALL'];
   return legacy;
 }
 
-export function resolveAssemblySelectionsFromEvent(row: Record<string, unknown>): string[] {
+export function resolveAssemblySelectionsFromEvent(
+  row: Record<string, unknown>,
+  opts?: { forEditor?: boolean }
+): string[] {
+  const forEditor = opts?.forEditor === true;
   const fromIds = toNumArr(row.assembly_id);
-  if (fromIds.includes(0)) return ['ALL'];
+  if (fromIds.includes(0)) return forEditor ? [] : ['ALL'];
   if (fromIds.length > 0) return fromIds.map((n) => String(n));
   const legacy = toStrArr(row.assembly as string | string[] | undefined);
   if (legacy.length === 0) return [];
-  if (legacy.length === 1 && legacy[0] === 'ALL') return ['ALL'];
+  if (legacy.length === 1 && legacy[0] === 'ALL') return forEditor ? [] : ['ALL'];
   return legacy;
+}
+
+/** Editor UI/save: strip ALL wildcard; empty = optional filter inside state scope, not global targeting. */
+export function editorPartySelectionForForm(selected: string[]): string[] {
+  return selected.filter((p) => String(p).trim().toUpperCase() !== 'ALL');
+}
+
+export function editorGeoSelectionForForm(selected: string[]): string[] {
+  return selected.filter((p) => String(p).trim().toUpperCase() !== 'ALL');
 }
 
 export function logEventFormHydration(phase: string, detail: Record<string, unknown>) {

@@ -4,6 +4,7 @@ import { isAdmin, isSuperAdmin } from '@/lib/permissions';
 import { RbacError } from '@/lib/rbac/require';
 import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 import { validateEditorPartyScope } from '@/lib/admin/editor-party-scope';
+import { finalizeEditorEventTargetingPayload } from '@/lib/admin/editor-event-targeting';
 
 export function isEventsFullAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
   return isAdmin(auth.role) || isSuperAdmin(auth.role);
@@ -87,35 +88,40 @@ export function validateEditorEventPayload(
 
   if (Object.prototype.hasOwnProperty.call(payload, 'loksabha_id')) {
     const lokIds = toNumArray(payload.loksabha_id);
+    if (lokIds.includes(0)) return 'Editor cannot use global / all-seats targeting';
     (payload as { loksabha_id: number[] }).loksabha_id = lokIds;
     delete (payload as { loksabha?: unknown }).loksabha;
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'assembly_id')) {
     const asmIds = toNumArray(payload.assembly_id);
+    if (asmIds.includes(0)) return 'Editor cannot use global / all-seats targeting';
     (payload as { assembly_id: number[] }).assembly_id = asmIds;
     delete (payload as { assembly?: unknown }).assembly;
   }
 
   if (Object.prototype.hasOwnProperty.call(payload, 'party_id')) {
-    const partyIds = toNumArray(payload.party_id);
-    if (partyIds.includes(0)) return 'Editor cannot use global / all-parties targeting';
+    const partyIds = toNumArray(payload.party_id).filter((n) => n !== 0);
+    if (toNumArray(payload.party_id).includes(0)) {
+      return 'Editor cannot use global / all-parties targeting';
+    }
     (payload as { party_id: number[] }).party_id = partyIds;
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'party')) {
     const raw = payload.party;
     const arr = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
-    const slugs = arr
-      .map((x) => String(x ?? '').trim().toLowerCase())
-      .filter((s) => s.length > 0 && s !== 'all');
     if (arr.some((x) => String(x ?? '').trim().toUpperCase() === 'ALL')) {
       return 'Editor cannot use global / all-parties targeting';
     }
+    const slugs = arr
+      .map((x) => String(x ?? '').trim().toLowerCase())
+      .filter((s) => s.length > 0 && s !== 'all');
     (payload as { party: string[] }).party = slugs;
   }
 
   const partyScopeErr = validateEditorPartyScope(payload, assignedPartyIds);
   if (partyScopeErr) return partyScopeErr;
 
+  finalizeEditorEventTargetingPayload(payload);
   return null;
 }
 
