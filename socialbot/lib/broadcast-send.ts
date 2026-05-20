@@ -548,6 +548,61 @@ export async function runBroadcast(
     }
   }
 
+  async function reconcileReceipts(receiptIds: string[], tokenByReceiptId: Map<string, string>, userByReceiptId: Map<string, string>) {
+    const ids = Array.from(new Set(receiptIds.map((x) => String(x ?? '').trim()).filter(Boolean)));
+    if (ids.length === 0) return;
+    try {
+      const receipts = await expo.getPushNotificationReceiptsAsync(ids);
+      const okUsers: string[] = [];
+      const failedRetryableUsers: string[] = [];
+      const failedPermanentUsers: string[] = [];
+
+      for (const id of ids) {
+        const r = (receipts as any)?.[id] as { status?: string; message?: string; details?: { error?: string } } | undefined;
+        const uid = String(userByReceiptId.get(id) ?? '').trim();
+        const tok = String(tokenByReceiptId.get(id) ?? '').trim();
+        if (!r) {
+          // Receipts can be temporarily unavailable; treat as accepted.
+          if (uid) okUsers.push(uid);
+          continue;
+        }
+        if (r.status === 'ok') {
+          if (uid) okUsers.push(uid);
+          continue;
+        }
+        const detailsErr = String(r.details?.error ?? '');
+        const msg = String(r.message ?? '');
+        if (uid) {
+          if (shouldDeleteToken(detailsErr, msg)) failedPermanentUsers.push(uid);
+          else failedRetryableUsers.push(uid);
+        }
+        if (tok && shouldDeleteToken(detailsErr, msg)) await removeBadToken(tok);
+      }
+
+      if (okUsers.length > 0) {
+        deliveredTotal += okUsers.length;
+        await markDeliveryStatus(okUsers, 'sent');
+      }
+      if (failedRetryableUsers.length > 0) {
+        failedTotal += failedRetryableUsers.length;
+        await markDeliveryStatus(failedRetryableUsers, 'failed_retryable', 'expo-receipt-retryable');
+      }
+      if (failedPermanentUsers.length > 0) {
+        failedTotal += failedPermanentUsers.length;
+        await markDeliveryStatus(failedPermanentUsers, 'failed_permanent', 'expo-receipt-permanent');
+      }
+    } catch (e) {
+      // If receipts call fails (network, etc.), don't block; ticket ok already indicates acceptance.
+      const em = e instanceof Error ? e.message : String(e);
+      console.warn('[push] receipts threw:', em);
+      const okUsers = Array.from(new Set(ids.map((id) => String(userByReceiptId.get(id) ?? '').trim()).filter(Boolean)));
+      if (okUsers.length > 0) {
+        deliveredTotal += okUsers.length;
+        await markDeliveryStatus(okUsers, 'sent');
+      }
+    }
+  }
+
   async function sendChunkWithIsolation(chunk: ExpoPushMessage[]) {
     // Sends individually so mixed-project tokens cannot poison the whole batch.
     for (const msg of chunk) {
@@ -558,8 +613,16 @@ export async function runBroadcast(
         const t = tickets?.[0];
         if (!t) continue;
         if (t.status === 'ok') {
-          deliveredTotal += 1;
-          if (userId) await markDeliveryStatus([userId], 'sent');
+          // Prefer Expo receipts to confirm delivery (ticket ok is only acceptance).
+          const rid = String((t as any)?.id ?? '').trim();
+          if (rid && userId) {
+            const tokenByReceiptId = new Map<string, string>([[rid, String(msg.to ?? '')]]);
+            const userByReceiptId = new Map<string, string>([[rid, userId]]);
+            await reconcileReceipts([rid], tokenByReceiptId, userByReceiptId);
+          } else if (userId) {
+            deliveredTotal += 1;
+            await markDeliveryStatus([userId], 'sent');
+          }
           continue;
         }
         failedTotal += 1;
@@ -628,13 +691,23 @@ export async function runBroadcast(
         const sentUsers: string[] = [];
         const failedRetryableUsers: string[] = [];
         const failedPermanentUsers: string[] = [];
+        const receiptIds: string[] = [];
+        const tokenByReceiptId = new Map<string, string>();
+        const userByReceiptId = new Map<string, string>();
         for (let i = 0; i < tickets.length; i++) {
           const t = tickets[i];
           const tok = String(chunk[i]?.to ?? '');
           const uid = String(tokenToUser.get(tok) ?? '').trim();
           if (t.status === 'ok') {
-            deliveredTotal += 1;
-            if (uid) sentUsers.push(uid);
+            const rid = String((t as any)?.id ?? '').trim();
+            if (rid && uid) {
+              receiptIds.push(rid);
+              tokenByReceiptId.set(rid, tok);
+              userByReceiptId.set(rid, uid);
+            } else if (uid) {
+              // No receipt id available; treat as accepted.
+              sentUsers.push(uid);
+            }
             continue;
           }
           failedTotal += 1;
@@ -649,9 +722,14 @@ export async function runBroadcast(
           }
           if (shouldDeleteToken(err, message)) await removeBadToken(tok);
         }
-        await markDeliveryStatus(sentUsers, 'sent');
+        // Mark ticket-ok without receipt id as sent (accepted); receipt-backed ok is reconciled below.
+        if (sentUsers.length > 0) {
+          deliveredTotal += sentUsers.length;
+          await markDeliveryStatus(sentUsers, 'sent');
+        }
         await markDeliveryStatus(failedRetryableUsers, 'failed_retryable', 'expo-ticket-retryable');
         await markDeliveryStatus(failedPermanentUsers, 'failed_permanent', 'expo-ticket-permanent');
+        await reconcileReceipts(receiptIds, tokenByReceiptId, userByReceiptId);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error('[push] send threw:', msg);
