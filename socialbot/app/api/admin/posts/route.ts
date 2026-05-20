@@ -6,6 +6,7 @@ import {
   isCampaignManager,
   isModerator,
   validateAdminSession,
+  type VerifiedAdminAuth,
 } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
@@ -48,10 +49,7 @@ function parseScopeFromInput(input: Record<string, unknown>): ScopeParse {
   };
 }
 
-function validateScopePayloadShape(
-  auth: { role: 'admin' | 'moderator' | 'campaign_manager' },
-  input: Record<string, unknown>
-) {
+function validateScopePayloadShape(auth: Pick<VerifiedAdminAuth, 'role'>, input: Record<string, unknown>) {
   if (isAdmin(auth as any)) return;
 
   const hasStateField = Object.prototype.hasOwnProperty.call(input, 'state_id') || Object.prototype.hasOwnProperty.call(input, 'assigned_state_ids');
@@ -91,7 +89,7 @@ function validateScopePayloadShape(
 }
 
 function requireNonEmptyScopeForPosts(
-  auth: { role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[]; assigned_group_ids?: string[] },
+  auth: Pick<VerifiedAdminAuth, 'role' | 'assigned_state_ids' | 'assigned_group_ids'>,
   scope: ScopeParse
 ) {
   if (isAdmin(auth as any)) return;

@@ -4,6 +4,7 @@ import {
   type BroadcastFilters,
   type BroadcastPayload,
 } from '@/lib/broadcast-send';
+import type { VerifiedAdminAuth } from '@/lib/admin-gate';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { canAccessResource, type UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import { parseGroupIds, RbacError } from '@/lib/rbac/require';
@@ -13,12 +14,10 @@ import {
   resolveEffectiveGroupIdsForCampaignManager,
 } from '@/lib/rbac/scoped-query-builder';
 
-export type NotificationAuth = {
-  user: { id: string };
-  role: 'admin' | 'moderator' | 'campaign_manager';
-  assigned_state_ids: number[];
-  assigned_group_ids?: string[];
-};
+export type NotificationAuth = Pick<
+  VerifiedAdminAuth,
+  'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids'
+>;
 
 function toGroupIdNums(groupIds: string[]): number[] {
   return groupIds.map((x) => Number(x)).filter((n) => Number.isSafeInteger(n) && n > 0);

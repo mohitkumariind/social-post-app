@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, toRbacUser, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireRole } from '@/lib/rbac/require';
@@ -7,20 +7,6 @@ import { TWITTER_CAMPAIGN_RESOURCE } from '@/app/api/admin/twitter-campaigns/_li
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
-}
-
-function rbacUser(auth: {
-  user: { id: string };
-  role: 'admin' | 'moderator' | 'campaign_manager';
-  assigned_state_ids: number[];
-  assigned_group_ids: string[];
-}) {
-  return {
-    id: auth.user.id,
-    role: auth.role,
-    assigned_state_ids: auth.assigned_state_ids,
-    assigned_group_ids: auth.assigned_group_ids,
-  };
 }
 
 export async function GET(_request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -45,7 +31,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ id: st
   if (!campaign) return json({ error: 'Not found' }, 404);
 
   const c = campaign as { id: string; created_by: string | null };
-  const u = rbacUser(auth);
+  const u = toRbacUser(auth);
   if (
     auth.role !== 'admin' &&
     !canAccessResource(u, { created_by: c.created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })

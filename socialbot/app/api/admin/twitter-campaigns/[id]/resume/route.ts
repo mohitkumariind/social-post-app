@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { toRbacUser } from '@/lib/admin-gate';
 import { withAudit } from '@/lib/audit/withAudit';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { RbacError, requireRole } from '@/lib/rbac/require';
@@ -7,20 +8,6 @@ import { TWITTER_CAMPAIGN_RESOURCE, twitterCampaignIdFromRequest, type TwitterCa
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
-}
-
-function rbacUser(auth: {
-  user: { id: string };
-  role: 'admin' | 'moderator' | 'campaign_manager';
-  assigned_state_ids: number[];
-  assigned_group_ids: string[];
-}) {
-  return {
-    id: auth.user.id,
-    role: auth.role,
-    assigned_state_ids: auth.assigned_state_ids,
-    assigned_group_ids: auth.assigned_group_ids,
-  };
 }
 
 export const POST = withAudit(
@@ -38,7 +25,7 @@ export const POST = withAudit(
     const id = twitterCampaignIdFromRequest(req);
     if (!id) return json({ error: 'Missing id' }, 400);
 
-    const u = rbacUser(auth);
+    const u = toRbacUser(auth);
     if (
       auth.role !== 'admin' &&
       !canAccessResource(u, { created_by: before.created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })

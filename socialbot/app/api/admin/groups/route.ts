@@ -7,7 +7,9 @@ import {
   isCampaignManager,
   isModerator,
   validateAdminSession,
+  type VerifiedAdminAuth,
 } from '@/lib/admin-gate';
+import type { AdminRole } from '@/lib/permissions';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
@@ -233,17 +235,14 @@ async function selectGroupsListMaybeDeleted(admin: SupabaseClient) {
 
 type ScopedViewer = {
   id: string;
-  role: 'admin' | 'moderator' | 'campaign_manager';
+  role: AdminRole;
   assigned_state_ids: number[];
   assigned_group_ids: string[];
 };
 
-function toScopedViewer(auth: {
-  user: { id: string };
-  role: 'admin' | 'moderator' | 'campaign_manager';
-  assigned_state_ids: number[];
-  assigned_group_ids: string[];
-}): ScopedViewer {
+function toScopedViewer(
+  auth: Pick<VerifiedAdminAuth, 'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids'>
+): ScopedViewer {
   return {
     id: auth.user.id,
     role: auth.role,

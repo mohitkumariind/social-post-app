@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, toRbacUser, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireRole } from '@/lib/rbac/require';
@@ -33,20 +33,6 @@ function isMissingTableErr(err: { message?: string } | null | undefined, tableNa
   );
 }
 
-function rbacUser(auth: {
-  user: { id: string };
-  role: 'admin' | 'moderator' | 'campaign_manager';
-  assigned_state_ids: number[];
-  assigned_group_ids: string[];
-}) {
-  return {
-    id: auth.user.id,
-    role: auth.role,
-    assigned_state_ids: auth.assigned_state_ids,
-    assigned_group_ids: auth.assigned_group_ids,
-  };
-}
-
 export async function GET(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   if (!id?.trim()) return json({ error: 'Missing id' }, 400);
@@ -74,7 +60,7 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ id: str
   }
   if (!campaign) return json({ error: 'Not found' }, 404);
 
-  const u = rbacUser(auth);
+  const u = toRbacUser(auth);
   if (
     auth.role !== 'admin' &&
     !canAccessResource(u, { created_by: (campaign as any).created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })
@@ -111,7 +97,7 @@ export const PATCH = withAudit(
       return json({ error: 'Not a campaign id', hint: WORKERS_ENDPOINT_HINT }, 404);
     }
 
-    const u = rbacUser(auth);
+    const u = toRbacUser(auth);
     if (
       auth.role !== 'admin' &&
       !canAccessResource(u, { created_by: before.created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })
@@ -247,7 +233,7 @@ export const DELETE = withAudit(
       return json({ error: 'Not a campaign id', hint: WORKERS_ENDPOINT_HINT }, 404);
     }
 
-    const u = rbacUser(auth);
+    const u = toRbacUser(auth);
     if (
       auth.role !== 'admin' &&
       !canAccessResource(u, { created_by: before.created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })

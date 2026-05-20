@@ -8,6 +8,7 @@ import {
   isSuperAdminRole,
 } from '@/lib/supabase/session-helpers';
 import type { AdminRole } from '@/lib/permissions';
+import type { RbacUser } from '@/lib/rbac/require';
 
 /**
  * Optional emergency local bypass for development only.
@@ -74,6 +75,18 @@ export type VerifiedAdminAuth = {
   assigned_state_ids: number[];
   assigned_group_ids: string[];
 };
+
+/** Map validated admin session to unified RBAC user (all AdminRole values). */
+export function toRbacUser(
+  auth: Pick<VerifiedAdminAuth, 'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids'>
+): RbacUser {
+  return {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+  };
+}
 
 export function isAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
   return auth.role === 'admin';
