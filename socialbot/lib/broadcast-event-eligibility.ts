@@ -12,5 +12,15 @@ export function isBroadcastSelectableEventStatus(status: unknown): boolean {
 
 export function isBroadcastSelectableEventRow(row: Record<string, unknown>): boolean {
   if (row.deleted_at != null && String(row.deleted_at).trim() !== '') return false;
-  return isBroadcastSelectableEventStatus(row.status);
+  const status = row.status;
+  if (status === undefined || status === null || String(status).trim() === '') {
+    // Legacy DB without `events.status`: already-published if not future-scheduled.
+    const sched = row.scheduled_at != null ? String(row.scheduled_at).trim() : '';
+    if (sched) {
+      const t = new Date(sched).getTime();
+      if (Number.isFinite(t) && t > Date.now()) return false;
+    }
+    return true;
+  }
+  return isBroadcastSelectableEventStatus(status);
 }

@@ -81,6 +81,17 @@ function isMissingRpcErr(err: { message?: string } | null | undefined) {
   );
 }
 
+/** How to restrict `active=1` listings when `events.status` may be absent (legacy DB). */
+type ActiveEventsFilterMode = 'status' | 'scheduled_at' | 'none';
+
+function applyActiveEventsFilter(q: any, activeOnly: boolean, mode: ActiveEventsFilterMode, nowIso: string): any {
+  if (!activeOnly || mode === 'none') return q;
+  if (mode === 'status') {
+    return q.in('status', ['published', 'scheduled_publish', 'processing_publish']);
+  }
+  return q.or(`scheduled_at.is.null,scheduled_at.lte.${nowIso}`);
+}
+
 /** PostgREST rejects the whole projection if any listed column is missing. */
 function stripColumnFromSelect(selectList: string, column: string): string {
   const col = column.trim().toLowerCase();
@@ -255,37 +266,80 @@ export async function GET(request: NextRequest) {
           eventsScopeCtx
         );
 
+  const nowIso = new Date().toISOString();
+  let activeFilterMode: ActiveEventsFilterMode = activeOnly ? 'status' : 'none';
+
+  const downgradeActiveFilter = (err: { message?: string } | null | undefined): boolean => {
+    if (!activeOnly) return false;
+    if (activeFilterMode === 'status' && isMissingColumnErr(err, 'status')) {
+      activeFilterMode = 'scheduled_at';
+      return true;
+    }
+    if (activeFilterMode === 'scheduled_at' && isMissingColumnErr(err, 'scheduled_at')) {
+      activeFilterMode = 'none';
+      return true;
+    }
+    return false;
+  };
+
   // Primary: created_at cursor pagination (preferred).
   let q: any = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit);
   if (!includeDeleted) q = q.is('deleted_at', null);
-  if (activeOnly) {
-    q = q.in('status', ['published', 'scheduled_publish', 'processing_publish']);
-  }
+  q = applyActiveEventsFilter(q, activeOnly, activeFilterMode, nowIso);
   if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
   q = applyScope(q);
 
   let { data, error } = await q;
 
+  while (error && downgradeActiveFilter(error)) {
+    let qRetry: any = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit);
+    if (!includeDeleted) qRetry = qRetry.is('deleted_at', null);
+    qRetry = applyActiveEventsFilter(qRetry, activeOnly, activeFilterMode, nowIso);
+    if (cursorCreatedAt) qRetry = qRetry.lt('created_at', cursorCreatedAt);
+    qRetry = applyScope(qRetry);
+    ({ data, error } = await qRetry);
+  }
+
   // Backward compatible fallbacks: missing created_at / deleted_at columns.
   if (error && isMissingColumnErr(error, 'deleted_at')) {
     let q2: any = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit);
     if (cursorCreatedAt) q2 = q2.lt('created_at', cursorCreatedAt);
-    if (activeOnly) q2 = q2.in('status', ['published', 'scheduled_publish', 'processing_publish']);
+    q2 = applyActiveEventsFilter(q2, activeOnly, activeFilterMode, nowIso);
     q2 = applyScope(q2);
     ({ data, error } = await q2);
+    while (error && downgradeActiveFilter(error)) {
+      let q2r: any = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit);
+      if (cursorCreatedAt) q2r = q2r.lt('created_at', cursorCreatedAt);
+      q2r = applyActiveEventsFilter(q2r, activeOnly, activeFilterMode, nowIso);
+      q2r = applyScope(q2r);
+      ({ data, error } = await q2r);
+    }
   }
   if (error && isMissingColumnErr(error, 'created_at')) {
     let q3: any = db.from('events').select('*').order('id', { ascending: false }).limit(limit);
     // cursor_created_at is ignored in this compatibility mode.
     if (!includeDeleted) q3 = q3.is('deleted_at', null);
-    if (activeOnly) q3 = q3.in('status', ['published', 'scheduled_publish', 'processing_publish']);
+    q3 = applyActiveEventsFilter(q3, activeOnly, activeFilterMode, nowIso);
     q3 = applyScope(q3);
     ({ data, error } = await q3);
+    while (error && downgradeActiveFilter(error)) {
+      let q3r: any = db.from('events').select('*').order('id', { ascending: false }).limit(limit);
+      if (!includeDeleted) q3r = q3r.is('deleted_at', null);
+      q3r = applyActiveEventsFilter(q3r, activeOnly, activeFilterMode, nowIso);
+      q3r = applyScope(q3r);
+      ({ data, error } = await q3r);
+    }
     if (error && isMissingColumnErr(error, 'deleted_at')) {
       let q4: any = db.from('events').select('*').order('id', { ascending: false }).limit(limit);
-      if (activeOnly) q4 = q4.in('status', ['published', 'scheduled_publish', 'processing_publish']);
+      q4 = applyActiveEventsFilter(q4, activeOnly, activeFilterMode, nowIso);
       q4 = applyScope(q4);
       ({ data, error } = await q4);
+      while (error && downgradeActiveFilter(error)) {
+        let q4r: any = db.from('events').select('*').order('id', { ascending: false }).limit(limit);
+        q4r = applyActiveEventsFilter(q4r, activeOnly, activeFilterMode, nowIso);
+        q4r = applyScope(q4r);
+        ({ data, error } = await q4r);
+      }
     }
   }
 

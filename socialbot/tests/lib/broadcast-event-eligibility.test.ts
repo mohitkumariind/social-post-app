@@ -20,4 +20,13 @@ describe('broadcast event eligibility', () => {
     expect(isBroadcastSelectableEventRow({ status: 'published', deleted_at: '2026-01-01' })).toBe(false);
     expect(isBroadcastSelectableEventRow({ status: 'published', deleted_at: null })).toBe(true);
   });
+
+  it('treats legacy rows without status as published when not future-scheduled', () => {
+    expect(isBroadcastSelectableEventRow({})).toBe(true);
+    expect(
+      isBroadcastSelectableEventRow({
+        scheduled_at: new Date(Date.now() + 86400000).toISOString(),
+      })
+    ).toBe(false);
+  });
 });
