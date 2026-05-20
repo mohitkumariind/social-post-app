@@ -9,10 +9,11 @@ describe('editor-access', () => {
     expect(isEditorAllowedAdminPath('/admin/notifications')).toBe(false);
   });
 
-  it('allows GET/PATCH events and POST/PATCH posts', () => {
+  it('allows GET/PATCH/DELETE events and POST/PATCH posts', () => {
     expect(isEditorAllowedAdminApiPath('/api/admin/events', 'GET')).toBe(true);
     expect(isEditorAllowedAdminApiPath('/api/admin/events', 'POST')).toBe(true);
     expect(isEditorAllowedAdminApiPath('/api/admin/events', 'PATCH')).toBe(true);
+    expect(isEditorAllowedAdminApiPath('/api/admin/events', 'DELETE')).toBe(true);
     expect(isEditorAllowedAdminApiPath('/api/admin/events?id=1', 'GET')).toBe(true);
     expect(isEditorAllowedAdminApiPath('/api/admin/posts', 'POST')).toBe(true);
     expect(isEditorAllowedAdminApiPath('/api/admin/viewer', 'GET')).toBe(true);

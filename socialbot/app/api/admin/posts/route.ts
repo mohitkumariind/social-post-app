@@ -191,9 +191,6 @@ export const POST = withAudit(
     const eventOwn = await assertPostEventOwnedByActor(admin, resolvedEventId, auth.user.id);
     if (!eventOwn.ok) return json({ error: eventOwn.error }, 403);
     payload.event_id = resolvedEventId;
-    if (!eventOwn.event.created_by) {
-      return json({ error: 'Forbidden: event ownership could not be verified' }, 403);
-    }
     if (!String(payload.category ?? '').trim()) payload.category = eventOwn.event.name;
 
     const { data: eventScopeRow } = await admin
@@ -247,25 +244,35 @@ export const POST = withAudit(
       const decision = canPerformMutation(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
         'posts.create',
-        { created_by: eventOwn.event.created_by },
+        { created_by: auth.user.id },
         payload as any,
         { resourceType: 'posts', resourceName: String((payload as any)?.title ?? '') }
       );
       if (!decision.ok) return json({ error: decision.reason }, 403);
     }
 
-    let insertRes = await admin.from('posts').insert(payload as any).select('*').single();
-    if (insertRes.error && isMissingColumnErr(insertRes.error, 'created_by')) {
-      const { created_by, ...rest } = payload;
-      insertRes = await admin.from('posts').insert(rest as any).select('*').single();
+    let insertBody: Record<string, unknown> = { ...payload };
+    let insertRes = await admin.from('posts').insert(insertBody as any).select('*').single();
+    for (const col of ['created_by', 'status', 'scheduled_at', 'event_id', 'dashboard_category']) {
+      if (insertRes.error && isMissingColumnErr(insertRes.error, col) && Object.prototype.hasOwnProperty.call(insertBody, col)) {
+        const next = { ...insertBody };
+        delete (next as Record<string, unknown>)[col];
+        insertBody = next;
+        insertRes = await admin.from('posts').insert(insertBody as any).select('*').single();
+      }
     }
-    if (insertRes.error && isMissingColumnErr(insertRes.error, 'status')) {
-      const { status, ...rest } = payload;
-      insertRes = await admin.from('posts').insert(rest as any).select('*').single();
-    }
-    if (insertRes.error && isMissingColumnErr(insertRes.error, 'scheduled_at')) {
-      const { scheduled_at: _sa, ...rest } = payload;
-      insertRes = await admin.from('posts').insert(rest as any).select('*').single();
+    if (insertRes.error && String(insertRes.error.message ?? '').toLowerCase().includes('captions')) {
+      const next = { ...insertBody };
+      const cap = next.captions;
+      if (typeof cap === 'string') {
+        try {
+          next.captions = JSON.parse(cap);
+        } catch {
+          delete next.captions;
+        }
+      }
+      insertBody = next;
+      insertRes = await admin.from('posts').insert(insertBody as any).select('*').single();
     }
 
     if (insertRes.error) return json({ error: insertRes.error.message }, 500);

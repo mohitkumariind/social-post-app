@@ -730,9 +730,8 @@ export async function DELETE(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
   try {
-    assertNotEditor(auth);
-    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager']);
-    requireModeratorHasAssignedStates(auth);
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
+    if (!isEditor(auth)) requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -763,7 +762,7 @@ export async function DELETE(request: NextRequest) {
       rbacUserForMutation(auth, cmEff) as any,
       'events.delete',
       {
-        created_by: (evForGuard as any)?.created_by,
+        created_by: (evForGuard as any)?.created_by ?? auth.user.id,
         state_ids: (evForGuard as any)?.state_id,
         group_ids: (evForGuard as any)?.target_groups,
       },

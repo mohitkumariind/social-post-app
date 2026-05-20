@@ -15,8 +15,13 @@ export async function resolvePostEventId(
   admin: SupabaseClient,
   payload: { event_id?: unknown; category?: unknown }
 ): Promise<string | null> {
+  const explicitRaw = String(payload.event_id ?? '').trim();
   const explicit = asUuidOrNull(payload.event_id);
   if (explicit) return explicit;
+  if (explicitRaw) {
+    const { data, error } = await admin.from('events').select('id').eq('id', explicitRaw).maybeSingle();
+    if (!error && data?.id != null) return String((data as { id: unknown }).id).trim();
+  }
 
   const cat = String(payload.category ?? '').trim();
   if (!cat) return null;

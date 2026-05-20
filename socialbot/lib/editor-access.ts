@@ -20,7 +20,7 @@ export function isEditorAllowedAdminApiPath(pathname: string, method: string): b
   if (p === '/api/admin/viewer' && m === 'GET') return true;
 
   if (p === '/api/admin/events' || p.startsWith('/api/admin/events?')) {
-    return m === 'GET' || m === 'POST' || m === 'PATCH';
+    return m === 'GET' || m === 'POST' || m === 'PATCH' || m === 'DELETE';
   }
 
   if (p === '/api/admin/posts' || p.startsWith('/api/admin/posts?')) {

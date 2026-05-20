@@ -159,14 +159,16 @@ export function canPerformMutation(
   }
 
   if (user.role === 'editor') {
+    const owner = mutationResourceOwner != null ? String(mutationResourceOwner).trim() : '';
+    const ownsResource = owner.length > 0 && owner === String(user.id).trim();
     if (action === 'events.create' || action === 'events.update') {
       return { ok: true };
     }
-    if (action === 'posts.create' || action === 'posts.update') {
-      const owner = mutationResourceOwner != null ? String(mutationResourceOwner).trim() : '';
-      if (owner && owner === String(user.id).trim()) {
-        return { ok: true };
-      }
+    if (action === 'events.delete' && ownsResource) {
+      return { ok: true };
+    }
+    if ((action === 'posts.create' || action === 'posts.update') && ownsResource) {
+      return { ok: true };
     }
     const denied = { ok: false as const, reason: 'Forbidden: editor may only manage own events and posts' };
     if (audit) {
