@@ -360,6 +360,8 @@ export default function App() {
 
   const isCampaignManager = viewer?.role === 'campaign_manager';
   const isEditor = viewer?.role === 'editor';
+  /** Global list filter: admin + super_admin only (viewer maps super_admin → admin). */
+  const canUseGlobalEventFilter = viewer?.role === 'admin';
 
   const editorAssignableStates = useMemo(() => {
     if (!isEditor) return availableStates;
@@ -527,7 +529,7 @@ export default function App() {
   }, []);
 
 
-  // Moderator UX: lock state on CREATE/filter only — never overwrite edit form from assigned states.
+  // Moderator UX: lock state on CREATE only — never overwrite edit form; no global list filter UI.
   useEffect(() => {
     if (!viewerReady || !isModerator || isEditMode) return;
     const allowedIds = visibleStates.map((s) => String(s.id));
@@ -539,7 +541,6 @@ export default function App() {
         logEventFormHydration('moderator_create_lock_state', { only, previous: newState });
         setNewState([only]);
       }
-      if (filterState !== 'ALL' && filterState !== only) setFilterState(only);
       return;
     }
 
@@ -549,7 +550,6 @@ export default function App() {
       logEventFormHydration('moderator_create_prune_state', { before: newState, after: cleaned });
       setNewState(cleaned);
     }
-    if (filterState !== 'ALL' && !allowed.has(filterState)) setFilterState('ALL');
   }, [
     viewerReady,
     isModerator,
@@ -558,7 +558,6 @@ export default function App() {
     singleAssignedStateId,
     visibleStates,
     newState,
-    filterState,
   ]);
 
   const selectedStateKey = useMemo(() => {
@@ -1708,8 +1707,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Global Filter */}
-        {!isCampaignManager ? (
+        {/* Global Filter — admin / super_admin only */}
+        {canUseGlobalEventFilter ? (
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2 text-slate-600">
               <Filter size={18} className="text-slate-400" />
@@ -1929,8 +1928,16 @@ export default function App() {
               const statusMatch = getStatus(e.start, e.end).id === st;
               const evParties = toStrArr(e.party);
               const evStates = toStrArr(e.state);
-              const partyMatch = filterParty === 'ALL' || evParties.length === 0 || evParties.some((p) => String(p) === filterParty);
-              const stateMatch = filterState === 'ALL' || evStates.length === 0 || evStates.some((s) => String(s) === filterState);
+              const partyMatch =
+                !canUseGlobalEventFilter ||
+                filterParty === 'ALL' ||
+                evParties.length === 0 ||
+                evParties.some((p) => String(p) === filterParty);
+              const stateMatch =
+                !canUseGlobalEventFilter ||
+                filterState === 'ALL' ||
+                evStates.length === 0 ||
+                evStates.some((s) => String(s) === filterState);
               return statusMatch && partyMatch && stateMatch;
             });
             if (items.length === 0) return null;
