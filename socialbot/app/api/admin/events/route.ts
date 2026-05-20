@@ -10,7 +10,15 @@ import {
   validateAdminSession,
   type VerifiedAdminAuth,
 } from '@/lib/admin-gate';
-import { applyEditorEventCreatePayload, assertNotEditor } from '@/lib/editor-access';
+import { assertNotEditor } from '@/lib/editor-access';
+import {
+  applyEditorEventCreateDefaults,
+  applyEventsOwnershipScope,
+  assertEventRowReadable,
+  isEventsFullAdmin,
+  stripNonAdminPublishFields,
+  validateEditorEventPayload,
+} from '@/lib/event-access';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
@@ -158,9 +166,8 @@ export async function GET(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
   try {
-    assertNotEditor(auth);
-    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager']);
-    requireModeratorHasAssignedStates(auth);
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
+    if (!isEditor(auth)) requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -171,34 +178,8 @@ export async function GET(request: NextRequest) {
     return json({ error: 'Admin event access requires SUPABASE_SERVICE_ROLE_KEY' }, 503);
   }
   const db = admin;
-  const adminRole = isAdmin(auth) || isSuperAdmin(auth);
+  const fullAdmin = isEventsFullAdmin(auth);
   if (isAdmin(auth)) assertAdminRole(auth);
-
-  let cmEffectiveGroupIds: string[] | undefined;
-  if (isCampaignManager(auth)) {
-    const eff = await resolveEffectiveGroupIdsForCampaignManager(db, auth.user.id, auth.assigned_group_ids);
-    if (eff === null) return json({ error: 'Unable to resolve group assignments' }, 500);
-    if (eff.length === 0) return json({ error: 'Campaign manager is missing assigned_group_ids' }, 403);
-    cmEffectiveGroupIds = eff;
-  }
-
-  const accessUser = () =>
-    isCampaignManager(auth) && cmEffectiveGroupIds && cmEffectiveGroupIds.length > 0
-      ? {
-          id: auth.user.id,
-          role: auth.role,
-          assigned_state_ids: auth.assigned_state_ids,
-          assigned_group_ids: cmEffectiveGroupIds,
-        }
-      : {
-          id: auth.user.id,
-          role: auth.role,
-          assigned_state_ids: auth.assigned_state_ids,
-          assigned_group_ids: auth.assigned_group_ids,
-        };
-
-  const eventsScopeCtx =
-    isCampaignManager(auth) && cmEffectiveGroupIds ? { effective_group_ids: cmEffectiveGroupIds } : {};
 
   const id = (request.nextUrl.searchParams.get('id') ?? '').trim();
   const name = (request.nextUrl.searchParams.get('name') ?? '').trim();
@@ -233,25 +214,7 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-      const ok = canAccessResource(
-        accessUser() as any,
-        {
-          created_by: (data as any).created_by,
-          state_ids: (data as any).state_id,
-          group_ids: (data as any).target_groups,
-          dashboard_category: (data as any).dashboard_category,
-        },
-        {
-          resourceType: 'events',
-          audit: {
-            resourceType: 'events',
-            action: 'events.read',
-            resourceId: String((data as any).id ?? ''),
-            resourceName: String((data as any).name ?? ''),
-          },
-        }
-      );
-      if (!ok) throw new RbacError('Forbidden', 403);
+      assertEventRowReadable(auth, data as { created_by?: string | null });
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
@@ -260,16 +223,8 @@ export async function GET(request: NextRequest) {
     return json({ event: data, usedServiceRole: !!admin });
   }
 
-  // Listing
-  const applyScope = (qIn: any) =>
-    adminRole
-      ? qIn
-      : buildScopedQuery(
-          { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
-          qIn,
-          'events',
-          eventsScopeCtx
-        );
+  // Listing: admin → all events; others → created_by only
+  const applyScope = (qIn: any) => applyEventsOwnershipScope(auth, qIn);
 
   const nowIso = new Date().toISOString();
   let activeFilterMode: ActiveEventsFilterMode = activeOnly ? 'status' : 'none';
@@ -386,6 +341,7 @@ export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
+  const fullAdmin = isEventsFullAdmin(auth);
   try {
     requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
     if (!isEditor(auth)) requireModeratorHasAssignedStates(auth);
@@ -402,16 +358,17 @@ export async function POST(request: NextRequest) {
   }
 
   if (isEditor(auth)) {
-    applyEditorEventCreatePayload(payload);
+    const editorErr = validateEditorEventPayload(payload, 'create');
+    if (editorErr) return json({ error: editorErr }, 403);
   }
 
-  if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category')) {
+  if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category') && !isEditor(auth)) {
     const n = normalizeIncomingEventDashboardCategory(payload.dashboard_category);
     if (n === '__invalid__') return json({ error: 'Invalid dashboard_category' }, 400);
     if (n == null) (payload as any).dashboard_category = null;
     else (payload as any).dashboard_category = n;
   }
-  if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category')) {
+  if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category') && !isEditor(auth)) {
     applyDashboardCategoryGlobalEventFields(payload);
   }
 
@@ -466,11 +423,13 @@ export async function POST(request: NextRequest) {
   payload.created_by = auth.user.id;
 
   if (isEditor(auth)) {
-    applyEditorEventCreatePayload(payload);
+    applyEditorEventCreateDefaults(payload);
+  } else if (!fullAdmin) {
     (payload as any).scheduled_at = null;
     (payload as any).status = 'draft';
     (payload as any).published_at = null;
     (payload as any).published_by = null;
+    delete (payload as any).dashboard_category;
   } else {
     // Scheduled publishing: store scheduled_at, set status.
     const schedParsed = parseFutureScheduledAt((payload as any).scheduled_at);
@@ -528,9 +487,8 @@ export async function PATCH(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
   try {
-    assertNotEditor(auth);
-    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager']);
-    requireModeratorHasAssignedStates(auth);
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
+    if (!isEditor(auth)) requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -567,14 +525,29 @@ export async function PATCH(request: NextRequest) {
   if (evForGuardErr) return json({ error: evForGuardErr.message }, 500);
   if (!evForGuard) return json({ error: 'Not found' }, 404);
 
+  try {
+    assertEventRowReadable(auth, evForGuard as { created_by?: string | null });
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message }, e.status);
+    return json({ error: 'Forbidden' }, 403);
+  }
+
+  if (isEditor(auth)) {
+    const editorErr = validateEditorEventPayload(patch, 'patch');
+    if (editorErr) return json({ error: editorErr }, 403);
+  }
+
+  stripNonAdminPublishFields(auth, patch);
+
   if (
+    !isEditor(auth) &&
     Object.prototype.hasOwnProperty.call(patch, 'dashboard_category') &&
     isActiveEventDashboardCategory((patch as any).dashboard_category)
   ) {
     applyDashboardCategoryGlobalEventFields(patch);
   }
 
-  if (isModerator(auth)) {
+  if (isModerator(auth) && !isEditor(auth)) {
     try {
       if (hasStoredCreatedBy(evForGuard)) {
         requireOwnership((evForGuard as any)?.created_by, auth.user.id);
@@ -591,7 +564,7 @@ export async function PATCH(request: NextRequest) {
     }
   }
 
-  if (isCampaignManager(auth)) {
+  if (isCampaignManager(auth) && !isEditor(auth)) {
     try {
       if (hasStoredCreatedBy(evForGuard)) {
         requireOwnership((evForGuard as any)?.created_by, auth.user.id);
@@ -776,6 +749,12 @@ export async function DELETE(request: NextRequest) {
     'id, created_by, state_id, target_groups, name'
   );
   if (evForGuardErr) return json({ error: evForGuardErr.message }, 500);
+  try {
+    assertEventRowReadable(auth, evForGuard as { created_by?: string | null });
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message }, e.status);
+    return json({ error: 'Forbidden' }, 403);
+  }
   {
     const decision = canPerformMutation(
       rbacUserForMutation(auth, cmEff) as any,

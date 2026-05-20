@@ -80,7 +80,10 @@ export function buildScopedQuery(
   }
 
   const role = user.role;
-  if (role === 'admin') return baseQuery;
+  if (role === 'admin' || role === 'super_admin') return baseQuery;
+  if (resourceType === 'events' || resourceType === 'posts') {
+    return baseQuery.eq('created_by', user.id);
+  }
   const canonical = canonicalScopeFromUser(user);
   if (canonical.malformed) return baseQuery.eq('id', '__none__');
 
@@ -93,31 +96,6 @@ export function buildScopedQuery(
     if (role === 'moderator') return baseQuery.eq('created_by', user.id);
     const gids = toGroupIdNums(canonical.groupIds);
     return gids.length > 0 ? baseQuery.in('id', gids) : baseQuery.eq('id', -1);
-  }
-
-  if (resourceType === 'events') {
-    if (role === 'moderator') {
-      if (canonical.stateIds.length === 0) {
-        return baseQuery.not('dashboard_category', 'is', null).eq('created_by', user.id);
-      }
-      const sidList = canonical.stateIds.join(',');
-      // state_id containing 0 means "All states" — visible to any moderator with assignments.
-      const branchAllStates = 'state_id.ov.{0}';
-      const branch1 = `and(state_id.not.is.null,state_id.neq.{},state_id.cd.{${sidList}})`;
-      const branch2 = `and(dashboard_category.not.is.null,created_by.eq.${user.id})`;
-      return baseQuery.or(`${branchAllStates},${branch1},${branch2}`);
-    }
-    // campaign_manager: require event.target_groups subset of assigned (effective) group ids.
-    // Use normalized string IDs for PostgREST: `events.target_groups` is text[] (numeric strings) in canonical schema;
-    // passing number[] can break `<@` / `containedBy` matching against text[].
-    const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
-    if (scopeGids.length === 0) {
-      return baseQuery.not('dashboard_category', 'is', null).eq('created_by', user.id);
-    }
-    const gidList = scopeGids.join(',');
-    const branch1 = `and(target_groups.not.is.null,target_groups.neq.{},target_groups.cd.{${gidList}})`;
-    const branch2 = `and(dashboard_category.not.is.null,created_by.eq.${user.id})`;
-    return baseQuery.or(`${branch1},${branch2}`);
   }
 
   if (resourceType === 'profiles') {
@@ -137,16 +115,6 @@ export function buildScopedQuery(
       return baseQuery.or(`id.in.(${allowed.join(',')}),group_id.in.(${gids.join(',')})${ov}`);
     }
     if (allowed.length > 0) return baseQuery.in('id', allowed);
-    return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
-  }
-
-  if (resourceType === 'posts') {
-    if (role === 'moderator') {
-      // Require post.state_id subset of moderator assigned_state_ids.
-      return baseQuery.not('state_id', 'is', null).neq('state_id', '{}').containedBy('state_id', canonical.stateIds);
-    }
-    // campaign_manager: group-only scoping (indexed). If no groups are assigned, return empty.
-    const gids = toGroupIdNums(campaignManagerScopeGroupIds(canonical, ctx));
     return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
   }
 
@@ -189,7 +157,12 @@ export function buildScopedAnalyticsQuery(
   }
 
   const role = user.role;
-  if (role === 'admin') return baseQuery;
+  if (role === 'admin' || role === 'super_admin') return baseQuery;
+
+  if (resourceType === 'events' || resourceType === 'posts') {
+    return baseQuery.eq('created_by', user.id);
+  }
+
   const canonical = canonicalScopeFromUser(user);
   if (canonical.malformed) return baseQuery.eq('id', '__none__');
 
@@ -207,31 +180,7 @@ export function buildScopedAnalyticsQuery(
     return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
   }
 
-  if (resourceType === 'events') {
-    if (role === 'moderator') {
-      if (canonical.stateIds.length === 0) {
-        return baseQuery.not('dashboard_category', 'is', null).eq('created_by', user.id);
-      }
-      const sidList = canonical.stateIds.join(',');
-      const branchAllStates = 'state_id.ov.{0}';
-      const branch1 = `and(state_id.not.is.null,state_id.neq.{},state_id.cd.{${sidList}})`;
-      const branch2 = `and(dashboard_category.not.is.null,created_by.eq.${user.id})`;
-      return baseQuery.or(`${branchAllStates},${branch1},${branch2}`);
-    }
-    const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
-    if (scopeGids.length === 0) {
-      return baseQuery.not('dashboard_category', 'is', null).eq('created_by', user.id);
-    }
-    const gidList = scopeGids.join(',');
-    const branch1 = `and(target_groups.not.is.null,target_groups.neq.{},target_groups.cd.{${gidList}})`;
-    const branch2 = `and(dashboard_category.not.is.null,created_by.eq.${user.id})`;
-    return baseQuery.or(`${branch1},${branch2}`);
-  }
-
-  // posts
-  if (role === 'moderator') return baseQuery.not('state_id', 'is', null).neq('state_id', '{}').containedBy('state_id', canonical.stateIds);
-  const gids = toGroupIdNums(campaignManagerScopeGroupIds(canonical, ctx));
-  return gids.length > 0 ? baseQuery.in('group_id', gids) : baseQuery.eq('id', '__none__');
+  return baseQuery.eq('id', '__none__');
 }
 
 /**

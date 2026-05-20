@@ -28,7 +28,7 @@ import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 import { fromPartyDB, isNumeric } from '@/lib/party-mapper';
 import { API_MAX_FRAMES_LIMIT } from '@/lib/perf-defaults';
 import { sortUserFramesByDisplayKey } from '@/lib/sortUserFramesByDisplayKey';
-import { normalizeProfileRole, ROLE_OPTIONS, type ProfileRole } from '@/lib/profile-roles';
+import { ADMIN_ROLE_UI_OPTIONS, normalizeProfileRole, type ProfileRole } from '@/lib/profile-roles';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
 
@@ -768,7 +768,7 @@ export default function UserManagement() {
                   onChange={(e) => setRoleValue(e.target.value as any)}
                   disabled={roleSaving}
                 >
-                  {ROLE_OPTIONS.map(({ value, label }) => (
+                  {ADMIN_ROLE_UI_OPTIONS.map(({ value, label }) => (
                     <option key={value} value={value}>
                       {label}
                     </option>

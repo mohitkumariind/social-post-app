@@ -146,8 +146,10 @@ export function canPerformMutation(
   if (user.role === 'admin' || user.role === 'super_admin') return { ok: true };
 
   if (user.role === 'editor') {
-    if (action === 'events.create') return { ok: true };
-    const denied = { ok: false as const, reason: 'Forbidden: editor may only create draft events' };
+    if (action === 'events.create' || action === 'events.update' || action === 'posts.create' || action === 'posts.update') {
+      return { ok: true };
+    }
+    const denied = { ok: false as const, reason: 'Forbidden: editor may only manage own events and posts' };
     if (audit) {
       auditDenied({
         user,

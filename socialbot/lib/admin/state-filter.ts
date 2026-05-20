@@ -1,4 +1,4 @@
-export type ViewerRole = 'admin' | 'moderator' | 'campaign_manager';
+export type ViewerRole = 'admin' | 'moderator' | 'campaign_manager' | 'editor';
 
 export type ViewerAccess = {
   role: ViewerRole;

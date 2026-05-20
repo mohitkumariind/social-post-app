@@ -6,7 +6,14 @@ export type AdminRole = AdminPanelRole;
 
 export type { ProfileRole };
 
-export { ADMIN_PANEL_ROLES, PROFILE_ROLES, ROLE_OPTIONS, normalizeProfileRole, isProfileRole } from '@/lib/profile-roles';
+export {
+  ADMIN_PANEL_ROLES,
+  ADMIN_ROLE_UI_OPTIONS,
+  PROFILE_ROLES,
+  ROLE_OPTIONS,
+  normalizeProfileRole,
+  isProfileRole,
+} from '@/lib/profile-roles';
 
 /** Roles allowed to use Banner Manager (admin UI + `/api/admin/banners`). */
 export const BANNER_MANAGER_ROLES: readonly AdminRole[] = ['admin', 'super_admin'];

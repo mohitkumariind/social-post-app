@@ -284,7 +284,10 @@ export default function App() {
   const [workerNotifyToast, setWorkerNotifyToast] = useState(false);
   const skipLoksabhaResetCountRef = useRef(0);
 
-  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[] } | null>(null);
+  const [viewer, setViewer] = useState<{
+    role: 'admin' | 'moderator' | 'campaign_manager' | 'editor';
+    assigned_state_ids: number[];
+  } | null>(null);
   const [viewerLoading, setViewerLoading] = useState(true);
 
   useEffect(() => {
@@ -300,9 +303,11 @@ export default function App() {
             ? 'moderator'
             : d.role === 'campaign_manager'
               ? 'campaign_manager'
-              : d.role === 'admin'
-                ? 'admin'
-                : null;
+              : d.role === 'editor'
+                ? 'editor'
+                : d.role === 'admin' || d.role === 'super_admin'
+                  ? 'admin'
+                  : null;
         const ids = Array.isArray(d.assigned_state_ids)
           ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
           : [];
@@ -329,6 +334,7 @@ export default function App() {
   );
 
   const isCampaignManager = viewer?.role === 'campaign_manager';
+  const isEditor = viewer?.role === 'editor';
 
   useEffect(() => {
     if (!isCreateCategoryMode) return;
@@ -661,7 +667,11 @@ export default function App() {
     const startVal = `${startDate}T00:00:00Z`;
     const endVal = `${endDate}T23:59:59Z`;
     const payload: Record<string, unknown> = { name: newName, start: startVal, end: endVal, captions: [] };
-    if (scheduledAt) {
+    if (isEditor && scheduledAt) {
+      alert('Editors cannot schedule publish; events are saved as drafts.');
+      return;
+    }
+    if (!isEditor && scheduledAt) {
       const iso = new Date(scheduledAt).toISOString();
       if (iso <= new Date().toISOString()) {
         alert('scheduled_at must be a future date/time');
@@ -669,11 +679,13 @@ export default function App() {
       }
       payload.scheduled_at = iso;
     }
-    const dashDb = dashboardCategoryToDb(newEventDashboardCategory);
+    const dashDb = isEditor ? null : dashboardCategoryToDb(newEventDashboardCategory);
     if (dashDb != null) (payload as any).dashboard_category = dashDb;
 
-    const partyArr = isCreateCategoryMode ? [] : newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
-    const stateArr = isCreateCategoryMode ? [] : newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
+    const partyArr =
+      isEditor || isCreateCategoryMode ? [] : newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
+    const stateArr =
+      isEditor || isCreateCategoryMode ? [] : newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
     const loksabhaArr = isCreateCategoryMode ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
     const assemblyArr = isCreateCategoryMode ? [] : newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
     const targetGroupsArr = isCreateCategoryMode ? [] : newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
@@ -683,11 +695,26 @@ export default function App() {
     }
 
     const partyIdArr = toNumArrFromStrIds(partyArr);
-    const stateIdArr = toNumArrFromStrIds(stateArr);
+    let stateIdArr = toNumArrFromStrIds(stateArr);
     const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
     const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
-    // Campaign Manager: groups-only targeting (always ignore geo/party arrays).
-    if (isCampaignManager) {
+
+    if (isEditor) {
+      stateIdArr = newState.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+      if (stateIdArr.length === 0) {
+        alert('Please select at least one state.');
+        return;
+      }
+      payload.state_id = stateIdArr;
+      payload.party = [];
+      payload.state = [];
+      payload.loksabha = [];
+      payload.assembly = [];
+      payload.party_id = [];
+      payload.loksabha_id = [];
+      payload.assembly_id = [];
+      payload.target_groups = [];
+    } else if (isCampaignManager) {
       payload.party = [];
       payload.state = [];
       payload.loksabha = [];
@@ -1510,24 +1537,26 @@ export default function App() {
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</span>
               <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm" />
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Dashboard Category</span>
-              <select
-                value={newEventDashboardCategory}
-                onChange={(e) => setNewEventDashboardCategory(e.target.value as UiDashboardCategory)}
-                className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm"
-              >
-                <option value="none">None</option>
-                <option value="good_morning">Good Morning</option>
-                <option value="good_night">Good Night</option>
-                <option value="motivation">Motivation</option>
-                <option value="devotional">Devotional</option>
-                <option value="birthday_wishes">Birthday Wishes</option>
-              </select>
-              {isCreateCategoryMode ? (
-                <p className="mt-2 text-[10px] font-bold text-slate-500">Category events are global dashboard content events.</p>
-              ) : null}
-            </div>
+            {!isEditor ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
+                <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Dashboard Category</span>
+                <select
+                  value={newEventDashboardCategory}
+                  onChange={(e) => setNewEventDashboardCategory(e.target.value as UiDashboardCategory)}
+                  className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm"
+                >
+                  <option value="none">None</option>
+                  <option value="good_morning">Good Morning</option>
+                  <option value="good_night">Good Night</option>
+                  <option value="motivation">Motivation</option>
+                  <option value="devotional">Devotional</option>
+                  <option value="birthday_wishes">Birthday Wishes</option>
+                </select>
+                {isCreateCategoryMode ? (
+                  <p className="mt-2 text-[10px] font-bold text-slate-500">Category events are global dashboard content events.</p>
+                ) : null}
+              </div>
+            ) : null}
             {!isCampaignManager ? (
               <div
                 className={`col-span-2 lg:col-span-3 grid grid-cols-2 lg:grid-cols-2 gap-4 ${
@@ -1535,7 +1564,19 @@ export default function App() {
                 }`}
               >
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                  {hasSingleAssignedState && singleAssignedStateId ? (
+                  {isEditor ? (
+                    <MultiSelectDropdown
+                      label="State (required)"
+                      options={availableStates}
+                      selected={newState}
+                      onSelect={setNewState}
+                      getValue={(s) => String(s.id)}
+                      getLabel={(s) => s.name}
+                      showAllOption={false}
+                      loading={statesLoading}
+                      searchable
+                    />
+                  ) : hasSingleAssignedState && singleAssignedStateId ? (
                     <div>
                       <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">State</span>
                       <div className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
@@ -1556,6 +1597,8 @@ export default function App() {
                     />
                   )}
                 </div>
+                {!isEditor ? (
+                <>
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
                   <MultiSelectDropdown
                     label="Party"
@@ -1599,6 +1642,8 @@ export default function App() {
                     searchable
                   />
                 </div>
+                </>
+                ) : null}
               </div>
             ) : null}
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -1609,6 +1654,7 @@ export default function App() {
               <span className="text-[9px] font-black text-rose-400 uppercase tracking-widest mb-1">Expiry</span>
               <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
             </div>
+            {!isEditor ? (
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Schedule publish</span>
               {!scheduleUiOpen ? (
@@ -1633,6 +1679,8 @@ export default function App() {
                 </>
               )}
             </div>
+            ) : null}
+            {!isEditor ? (
             <div className={`rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3 ${isCreateCategoryMode ? 'pointer-events-none opacity-50' : ''}`}>
               <MultiSelectDropdown
                 label="Target Groups"
@@ -1660,8 +1708,13 @@ export default function App() {
                 )}
               </div>
             </div>
+            ) : null}
             <div className="col-span-2 lg:col-span-3 flex justify-end">
-              <button onClick={createEvent} disabled={!newName || !startDate || !endDate} className="bg-blue-600 text-white px-8 py-2.5 rounded-2xl font-black text-xs hover:bg-slate-900 disabled:opacity-30 transition-all uppercase tracking-widest shrink-0">
+              <button
+                onClick={createEvent}
+                disabled={!newName || !startDate || !endDate || (isEditor && newState.length === 0)}
+                className="bg-blue-600 text-white px-8 py-2.5 rounded-2xl font-black text-xs hover:bg-slate-900 disabled:opacity-30 transition-all uppercase tracking-widest shrink-0"
+              >
                 Add
               </button>
             </div>

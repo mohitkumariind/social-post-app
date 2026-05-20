@@ -23,6 +23,8 @@ import {
   requireScopeState,
 } from '@/lib/rbac/require';
 import { resolvePostEventId } from '@/lib/admin/resolvePostEventId';
+import { assertPostEventOwnedByActor, isEventsFullAdmin } from '@/lib/event-access';
+import { isEditor } from '@/lib/admin-gate';
 import { withAudit } from '@/lib/audit/withAudit';
 
 function json(body: unknown, status = 200) {
@@ -117,9 +119,11 @@ export async function GET(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
-    requireModeratorHasAssignedStates(auth);
-    requireCampaignManagerHasAssignedGroups(auth);
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
+    if (!isEditor(auth)) {
+      requireModeratorHasAssignedStates(auth);
+      requireCampaignManagerHasAssignedGroups(auth);
+    }
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -127,7 +131,7 @@ export async function GET(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
-  const adminRole = isAdmin(auth);
+  const adminRole = isEventsFullAdmin(auth);
   if (adminRole) assertAdminRole(auth);
 
   const scopedUser = {
@@ -162,9 +166,11 @@ export async function GET(request: NextRequest) {
 export const POST = withAudit(
   async ({ req, auth, admin }) => {
     try {
-      requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
-      requireModeratorHasAssignedStates(auth);
-      requireCampaignManagerHasAssignedGroups(auth);
+      requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
+      if (!isEditor(auth)) {
+        requireModeratorHasAssignedStates(auth);
+        requireCampaignManagerHasAssignedGroups(auth);
+      }
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
@@ -177,28 +183,39 @@ export const POST = withAudit(
       return json({ error: 'Invalid JSON body' }, 400);
     }
 
-    const scheduled_at_raw = body?.scheduled_at != null ? String(body.scheduled_at).trim() : '';
-    const scheduled_at = scheduled_at_raw ? new Date(scheduled_at_raw).toISOString() : null;
-    const nowIso = new Date().toISOString();
-    if (scheduled_at && scheduled_at <= nowIso) return json({ error: 'scheduled_at must be in the future' }, 400);
-
-    // Base payload (do not break existing posts fields; keep loose)
     const payload: Record<string, unknown> = { ...(body ?? {}) };
-    if (scheduled_at) {
-      payload.scheduled_at = scheduled_at;
-      payload.status = 'scheduled_publish';
+    payload.created_by = auth.user.id;
+
+    const resolvedEventId = await resolvePostEventId(admin, payload);
+    if (!resolvedEventId) return json({ error: 'event_id is required and must reference an existing event' }, 400);
+    const eventOwn = await assertPostEventOwnedByActor(admin, resolvedEventId, auth.user.id);
+    if (!eventOwn.ok) return json({ error: eventOwn.error }, 403);
+    payload.event_id = resolvedEventId;
+    if (!String(payload.category ?? '').trim()) payload.category = eventOwn.event.name;
+
+    if (isEventsFullAdmin(auth) && !isEditor(auth)) {
+      const scheduled_at_raw = body?.scheduled_at != null ? String(body.scheduled_at).trim() : '';
+      const scheduled_at = scheduled_at_raw ? new Date(scheduled_at_raw).toISOString() : null;
+      const nowIso = new Date().toISOString();
+      if (scheduled_at && scheduled_at <= nowIso) return json({ error: 'scheduled_at must be in the future' }, 400);
+      if (scheduled_at) {
+        payload.scheduled_at = scheduled_at;
+        payload.status = 'scheduled_publish';
+      } else {
+        payload.scheduled_at = null;
+        payload.status = 'published';
+      }
     } else {
       payload.scheduled_at = null;
       payload.status = 'published';
     }
 
-    // Ownership fields if present in DB (retry if missing)
-    if (auth.role !== 'admin') payload.created_by = auth.user.id;
-
     const scope = parseScopeFromInput(payload);
     try {
-      validateScopePayloadShape(auth as any, payload as any);
-      requireNonEmptyScopeForPosts(auth as any, scope);
+      if (!isEditor(auth)) {
+        validateScopePayloadShape(auth as any, payload as any);
+        requireNonEmptyScopeForPosts(auth as any, scope);
+      }
     } catch (e) {
       if (e instanceof RbacError) {
         // Ensure denied attempts are audited via scoped write engine.
@@ -241,18 +258,6 @@ export const POST = withAudit(
 
     if (insertRes.error) return json({ error: insertRes.error.message }, 500);
 
-    const inserted = insertRes.data as Record<string, unknown>;
-    const resolvedEventId = await resolvePostEventId(admin, payload);
-    if (resolvedEventId && String(inserted?.event_id ?? '').trim() !== resolvedEventId) {
-      const { data: linked } = await admin
-        .from('posts')
-        .update({ event_id: resolvedEventId })
-        .eq('id', inserted.id)
-        .select('*')
-        .single();
-      if (linked) return json({ post: linked });
-    }
-
     return json({ post: insertRes.data });
   },
   {
@@ -276,9 +281,11 @@ export const POST = withAudit(
 export const PATCH = withAudit(
   async ({ req, auth, admin, previous_data }) => {
     try {
-      requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
-      requireModeratorHasAssignedStates(auth);
-      requireCampaignManagerHasAssignedGroups(auth);
+      requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
+      if (!isEditor(auth)) {
+        requireModeratorHasAssignedStates(auth);
+        requireCampaignManagerHasAssignedGroups(auth);
+      }
     } catch (e) {
       if (e instanceof RbacError) return json({ error: e.message }, e.status);
       return json({ error: 'Forbidden' }, 403);
@@ -297,6 +304,18 @@ export const PATCH = withAudit(
     const before: any = previous_data ?? null;
     if (!before) return json({ error: 'Not found' }, 404);
 
+    if (!isEventsFullAdmin(auth)) {
+      const postOwner = String(before?.created_by ?? '').trim();
+      if (postOwner && postOwner !== auth.user.id) {
+        return json({ error: 'Forbidden: post not owned by you' }, 403);
+      }
+      const eid = String(before?.event_id ?? '').trim();
+      if (eid) {
+        const own = await assertPostEventOwnedByActor(admin, eid, auth.user.id);
+        if (!own.ok) return json({ error: own.error }, 403);
+      }
+    }
+
     const beforeScope = parseScopeFromInput(before as any);
 
     const patchInput = {
@@ -309,9 +328,11 @@ export const PATCH = withAudit(
 
     // Enforce BOTH previous row scope and incoming payload scope (deny if scope missing/malformed).
     try {
-      validateScopePayloadShape(auth as any, patch as any);
-      requireNonEmptyScopeForPosts(auth as any, beforeScope);
-      requireNonEmptyScopeForPosts(auth as any, nextScope);
+      if (!isEditor(auth)) {
+        validateScopePayloadShape(auth as any, patch as any);
+        requireNonEmptyScopeForPosts(auth as any, beforeScope);
+        requireNonEmptyScopeForPosts(auth as any, nextScope);
+      }
     } catch (e) {
       if (e instanceof RbacError) {
         canPerformMutation(
@@ -359,7 +380,13 @@ export const PATCH = withAudit(
     }
 
     const resolvedEventId = await resolvePostEventId(admin, { ...before, ...nextPatch });
-    if (resolvedEventId) nextPatch.event_id = resolvedEventId;
+    if (resolvedEventId) {
+      if (!isEventsFullAdmin(auth)) {
+        const own = await assertPostEventOwnedByActor(admin, resolvedEventId, auth.user.id);
+        if (!own.ok) return json({ error: own.error }, 403);
+      }
+      nextPatch.event_id = resolvedEventId;
+    }
 
     const { data, error } = await admin.from('posts').update(nextPatch).eq('id', id).select('*').single();
     if (error) return json({ error: error.message }, 500);
