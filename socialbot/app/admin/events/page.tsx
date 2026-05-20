@@ -37,6 +37,11 @@ import {
   resolveStateSelectionsFromEvent,
   stateLabelsForIds,
 } from '@/lib/admin/event-form-hydration';
+import {
+  logEditorPartyDebug,
+  mergePartiesForEdit,
+  partiesVisibleToEditor,
+} from '@/lib/admin/editor-party-scope';
 import { captionsJsonForPostColumn, isLikelyEventUuid, normalizeCaptionsFromDb } from '@/lib/captions';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
@@ -299,6 +304,7 @@ export default function App() {
   const [viewer, setViewer] = useState<{
     role: 'admin' | 'moderator' | 'campaign_manager' | 'editor';
     assigned_state_ids: number[];
+    assigned_party_ids: string[];
   } | null>(null);
   const [viewerLoading, setViewerLoading] = useState(true);
 
@@ -308,7 +314,11 @@ export default function App() {
       try {
         const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
         if (!res.ok) return;
-        const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_ids?: unknown };
+        const d = (await res.json().catch(() => ({}))) as {
+          role?: string;
+          assigned_state_ids?: unknown;
+          assigned_party_ids?: unknown;
+        };
         if (cancelled) return;
         const role =
           d.role === 'moderator'
@@ -323,7 +333,10 @@ export default function App() {
         const ids = Array.isArray(d.assigned_state_ids)
           ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
           : [];
-        if (role) setViewer({ role, assigned_state_ids: ids });
+        const partyIds = Array.isArray(d.assigned_party_ids)
+          ? d.assigned_party_ids.map((x: any) => String(x ?? '').trim().toLowerCase()).filter(Boolean)
+          : [];
+        if (role) setViewer({ role, assigned_state_ids: ids, assigned_party_ids: partyIds });
       } catch {
         // ignore
       } finally {
@@ -356,7 +369,18 @@ export default function App() {
     return availableStates.filter((s) => allowed.has(String(s.id)));
   }, [isEditor, viewer?.assigned_state_ids, availableStates]);
 
+  const editorAssignableParties = useMemo(() => {
+    if (!isEditor) return PARTIES_DATA;
+    return partiesVisibleToEditor(PARTIES_DATA, viewer?.assigned_party_ids ?? []);
+  }, [isEditor, viewer?.assigned_party_ids]);
+
   const isEditMode = editingEvent != null;
+
+  const editFormPartyOptions = useMemo(() => {
+    if (!isEditMode) return isEditor ? editorAssignableParties : PARTIES_DATA;
+    const visible = isEditor ? editorAssignableParties : PARTIES_DATA;
+    return mergePartiesForEdit(visible, PARTIES_DATA, newParty);
+  }, [isEditMode, isEditor, editorAssignableParties, newParty]);
 
   const editFormStateOptions = useMemo(() => {
     if (!isEditMode) return viewerReady ? visibleStates : [];
@@ -379,6 +403,13 @@ export default function App() {
       editStateReadonlyLabel,
       editFormStateOptionIds: editFormStateOptions.map((s) => s.id),
     });
+    if (isEditor) {
+      logEditorPartyDebug('edit_form_render_party', {
+        editor_allowed_parties: editorAssignableParties.map((p) => p.id),
+        selected_party: newParty,
+        editFormPartyOptionIds: editFormPartyOptions.map((p) => p.id),
+      });
+    }
   }, [
     isEditMode,
     editingEvent,
@@ -388,6 +419,9 @@ export default function App() {
     newAssembly,
     editStateReadonlyLabel,
     editFormStateOptions,
+    isEditor,
+    editorAssignableParties,
+    editFormPartyOptions,
   ]);
 
   useEffect(() => {
@@ -753,8 +787,7 @@ export default function App() {
     const dashDb = isEditor ? null : dashboardCategoryToDb(newEventDashboardCategory);
     if (dashDb != null) (payload as any).dashboard_category = dashDb;
 
-    const partyArr =
-      isEditor || isCreateCategoryMode ? [] : newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
+    const partyArr = isCreateCategoryMode ? [] : newParty.includes('ALL') ? ['ALL'] : newParty.filter(Boolean);
     const stateArr =
       isEditor || isCreateCategoryMode ? [] : newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
     const loksabhaArr = isCreateCategoryMode ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
@@ -781,12 +814,17 @@ export default function App() {
       payload.state_id = stateIdArr;
       payload.loksabha_id = lokIdArr;
       payload.assembly_id = asmIdArr;
-      payload.party = [];
       payload.state = [];
       payload.loksabha = [];
       payload.assembly = [];
-      payload.party_id = [];
       payload.target_groups = [];
+      if (partyArr.length > 0) payload.party = partyArr;
+      if (partyIdArr.length > 0) payload.party_id = partyIdArr;
+      logEditorPartyDebug('create_saved_party_payload', {
+        editor_allowed_parties: editorAssignableParties.map((p) => p.id),
+        selected_party: newParty,
+        saved_party_payload: { party: payload.party, party_id: payload.party_id },
+      });
     } else if (isCampaignManager) {
       payload.party = [];
       payload.state = [];
@@ -1238,6 +1276,12 @@ export default function App() {
       asmSel,
       target_groups: toStrArr(source.target_groups as string | string[] | undefined),
     });
+    logEditorPartyDebug('edit_hydrated_party', {
+      editor_allowed_parties: editorAssignableParties.map((p) => p.id),
+      hydrated_party: partySel,
+      db_party_id: source.party_id,
+      db_party: source.party,
+    });
 
     setNewParty(partySel);
     setNewState(stateIds);
@@ -1285,6 +1329,17 @@ export default function App() {
     const stateIdArr = toNumArrFromStrIds(stateArr);
     const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
     const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
+    if (isEditor) {
+      logEditorPartyDebug('edit_saved_party_payload', {
+        editor_allowed_parties: editorAssignableParties.map((p) => p.id),
+        selected_party: newParty,
+        hydrated_party: partyArr,
+        saved_party_payload: {
+          party: isEditCat ? [] : partyArr,
+          party_id: isEditCat ? [] : partyIdArr,
+        },
+      });
+    }
     updatePayload.target_groups = targetGroupsArr;
     // Campaign Manager: groups-only targeting (always ignore geo/party arrays).
     if (isCampaignManager) {
@@ -1529,7 +1584,7 @@ export default function App() {
                         <div className="rounded-2xl border border-slate-200 bg-white p-3">
                           <MultiSelectDropdown
                             label="Party"
-                            options={PARTIES_DATA}
+                            options={editFormPartyOptions}
                             selected={newParty}
                             onSelect={setNewParty}
                             getValue={(p) => p.id}
@@ -1744,11 +1799,10 @@ export default function App() {
                     />
                   )}
                 </div>
-                {!isEditor ? (
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
                   <MultiSelectDropdown
                     label="Party"
-                    options={PARTIES_DATA}
+                    options={isEditor ? editorAssignableParties : PARTIES_DATA}
                     selected={newParty}
                     onSelect={setNewParty}
                     getValue={(p) => p.id}
@@ -1762,7 +1816,6 @@ export default function App() {
                     }
                   />
                 </div>
-                ) : null}
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
                   <MultiSelectDropdown
                     label="Lok Sabha"

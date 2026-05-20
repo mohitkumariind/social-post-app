@@ -90,9 +90,18 @@ export type ProfileAccessResult = {
   role: string | null;
   assigned_state_ids: number[];
   assigned_group_ids: string[];
+  assigned_party_ids: string[];
   usedServiceRole: boolean;
   errorMessage?: string;
 };
+
+function toPartySlugArr(v: unknown): string[] {
+  if (v == null) return [];
+  const arr = Array.isArray(v) ? v : [v];
+  return arr
+    .map((x) => String(x ?? '').trim().toLowerCase())
+    .filter((s) => s.length > 0 && s !== 'all');
+}
 
 function toNum(v: unknown): number | null {
   if (v == null) return null;
@@ -137,6 +146,7 @@ export async function fetchProfileAccessForMiddleware(
       role: null,
       assigned_state_ids: [],
       assigned_group_ids: [],
+      assigned_party_ids: [],
       usedServiceRole: false,
       errorMessage: 'NEXT_PUBLIC_SUPABASE_URL missing',
     };
@@ -146,19 +156,31 @@ export async function fetchProfileAccessForMiddleware(
     const admin = createClient(url, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const tryWithAssignedGroups = async () =>
-      await admin.from('profiles').select('role, assigned_state_ids, assigned_group_ids').eq('id', userId).single();
+    const selectFull = 'role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
+    const selectNoParties = 'role, assigned_state_ids, assigned_group_ids';
+    const selectNoGroups = 'role, assigned_state_ids';
+    const selectRoleOnly = 'role';
 
-    const tryWithoutAssignedGroups = async () =>
-      await admin.from('profiles').select('role, assigned_state_ids').eq('id', userId).single();
+    const fetchRow = async (cols: string) =>
+      admin.from('profiles').select(cols).eq('id', userId).single();
 
-    let { data, error } = await tryWithAssignedGroups();
-    const msg = String((error as any)?.message ?? '').toLowerCase();
-    const missingAssignedGroups = msg.includes('assigned_group_ids') && (msg.includes('does not exist') || msg.includes('schema cache'));
-    if (error && missingAssignedGroups) {
-      const r2 = await tryWithoutAssignedGroups();
-      data = (r2 as any).data ?? null;
-      error = (r2 as any).error ?? null;
+    let cols = selectFull;
+    let { data, error } = await fetchRow(cols);
+    const downgrade = (err: { message?: string } | null, token: string) => {
+      const msg = String(err?.message ?? '').toLowerCase();
+      return msg.includes(token) && (msg.includes('does not exist') || msg.includes('schema cache'));
+    };
+    if (error && downgrade(error, 'assigned_party_ids')) {
+      cols = selectNoParties;
+      ({ data, error } = await fetchRow(cols));
+    }
+    if (error && downgrade(error, 'assigned_group_ids')) {
+      cols = selectNoGroups;
+      ({ data, error } = await fetchRow(cols));
+    }
+    if (error && downgrade(error, 'assigned_state_ids')) {
+      cols = selectRoleOnly;
+      ({ data, error } = await fetchRow(cols));
     }
 
     if (error || data == null) {
@@ -166,6 +188,7 @@ export async function fetchProfileAccessForMiddleware(
         role: null,
         assigned_state_ids: [],
         assigned_group_ids: [],
+        assigned_party_ids: [],
         usedServiceRole: true,
         errorMessage: error?.message ?? 'no row (service role)',
       };
@@ -178,22 +201,26 @@ export async function fetchProfileAccessForMiddleware(
     const assigned_group_ids = Array.isArray((data as any).assigned_group_ids)
       ? (data as any).assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean)
       : [];
-    return { role, assigned_state_ids, assigned_group_ids, usedServiceRole: true };
+    const assigned_party_ids = toPartySlugArr((data as any).assigned_party_ids);
+    return { role, assigned_state_ids, assigned_group_ids, assigned_party_ids, usedServiceRole: true };
   }
 
-  const tryAnonWithAssignedGroups = async () =>
-    await anonSupabase.from('profiles').select('role, assigned_state_ids, assigned_group_ids').eq('id', userId).single();
+  const fetchAnon = async (cols: string) =>
+    anonSupabase.from('profiles').select(cols).eq('id', userId).single();
 
-  const tryAnonWithoutAssignedGroups = async () =>
-    await anonSupabase.from('profiles').select('role, assigned_state_ids').eq('id', userId).single();
-
-  let { data, error } = await tryAnonWithAssignedGroups();
-  const msg = String((error as any)?.message ?? '').toLowerCase();
-  const missingAssignedGroups = msg.includes('assigned_group_ids') && (msg.includes('does not exist') || msg.includes('schema cache'));
-  if (error && missingAssignedGroups) {
-    const r2 = await tryAnonWithoutAssignedGroups();
-    data = (r2 as any).data ?? null;
-    error = (r2 as any).error ?? null;
+  let cols = 'role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
+  let { data, error } = await fetchAnon(cols);
+  const downgrade = (err: { message?: string } | null, token: string) => {
+    const msg = String(err?.message ?? '').toLowerCase();
+    return msg.includes(token) && (msg.includes('does not exist') || msg.includes('schema cache'));
+  };
+  if (error && downgrade(error, 'assigned_party_ids')) {
+    cols = 'role, assigned_state_ids, assigned_group_ids';
+    ({ data, error } = await fetchAnon(cols));
+  }
+  if (error && downgrade(error, 'assigned_group_ids')) {
+    cols = 'role, assigned_state_ids';
+    ({ data, error } = await fetchAnon(cols));
   }
 
   if (error || data == null) {
@@ -204,6 +231,7 @@ export async function fetchProfileAccessForMiddleware(
       role: null,
       assigned_state_ids: [],
       assigned_group_ids: [],
+      assigned_party_ids: [],
       usedServiceRole: false,
       errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
     };
@@ -216,10 +244,12 @@ export async function fetchProfileAccessForMiddleware(
   const assigned_group_ids = Array.isArray((data as any).assigned_group_ids)
     ? (data as any).assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean)
     : [];
+  const assigned_party_ids = toPartySlugArr((data as any).assigned_party_ids);
   return {
     role,
     assigned_state_ids,
     assigned_group_ids,
+    assigned_party_ids,
     usedServiceRole: false,
     errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
   };

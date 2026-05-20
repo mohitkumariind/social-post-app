@@ -38,7 +38,14 @@ export function isAdminEmailBypass(email: string | null | undefined): boolean {
 export async function validateAdminSession(
   supabase: SupabaseClient
 ): Promise<
-  | { ok: true; user: User; role: AdminRole; assigned_state_ids: number[]; assigned_group_ids: string[] }
+  | {
+      ok: true;
+      user: User;
+      role: AdminRole;
+      assigned_state_ids: number[];
+      assigned_group_ids: string[];
+      assigned_party_ids: string[];
+    }
   | { ok: false; status: 401 | 403 }
 > {
   const {
@@ -46,25 +53,55 @@ export async function validateAdminSession(
     error,
   } = await supabase.auth.getUser();
   if (error || !user) return { ok: false, status: 401 };
-  const { role: rawRole, assigned_state_ids, assigned_group_ids } = await fetchProfileAccessForMiddleware(
-    user.id,
-    supabase
-  );
+  const { role: rawRole, assigned_state_ids, assigned_group_ids, assigned_party_ids } =
+    await fetchProfileAccessForMiddleware(user.id, supabase);
   const normalized = normalizeProfileRole(rawRole);
   if (!normalized || !canAccessAdminPanel(normalized)) {
     return { ok: false, status: 403 };
   }
   const role = normalized as AdminRole;
-  if (isAdminRole(role)) return { ok: true, user, role: 'admin', assigned_state_ids, assigned_group_ids };
+  if (isAdminRole(role)) {
+    return { ok: true, user, role: 'admin', assigned_state_ids, assigned_group_ids, assigned_party_ids };
+  }
   if (isSuperAdminRole(role)) {
-    return { ok: true, user, role: 'super_admin', assigned_state_ids, assigned_group_ids };
+    return {
+      ok: true,
+      user,
+      role: 'super_admin',
+      assigned_state_ids,
+      assigned_group_ids,
+      assigned_party_ids,
+    };
   }
   if (isEditorRole(role)) {
-    return { ok: true, user, role: 'editor', assigned_state_ids, assigned_group_ids: [] };
+    return {
+      ok: true,
+      user,
+      role: 'editor',
+      assigned_state_ids,
+      assigned_group_ids: [],
+      assigned_party_ids,
+    };
   }
-  if (isModeratorRole(role)) return { ok: true, user, role: 'moderator', assigned_state_ids, assigned_group_ids: [] };
+  if (isModeratorRole(role)) {
+    return {
+      ok: true,
+      user,
+      role: 'moderator',
+      assigned_state_ids,
+      assigned_group_ids: [],
+      assigned_party_ids,
+    };
+  }
   if (isCampaignManagerRole(role)) {
-    return { ok: true, user, role: 'campaign_manager', assigned_state_ids, assigned_group_ids };
+    return {
+      ok: true,
+      user,
+      role: 'campaign_manager',
+      assigned_state_ids,
+      assigned_group_ids,
+      assigned_party_ids,
+    };
   }
   return { ok: false, status: 403 };
 }
@@ -83,6 +120,7 @@ export type VerifiedAdminAuth = {
   user: { id: string };
   assigned_state_ids: number[];
   assigned_group_ids: string[];
+  assigned_party_ids: string[];
 };
 
 /** Map validated admin session to unified RBAC user (all AdminRole values). */

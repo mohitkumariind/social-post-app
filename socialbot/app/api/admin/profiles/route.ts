@@ -277,7 +277,16 @@ type PatchBody = {
   role?: string;
   assigned_state_ids?: unknown;
   assigned_group_ids?: unknown;
+  assigned_party_ids?: unknown;
 };
+
+function toPartySlugArr(v: unknown): string[] {
+  if (v == null) return [];
+  const arr = Array.isArray(v) ? v : [v];
+  return arr
+    .map((x) => String(x ?? '').trim().toLowerCase())
+    .filter((s) => s.length > 0 && s !== 'all');
+}
 
 function toStrArr(v: unknown): string[] {
   if (v == null) return [];
@@ -333,17 +342,23 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'assigned_group_ids is required for campaign managers' }, { status: 400 });
   }
 
+  let assigned_party_ids = toPartySlugArr(body.assigned_party_ids);
+  if (role !== 'moderator' && role !== 'editor') assigned_party_ids = [];
+
   const admin = createServiceRoleClient();
   if (!admin) {
     return NextResponse.json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, { status: 503 });
   }
 
-  const { data, error } = await admin
-    .from('profiles')
-    .update({ role, assigned_state_ids, assigned_group_ids })
-    .eq('id', id)
-    .select('id, role, assigned_state_ids, assigned_group_ids')
-    .single();
+  let updateBody: Record<string, unknown> = { role, assigned_state_ids, assigned_group_ids, assigned_party_ids };
+  let selectCols = 'id, role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
+  let { data, error } = await admin.from('profiles').update(updateBody).eq('id', id).select(selectCols).single();
+
+  if (error && isMissingColumnErr(error as any, 'assigned_party_ids')) {
+    updateBody = { role, assigned_state_ids, assigned_group_ids };
+    selectCols = 'id, role, assigned_state_ids, assigned_group_ids';
+    ({ data, error } = await admin.from('profiles').update(updateBody).eq('id', id).select(selectCols).single());
+  }
 
   if (error) {
     if (isMissingColumnErr(error as any, 'assigned_group_ids')) {

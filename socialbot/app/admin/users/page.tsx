@@ -53,6 +53,7 @@ interface AppUser {
   role?: string;
   assigned_state_ids?: number[];
   assigned_group_ids?: string[];
+  assigned_party_ids?: string[];
   party: string;
   party_label: string;
   designation1?: string;
@@ -277,6 +278,9 @@ export default function UserManagement() {
       : [],
     assigned_group_ids: Array.isArray((row as any).assigned_group_ids)
       ? (row as any).assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+      : [],
+    assigned_party_ids: Array.isArray((row as any).assigned_party_ids)
+      ? (row as any).assigned_party_ids.map((x: any) => String(x ?? '').trim().toLowerCase()).filter(Boolean)
       : [],
     designation1: String(row.designation1 ?? row.designation ?? ''),
     designation2: String(row.designation2 ?? row.designation_2 ?? ''),
@@ -527,6 +531,7 @@ export default function UserManagement() {
   const [roleValue, setRoleValue] = useState<ProfileRole>('user');
   const [roleStateIds, setRoleStateIds] = useState<string[]>([]);
   const [roleGroupIds, setRoleGroupIds] = useState<string[]>([]);
+  const [rolePartyIds, setRolePartyIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (!roleUser) return;
@@ -536,6 +541,8 @@ export default function UserManagement() {
     setRoleStateIds(sids.map((n) => String(n)));
     const gids = Array.isArray(roleUser.assigned_group_ids) ? roleUser.assigned_group_ids : [];
     setRoleGroupIds(gids.map((x) => String(x).trim()).filter(Boolean));
+    const pids = Array.isArray(roleUser.assigned_party_ids) ? roleUser.assigned_party_ids : [];
+    setRolePartyIds(pids.map((x) => String(x).trim().toLowerCase()).filter(Boolean));
   }, [roleUser?.id]);
 
   // --- FILTER OPTIONS (derived from current dataset) ---
@@ -841,6 +848,58 @@ export default function UserManagement() {
                 </div>
               ) : null}
 
+              {roleValue === 'editor' ? (
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    Assigned Parties (optional — empty = all parties)
+                  </label>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {rolePartyIds.length === 0 ? (
+                        <span className="text-xs font-bold text-slate-400">All parties allowed</span>
+                      ) : (
+                        rolePartyIds.map((id) => {
+                          const label = PARTIES_DATA.find((p) => p.id === id)?.shortName ?? id;
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => setRolePartyIds((prev) => prev.filter((x) => x !== id))}
+                              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-black text-slate-700"
+                              disabled={roleSaving}
+                            >
+                              {label}
+                              <X size={14} />
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-100">
+                      {PARTIES_DATA.map((p) => {
+                        const checked = rolePartyIds.includes(p.id);
+                        return (
+                          <label key={p.id} className="flex items-center gap-3 px-3 py-2 border-b border-slate-50 last:border-b-0 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                const on = e.target.checked;
+                                setRolePartyIds((prev) =>
+                                  on ? Array.from(new Set([...prev, p.id])) : prev.filter((x) => x !== p.id)
+                                );
+                              }}
+                              disabled={roleSaving}
+                            />
+                            <span className="text-sm font-bold text-slate-800">{p.shortName}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               {roleValue === 'campaign_manager' ? (
                 <div>
                   <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
@@ -944,6 +1003,7 @@ export default function UserManagement() {
                             ? roleStateIds.map((x) => Number(x)).filter((n) => Number.isFinite(n))
                             : [],
                         assigned_group_ids: nextRole === 'campaign_manager' ? roleGroupIds : [],
+                        assigned_party_ids: nextRole === 'editor' ? rolePartyIds : [],
                       }),
                     });
                     const d = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; profile?: any };
@@ -958,21 +1018,45 @@ export default function UserManagement() {
                       Array.isArray(d.profile?.assigned_group_ids)
                         ? d.profile.assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean)
                         : [];
+                    const updatedAssignedPartyIds =
+                      Array.isArray(d.profile?.assigned_party_ids)
+                        ? d.profile.assigned_party_ids.map((x: any) => String(x ?? '').trim().toLowerCase()).filter(Boolean)
+                        : [];
 
                     setUsers((prev) =>
                       prev.map((u) =>
                         String(u.id) === String(roleUser.id)
-                          ? { ...u, role: updatedRole, assigned_state_ids: updatedAssignedIds, assigned_group_ids: updatedAssignedGroupIds }
+                          ? {
+                              ...u,
+                              role: updatedRole,
+                              assigned_state_ids: updatedAssignedIds,
+                              assigned_group_ids: updatedAssignedGroupIds,
+                              assigned_party_ids: updatedAssignedPartyIds,
+                            }
                           : u
                       )
                     );
                     setSelectedUser((prev) =>
                       prev && String(prev.id) === String(roleUser.id)
-                        ? { ...prev, role: updatedRole, assigned_state_ids: updatedAssignedIds, assigned_group_ids: updatedAssignedGroupIds }
+                        ? {
+                            ...prev,
+                            role: updatedRole,
+                            assigned_state_ids: updatedAssignedIds,
+                            assigned_group_ids: updatedAssignedGroupIds,
+                            assigned_party_ids: updatedAssignedPartyIds,
+                          }
                         : prev
                     );
                     setRoleUser((prev) =>
-                      prev ? { ...prev, role: updatedRole, assigned_state_ids: updatedAssignedIds, assigned_group_ids: updatedAssignedGroupIds } : null
+                      prev
+                        ? {
+                            ...prev,
+                            role: updatedRole,
+                            assigned_state_ids: updatedAssignedIds,
+                            assigned_group_ids: updatedAssignedGroupIds,
+                            assigned_party_ids: updatedAssignedPartyIds,
+                          }
+                        : null
                     );
                     setToast({ message: 'Role updated', tone: 'success' });
                     setRoleUser(null);

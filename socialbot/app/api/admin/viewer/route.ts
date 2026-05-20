@@ -17,7 +17,12 @@ export async function GET() {
   }
 
   return NextResponse.json(
-    { role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
+    {
+      role: auth.role,
+      assigned_state_ids: auth.assigned_state_ids,
+      assigned_group_ids: auth.assigned_group_ids,
+      assigned_party_ids: auth.assigned_party_ids,
+    },
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }
