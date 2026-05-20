@@ -28,6 +28,15 @@ import { supabase } from '@/lib/supabase';
 import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 import { isPartyOtherId, PARTIES_DATA } from '@/lib/constants';
 import { getStateVisibility } from '@/lib/admin/state-filter';
+import {
+  logEventFormHydration,
+  mergeStateOptionsForEdit,
+  resolveAssemblySelectionsFromEvent,
+  resolveLoksabhaSelectionsFromEvent,
+  resolvePartySelectionsFromEvent,
+  resolveStateSelectionsFromEvent,
+  stateLabelsForIds,
+} from '@/lib/admin/event-form-hydration';
 import { captionsJsonForPostColumn, isLikelyEventUuid, normalizeCaptionsFromDb } from '@/lib/captions';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
@@ -347,6 +356,40 @@ export default function App() {
     return availableStates.filter((s) => allowed.has(String(s.id)));
   }, [isEditor, viewer?.assigned_state_ids, availableStates]);
 
+  const isEditMode = editingEvent != null;
+
+  const editFormStateOptions = useMemo(() => {
+    if (!isEditMode) return viewerReady ? visibleStates : [];
+    return mergeStateOptionsForEdit(visibleStates, availableStates, newState);
+  }, [isEditMode, viewerReady, visibleStates, availableStates, newState]);
+
+  const editStateReadonlyLabel = useMemo(() => {
+    if (!isEditMode) return visibleStates[0]?.name ?? '—';
+    return stateLabelsForIds(newState, availableStates);
+  }, [isEditMode, newState, availableStates, visibleStates]);
+
+  useEffect(() => {
+    if (!isEditMode || !editingEvent) return;
+    logEventFormHydration('edit_form_render_values', {
+      event_id: editingEvent.id,
+      newState,
+      newParty,
+      newLoksabha,
+      newAssembly,
+      editStateReadonlyLabel,
+      editFormStateOptionIds: editFormStateOptions.map((s) => s.id),
+    });
+  }, [
+    isEditMode,
+    editingEvent,
+    newState,
+    newParty,
+    newLoksabha,
+    newAssembly,
+    editStateReadonlyLabel,
+    editFormStateOptions,
+  ]);
+
   useEffect(() => {
     if (!isCreateCategoryMode) return;
     setNewParty([]);
@@ -450,24 +493,39 @@ export default function App() {
   }, []);
 
 
-  // Moderator UX: lock state selection to assigned states (and avoid out-of-scope selections).
+  // Moderator UX: lock state on CREATE/filter only — never overwrite edit form from assigned states.
   useEffect(() => {
-    if (!viewerReady || !isModerator) return;
+    if (!viewerReady || !isModerator || isEditMode) return;
     const allowedIds = visibleStates.map((s) => String(s.id));
     if (allowedIds.length === 0) return;
 
     if (hasSingleAssignedState && singleAssignedStateId) {
       const only = singleAssignedStateId;
-      if (newState.length !== 1 || newState[0] !== only) setNewState([only]);
+      if (newState.length !== 1 || newState[0] !== only) {
+        logEventFormHydration('moderator_create_lock_state', { only, previous: newState });
+        setNewState([only]);
+      }
       if (filterState !== 'ALL' && filterState !== only) setFilterState(only);
       return;
     }
 
     const allowed = new Set(allowedIds);
     const cleaned = newState.filter((id) => id !== 'ALL' && allowed.has(String(id)));
-    if (cleaned.length !== newState.length) setNewState(cleaned);
+    if (cleaned.length !== newState.length) {
+      logEventFormHydration('moderator_create_prune_state', { before: newState, after: cleaned });
+      setNewState(cleaned);
+    }
     if (filterState !== 'ALL' && !allowed.has(filterState)) setFilterState('ALL');
-  }, [viewerReady, isModerator, hasSingleAssignedState, singleAssignedStateId, visibleStates, newState, filterState]);
+  }, [
+    viewerReady,
+    isModerator,
+    isEditMode,
+    hasSingleAssignedState,
+    singleAssignedStateId,
+    visibleStates,
+    newState,
+    filterState,
+  ]);
 
   const selectedStateKey = useMemo(() => {
     const ids = newState.includes('ALL') ? visibleStates.map((s) => String(s.id)) : newState.filter((v) => v !== 'ALL');
@@ -533,12 +591,13 @@ export default function App() {
 
   // Prune selected LS to only those still available (preserve when possible).
   useEffect(() => {
+    if (isEditMode) return;
     if (availableLoksabhas.length === 0) return;
     if (newLoksabha.includes('ALL')) return;
     const allowed = new Set(availableLoksabhas.map((l) => String(l.id)));
     const cleaned = newLoksabha.filter((id) => id !== 'ALL' && allowed.has(String(id)));
     if (cleaned.length !== newLoksabha.length) setNewLoksabha(cleaned);
-  }, [availableLoksabhas, newLoksabha]);
+  }, [availableLoksabhas, newLoksabha, isEditMode]);
 
   const selectedLoksabhaKey = useMemo(() => {
     const ids = newLoksabha.includes('ALL') ? availableLoksabhas.map((l) => String(l.id)) : newLoksabha.filter((v) => v !== 'ALL');
@@ -597,12 +656,13 @@ export default function App() {
 
   // Prune selected assemblies to only those still available (preserve when possible).
   useEffect(() => {
+    if (isEditMode) return;
     if (availableAssemblies.length === 0) return;
     if (newAssembly.includes('ALL')) return;
     const allowed = new Set(availableAssemblies.map((a) => String(a.id)));
     const cleaned = newAssembly.filter((id) => id !== 'ALL' && allowed.has(String(id)));
     if (cleaned.length !== newAssembly.length) setNewAssembly(cleaned);
-  }, [availableAssemblies, newAssembly]);
+  }, [availableAssemblies, newAssembly, isEditMode]);
 
   const getStatus = (sDate: string, eDate: string) => {
     const now = currentTime.getTime();
@@ -1136,26 +1196,59 @@ export default function App() {
     return d.toISOString().slice(0, 10);
   };
 
-  const openEditModal = (ev: CampaignEvent) => {
+  const openEditModal = async (ev: CampaignEvent) => {
     setEditingEvent(ev);
     setEditEventDashboardCategory(dashboardCategoryFromDb(ev.dashboard_category));
     setNewName(ev.name);
     skipLoksabhaResetCountRef.current = 2;
     setStartDate(toDateInputValue(ev.start));
     setEndDate(toDateInputValue(ev.end));
-    const partyArr = toStrArr(ev.party);
-    setNewParty(partyArr.length === 0 || (partyArr.length === 1 && partyArr[0] === 'ALL') ? ['ALL'] : partyArr);
-    const evStates = toStrArr(ev.state);
-    const stateIds = evStates.map((v) => {
-      const byId = availableStates.find((s) => s.id === v);
-      if (byId) return byId.id;
-      const byName = availableStates.find((s) => s.name === v);
-      return byName?.id ?? v;
-    }).filter(Boolean);
+
+    const listRow = {
+      party: ev.party,
+      state: ev.state,
+      loksabha: ev.loksabha,
+      assembly: ev.assembly,
+      target_groups: ev.target_groups,
+    };
+    logEventFormHydration('open_edit_list_snapshot', { event_id: ev.id, listRow });
+
+    const fetchRes = await fetchEventByIdOrName(ev);
+    const dbRow =
+      !fetchRes.error && fetchRes.data != null
+        ? (fetchRes.data as Record<string, unknown>)
+        : null;
+    logEventFormHydration('open_edit_db_payload', {
+      event_id: ev.id,
+      dbRow: dbRow ?? null,
+      fetchError: fetchRes.error?.message ?? null,
+    });
+
+    const source = dbRow ?? (listRow as Record<string, unknown>);
+    const partySel = resolvePartySelectionsFromEvent(source, PARTIES_DATA);
+    const stateIds = resolveStateSelectionsFromEvent(source, availableStates);
+    const lokSel = resolveLoksabhaSelectionsFromEvent(source);
+    const asmSel = resolveAssemblySelectionsFromEvent(source);
+
+    logEventFormHydration('open_edit_hydrated_form', {
+      event_id: ev.id,
+      partySel,
+      stateIds,
+      lokSel,
+      asmSel,
+      target_groups: toStrArr(source.target_groups as string | string[] | undefined),
+    });
+
+    setNewParty(partySel);
     setNewState(stateIds);
-    setNewLoksabha(toStrArr(ev.loksabha));
-    setNewAssembly(toStrArr(ev.assembly));
-    setNewTargetGroups(toStrArr(ev.target_groups));
+    setNewLoksabha(lokSel);
+    setNewAssembly(asmSel);
+    setNewTargetGroups(toStrArr(source.target_groups as string | string[] | undefined));
+
+    logEventFormHydration('open_edit_rendered_after_set', {
+      event_id: ev.id,
+      note: 'React state updates async; check moderator effect skipped via isEditMode',
+    });
   };
 
   const handleSaveEvent = async () => {
@@ -1416,13 +1509,13 @@ export default function App() {
                             <div>
                               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">State</span>
                               <div className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
-                                {visibleStates[0]?.name ?? '—'}
+                                {editStateReadonlyLabel}
                               </div>
                             </div>
                           ) : (
                             <MultiSelectDropdown
                               label="State"
-                              options={viewerReady ? visibleStates : []}
+                              options={viewerReady ? editFormStateOptions : []}
                               selected={newState}
                               onSelect={setNewState}
                               getValue={(s) => String(s.id)}
