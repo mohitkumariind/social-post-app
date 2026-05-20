@@ -34,7 +34,6 @@ import {
   resolveAssemblySelectionsFromEvent,
   resolveLoksabhaSelectionsFromEvent,
   editorGeoSelectionForForm,
-  editorPartySelectionForForm,
   resolvePartySelectionsFromEvent,
   resolveStateSelectionsFromEvent,
   stateLabelsForIds,
@@ -44,7 +43,11 @@ import {
   mergePartiesForEdit,
   partiesVisibleToEditor,
 } from '@/lib/admin/editor-party-scope';
-import { scopeIdsForPostFromRow } from '@/lib/admin/editor-event-targeting';
+import {
+  buildEditorPartyTargetingFromForm,
+  logEditorTargetingDebug,
+  scopeIdsForPostFromRow,
+} from '@/lib/admin/editor-event-targeting';
 import { captionsJsonForPostColumn, isLikelyEventUuid, normalizeCaptionsFromDb } from '@/lib/captions';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
@@ -789,12 +792,14 @@ export default function App() {
     const dashDb = isEditor ? null : dashboardCategoryToDb(newEventDashboardCategory);
     if (dashDb != null) (payload as any).dashboard_category = dashDb;
 
-    const partySelected = isEditor ? editorPartySelectionForForm(newParty) : newParty;
+    const editorPartyTargeting = isEditor ? buildEditorPartyTargetingFromForm(newParty) : null;
     const partyArr = isCreateCategoryMode
       ? []
-      : partySelected.includes('ALL')
-        ? ['ALL']
-        : partySelected.filter(Boolean);
+      : isEditor && editorPartyTargeting
+        ? editorPartyTargeting.party
+        : newParty.includes('ALL')
+          ? ['ALL']
+          : newParty.filter(Boolean);
     const stateArr =
       isEditor || isCreateCategoryMode ? [] : newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
     const loksabhaArr = isCreateCategoryMode ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
@@ -805,7 +810,10 @@ export default function App() {
       return;
     }
 
-    const partyIdArr = toNumArrFromStrIds(partyArr);
+    const partyIdArr =
+      isEditor && editorPartyTargeting
+        ? editorPartyTargeting.party_id
+        : toNumArrFromStrIds(partyArr);
     let stateIdArr = toNumArrFromStrIds(stateArr);
     const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
     const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
@@ -827,8 +835,15 @@ export default function App() {
       payload.loksabha = [];
       payload.assembly = [];
       payload.target_groups = [];
-      payload.party = partyArr.length > 0 ? partyArr : [];
-      payload.party_id = partyIdArr.length > 0 ? partyIdArr : [];
+      payload.party = editorPartyTargeting!.party;
+      payload.party_id = editorPartyTargeting!.party_id;
+      logEditorTargetingDebug('create_party_targeting', {
+        editor_state_scope: stateIdArr,
+        selected_party_mode: editorPartyTargeting!.mode,
+        all_parties_state_scoped: editorPartyTargeting!.allPartiesStateScoped,
+        selected_party: newParty,
+        saved_party_payload: { party: payload.party, party_id: payload.party_id },
+      });
       logEditorPartyDebug('create_saved_party_payload', {
         editor_allowed_parties: editorAssignableParties.map((p) => p.id),
         selected_party: newParty,
@@ -1292,6 +1307,17 @@ export default function App() {
       asmSel,
       target_groups: toStrArr(source.target_groups as string | string[] | undefined),
     });
+    const hydratedStateScope = resolveStateSelectionsFromEvent(source, availableStates).filter(
+      (id) => id !== 'ALL'
+    );
+    logEditorTargetingDebug('edit_hydrated_party', {
+      editor_state_scope: hydratedStateScope.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0),
+      selected_party_mode: partySel.includes('ALL') ? 'all_parties_state_scoped' : partySel.length > 0 ? 'specific_parties' : 'none',
+      all_parties_state_scoped: partySel.includes('ALL'),
+      hydrated_party: partySel,
+      db_party_id: source.party_id,
+      db_party: source.party,
+    });
     logEditorPartyDebug('edit_hydrated_party', {
       editor_allowed_parties: editorAssignableParties.map((p) => p.id),
       hydrated_party: partySel,
@@ -1332,12 +1358,14 @@ export default function App() {
       updatePayload.scheduled_at = iso;
     }
     const isEditCat = editEventDashboardCategory !== 'none';
-    const partySelectedEdit = isEditor ? editorPartySelectionForForm(newParty) : newParty;
+    const editorPartyTargetingEdit = isEditor ? buildEditorPartyTargetingFromForm(newParty) : null;
     const partyArr = isEditCat
       ? []
-      : partySelectedEdit.includes('ALL')
-        ? ['ALL']
-        : partySelectedEdit.filter(Boolean);
+      : isEditor && editorPartyTargetingEdit
+        ? editorPartyTargetingEdit.party
+        : newParty.includes('ALL')
+          ? ['ALL']
+          : newParty.filter(Boolean);
     const stateArr = isEditCat ? [] : newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
     const loksabhaArr = isEditCat ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
     const assemblyArr = isEditCat ? [] : newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
@@ -1346,18 +1374,32 @@ export default function App() {
       alert('Please select at least one Target Group.');
       return;
     }
-    const partyIdArr = toNumArrFromStrIds(partyArr);
+    const partyIdArr =
+      isEditor && editorPartyTargetingEdit
+        ? editorPartyTargetingEdit.party_id
+        : toNumArrFromStrIds(partyArr);
     const stateIdArr = toNumArrFromStrIds(stateArr);
     const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
     const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
-    if (isEditor) {
+    if (isEditor && editorPartyTargetingEdit) {
+      const editorStateScope = newState.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+      logEditorTargetingDebug('edit_saved_party_targeting', {
+        editor_state_scope: editorStateScope,
+        selected_party_mode: editorPartyTargetingEdit.mode,
+        all_parties_state_scoped: editorPartyTargetingEdit.allPartiesStateScoped,
+        selected_party: newParty,
+        saved_party_payload: {
+          party: isEditCat ? [] : editorPartyTargetingEdit.party,
+          party_id: isEditCat ? [] : editorPartyTargetingEdit.party_id,
+        },
+      });
       logEditorPartyDebug('edit_saved_party_payload', {
         editor_allowed_parties: editorAssignableParties.map((p) => p.id),
         selected_party: newParty,
         hydrated_party: partyArr,
         saved_party_payload: {
-          party: isEditCat ? [] : partyArr,
-          party_id: isEditCat ? [] : partyIdArr,
+          party: isEditCat ? [] : editorPartyTargetingEdit.party,
+          party_id: isEditCat ? [] : editorPartyTargetingEdit.party_id,
         },
       });
     }
@@ -1382,9 +1424,9 @@ export default function App() {
       updatePayload.state_id = [];
       updatePayload.loksabha_id = [];
       updatePayload.assembly_id = [];
-    } else if (isEditor && !isEditCat) {
-      updatePayload.party = partyArr;
-      updatePayload.party_id = partyIdArr;
+    } else if (isEditor && !isEditCat && editorPartyTargetingEdit) {
+      updatePayload.party = editorPartyTargetingEdit.party;
+      updatePayload.party_id = editorPartyTargetingEdit.party_id;
       const editorStateIds = newState.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
       updatePayload.state_id = editorStateIds;
       updatePayload.loksabha_id = editorGeoSelectionForForm(newLoksabha)
@@ -1430,12 +1472,12 @@ export default function App() {
       postUpdatePayload.state_id = [];
       postUpdatePayload.loksabha_id = [];
       postUpdatePayload.assembly_id = [];
-    } else if (isEditor && !isEditCat) {
-      postUpdatePayload.party_id = partyIdArr;
+    } else if (isEditor && !isEditCat && editorPartyTargetingEdit) {
+      postUpdatePayload.party_id = editorPartyTargetingEdit.party_id;
       postUpdatePayload.state_id = updatePayload.state_id;
       postUpdatePayload.loksabha_id = updatePayload.loksabha_id;
       postUpdatePayload.assembly_id = updatePayload.assembly_id;
-      postUpdatePayload.party = partyArr;
+      postUpdatePayload.party = editorPartyTargetingEdit.party;
       postUpdatePayload.state = [];
       postUpdatePayload.loksabha = [];
       postUpdatePayload.assembly = [];
@@ -1628,14 +1670,14 @@ export default function App() {
                         </div>
                         <div className="rounded-2xl border border-slate-200 bg-white p-3">
                           <MultiSelectDropdown
-                            label={isEditor ? 'Party (optional)' : 'Party'}
+                            label="Party"
                             options={editFormPartyOptions}
                             selected={newParty}
                             onSelect={setNewParty}
                             getValue={(p) => p.id}
                             getLabel={(p) => p.shortName}
                             allLabel="All Parties"
-                            showAllOption={!isEditor}
+                            showAllOption
                             searchable
                             optionLeading={(p) =>
                               isPartyOtherId(String(p.id)) ? (
@@ -1849,14 +1891,14 @@ export default function App() {
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
                   <MultiSelectDropdown
-                    label={isEditor ? 'Party (optional — all parties in selected state if empty)' : 'Party'}
+                    label="Party"
                     options={isEditor ? editorAssignableParties : PARTIES_DATA}
                     selected={newParty}
                     onSelect={setNewParty}
                     getValue={(p) => p.id}
                     getLabel={(p) => p.shortName}
                     allLabel="All Parties"
-                    showAllOption={!isEditor}
+                    showAllOption
                     searchable
                     optionLeading={(p) =>
                       isPartyOtherId(String(p.id)) ? (

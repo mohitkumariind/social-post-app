@@ -19,6 +19,7 @@ import {
   stripNonAdminPublishFields,
   validateEditorEventPayload,
 } from '@/lib/event-access';
+import { logEditorTargetingDebug } from '@/lib/admin/editor-event-targeting';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
@@ -366,6 +367,18 @@ export async function POST(request: NextRequest) {
       assignedPartyIds: auth.assigned_party_ids,
     });
     if (editorErr) return json({ error: editorErr }, 403);
+    const stateScope = toNumArray(payload.state_id);
+    const partyScope = toNumArray(payload.party_id);
+    logEditorTargetingDebug('api_create_party_targeting', {
+      editor_state_scope: stateScope,
+      selected_party_mode:
+        partyScope.length === 0 && !(payload.party as string[] | undefined)?.length
+          ? 'all_parties_state_scoped'
+          : 'specific_parties',
+      all_parties_state_scoped:
+        partyScope.length === 0 && !(payload.party as string[] | undefined)?.length,
+      saved_party_payload: { party: payload.party, party_id: payload.party_id },
+    });
   }
 
   if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category') && !isEditor(auth)) {
@@ -544,6 +557,23 @@ export async function PATCH(request: NextRequest) {
       assignedPartyIds: auth.assigned_party_ids,
     });
     if (editorErr) return json({ error: editorErr }, 403);
+    if (
+      Object.prototype.hasOwnProperty.call(patch, 'party_id') ||
+      Object.prototype.hasOwnProperty.call(patch, 'party')
+    ) {
+      const stateScope = toNumArray(patch.state_id);
+      const partyScope = toNumArray(patch.party_id);
+      logEditorTargetingDebug('api_patch_party_targeting', {
+        editor_state_scope: stateScope,
+        selected_party_mode:
+          partyScope.length === 0 && !(patch.party as string[] | undefined)?.length
+            ? 'all_parties_state_scoped'
+            : 'specific_parties',
+        all_parties_state_scoped:
+          partyScope.length === 0 && !(patch.party as string[] | undefined)?.length,
+        saved_party_payload: { party: patch.party, party_id: patch.party_id },
+      });
+    }
   }
 
   stripNonAdminPublishFields(auth, patch);

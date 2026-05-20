@@ -44,8 +44,13 @@ export function resolveStateSelectionsFromEvent(
     .filter(Boolean);
 }
 
+function editorEventHasStateScope(row: Record<string, unknown>): boolean {
+  const stateIds = toNumArr(row.state_id).filter((n) => n !== 0);
+  return stateIds.length > 0;
+}
+
 /**
- * @param forEditor — editors cannot use ALL/global party wildcard; empty DB party → no selection.
+ * @param forEditor — empty party_id + state scope → UI "All Parties" (not global wildcard).
  */
 export function resolvePartySelectionsFromEvent(
   row: Record<string, unknown>,
@@ -54,7 +59,10 @@ export function resolvePartySelectionsFromEvent(
 ): string[] {
   const forEditor = opts?.forEditor === true;
   const fromIds = toNumArr(row.party_id);
-  if (fromIds.includes(0)) return forEditor ? [] : ['ALL'];
+  if (fromIds.includes(0)) {
+    if (forEditor) return editorEventHasStateScope(row) ? ['ALL'] : [];
+    return ['ALL'];
+  }
   if (fromIds.length > 0) {
     const out: string[] = [];
     for (const n of fromIds) {
@@ -64,12 +72,20 @@ export function resolvePartySelectionsFromEvent(
     if (out.length > 0) return out;
   }
   const legacy = toStrArr(row.party as string | string[] | undefined);
-  if (legacy.length === 0) return forEditor ? [] : ['ALL'];
-  if (legacy.length === 1 && legacy[0] === 'ALL') return forEditor ? [] : ['ALL'];
-  return legacy.map((v) => {
-    const parsed = fromPartyDB({ party: v, party_id: null }, parties);
-    return parsed.selection || String(v).trim();
-  }).filter(Boolean);
+  if (legacy.length === 0) {
+    if (forEditor) return editorEventHasStateScope(row) ? ['ALL'] : [];
+    return ['ALL'];
+  }
+  if (legacy.length === 1 && legacy[0] === 'ALL') {
+    if (forEditor) return editorEventHasStateScope(row) ? ['ALL'] : [];
+    return ['ALL'];
+  }
+  return legacy
+    .map((v) => {
+      const parsed = fromPartyDB({ party: v, party_id: null }, parties);
+      return parsed.selection || String(v).trim();
+    })
+    .filter(Boolean);
 }
 
 export function resolveLoksabhaSelectionsFromEvent(
@@ -100,7 +116,7 @@ export function resolveAssemblySelectionsFromEvent(
   return legacy;
 }
 
-/** Editor UI/save: strip ALL wildcard; empty = optional filter inside state scope, not global targeting. */
+/** @deprecated Use buildEditorPartyTargetingFromForm — kept for imports migrating off ALL→payload. */
 export function editorPartySelectionForForm(selected: string[]): string[] {
   return selected.filter((p) => String(p).trim().toUpperCase() !== 'ALL');
 }

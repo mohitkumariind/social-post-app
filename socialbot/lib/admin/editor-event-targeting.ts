@@ -26,8 +26,57 @@ export function editorPartySlugsFromForm(selected: string[]): string[] {
 }
 
 export function editorPartyIdsFromForm(selected: string[]): number[] {
-  if (selected.some((x) => String(x).trim().toUpperCase() === 'ALL')) return [];
+  if (isEditorAllPartiesUiSelection(selected)) return [];
   return selected.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+}
+
+export const EDITOR_PARTY_ALL_UI = 'ALL';
+
+export type EditorPartyTargetingMode = 'specific_parties' | 'all_parties_state_scoped' | 'none';
+
+export function isEditorAllPartiesUiSelection(selected: string[]): boolean {
+  return selected.some((x) => String(x).trim().toUpperCase() === EDITOR_PARTY_ALL_UI);
+}
+
+/**
+ * Editor "All Parties" in UI → empty party_id/party in DB (all parties within state_id scope).
+ * Never maps to party_id [0] or party ['ALL'] (global wildcard).
+ */
+export function buildEditorPartyTargetingFromForm(selected: string[]): {
+  party: string[];
+  party_id: number[];
+  mode: EditorPartyTargetingMode;
+  allPartiesStateScoped: boolean;
+} {
+  if (isEditorAllPartiesUiSelection(selected)) {
+    return {
+      party: [],
+      party_id: [],
+      mode: 'all_parties_state_scoped',
+      allPartiesStateScoped: true,
+    };
+  }
+  const party = editorPartySlugsFromForm(selected);
+  const party_id = editorPartyIdsFromForm(selected);
+  if (party.length === 0 && party_id.length === 0) {
+    return {
+      party: [],
+      party_id: [],
+      mode: 'none',
+      allPartiesStateScoped: false,
+    };
+  }
+  return {
+    party,
+    party_id,
+    mode: 'specific_parties',
+    allPartiesStateScoped: false,
+  };
+}
+
+export function logEditorTargetingDebug(phase: string, detail: Record<string, unknown>) {
+  if (process.env.NODE_ENV === 'production') return;
+  console.log('[editor-targeting]', phase, detail);
 }
 
 /**
