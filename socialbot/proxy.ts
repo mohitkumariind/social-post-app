@@ -139,7 +139,7 @@ export async function proxy(request: NextRequest) {
         isAdmin: isAdminRole(role),
       });
       if (isEditorRole(role)) {
-        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/events/create');
+        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/events');
       }
       if (isAdminRole(role) || isSuperAdminRole(role) || isModeratorRole(role) || isCampaignManagerRole(role)) {
         return redirectPreservingAuthCookies(request, sessionResponse, '/admin');
@@ -228,9 +228,12 @@ export async function proxy(request: NextRequest) {
     }
 
     if (!isAdminApi && isEditor) {
+      if (pathname === '/admin/events/create' || pathname.startsWith('/admin/events/create/')) {
+        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/events');
+      }
       if (!isEditorAllowedAdminPath(pathname)) {
         proxyLog('[proxy] Step 4: editor blocked route', { pathname });
-        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/events/create');
+        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/events');
       }
     }
 

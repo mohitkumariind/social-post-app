@@ -2,12 +2,13 @@ import type { AdminRole } from '@/lib/permissions';
 import { isEditor } from '@/lib/permissions';
 import { RbacError as RbacErrorClass } from '@/lib/rbac/require';
 
-/** Admin UI paths editors may use (plus login). */
-export const EDITOR_ALLOWED_ADMIN_PATH_PREFIXES = ['/admin/events/create', '/admin/events'] as const;
+/** Admin UI paths editors may use (plus login). Create is on /admin/events (no separate nav). */
+export const EDITOR_ALLOWED_ADMIN_PATH_PREFIXES = ['/admin/events'] as const;
 
 export function isEditorAllowedAdminPath(pathname: string): boolean {
   const p = String(pathname ?? '').trim();
   if (p === '/admin/login' || p.startsWith('/admin/login/')) return true;
+  if (p === '/admin/events/create' || p.startsWith('/admin/events/create/')) return false;
   return EDITOR_ALLOWED_ADMIN_PATH_PREFIXES.some((prefix) => p === prefix || p.startsWith(`${prefix}/`));
 }
 

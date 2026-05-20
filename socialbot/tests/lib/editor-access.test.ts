@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { isEditorAllowedAdminApiPath, isEditorAllowedAdminPath } from '@/lib/editor-access';
 
 describe('editor-access', () => {
-  it('allows events pages and login', () => {
-    expect(isEditorAllowedAdminPath('/admin/events/create')).toBe(true);
+  it('allows events page and login only (no separate create nav)', () => {
     expect(isEditorAllowedAdminPath('/admin/events')).toBe(true);
+    expect(isEditorAllowedAdminPath('/admin/events/create')).toBe(false);
     expect(isEditorAllowedAdminPath('/admin/login')).toBe(true);
     expect(isEditorAllowedAdminPath('/admin/notifications')).toBe(false);
   });

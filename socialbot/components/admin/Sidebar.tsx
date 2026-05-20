@@ -59,10 +59,7 @@ export default function Sidebar() {
   const visibleNavItems = useMemo(() => {
     const r = role?.toLowerCase() ?? '';
     if (r === 'editor') {
-      return [
-        { href: '/admin/events', label: 'Events', icon: Calendar },
-        { href: '/admin/events/create', label: 'Create Event', icon: Calendar },
-      ];
+      return [{ href: '/admin/events', label: 'Events', icon: Calendar }];
     }
     if (r === 'moderator') {
       // Moderator: Dashboard, Users, Events, Notifications, Twitter Campaign, Groups (NO Activity Center)
