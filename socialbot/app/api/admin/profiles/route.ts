@@ -319,9 +319,12 @@ export async function PATCH(request: NextRequest) {
   }
 
   let assigned_state_ids = toNumArr(body.assigned_state_ids);
-  if (role !== 'moderator') assigned_state_ids = [];
-  if (role === 'moderator' && assigned_state_ids.length === 0) {
-    return NextResponse.json({ error: 'assigned_state_ids is required for moderators' }, { status: 400 });
+  if (role !== 'moderator' && role !== 'editor') assigned_state_ids = [];
+  if ((role === 'moderator' || role === 'editor') && assigned_state_ids.length === 0) {
+    return NextResponse.json(
+      { error: `assigned_state_ids is required for ${role === 'editor' ? 'editors' : 'moderators'}` },
+      { status: 400 }
+    );
   }
 
   let assigned_group_ids = toStrArr(body.assigned_group_ids);

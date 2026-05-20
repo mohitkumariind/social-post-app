@@ -191,6 +191,9 @@ export const POST = withAudit(
     const eventOwn = await assertPostEventOwnedByActor(admin, resolvedEventId, auth.user.id);
     if (!eventOwn.ok) return json({ error: eventOwn.error }, 403);
     payload.event_id = resolvedEventId;
+    if (!eventOwn.event.created_by) {
+      return json({ error: 'Forbidden: event ownership could not be verified' }, 403);
+    }
     if (!String(payload.category ?? '').trim()) payload.category = eventOwn.event.name;
 
     const { data: eventScopeRow } = await admin

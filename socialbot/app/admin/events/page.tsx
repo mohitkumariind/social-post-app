@@ -339,6 +339,14 @@ export default function App() {
   const isCampaignManager = viewer?.role === 'campaign_manager';
   const isEditor = viewer?.role === 'editor';
 
+  const editorAssignableStates = useMemo(() => {
+    if (!isEditor) return availableStates;
+    const ids = viewer?.assigned_state_ids ?? [];
+    if (ids.length === 0) return [];
+    const allowed = new Set(ids.map((n) => String(n)));
+    return availableStates.filter((s) => allowed.has(String(s.id)));
+  }, [isEditor, viewer?.assigned_state_ids, availableStates]);
+
   useEffect(() => {
     if (!isCreateCategoryMode) return;
     setNewParty([]);
@@ -708,14 +716,16 @@ export default function App() {
         alert('Please select at least one state.');
         return;
       }
+      const lokIdArr = newLoksabha.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+      const asmIdArr = newAssembly.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
       payload.state_id = stateIdArr;
+      payload.loksabha_id = lokIdArr;
+      payload.assembly_id = asmIdArr;
       payload.party = [];
       payload.state = [];
       payload.loksabha = [];
       payload.assembly = [];
       payload.party_id = [];
-      payload.loksabha_id = [];
-      payload.assembly_id = [];
       payload.target_groups = [];
     } else if (isCampaignManager) {
       payload.party = [];
@@ -1584,7 +1594,7 @@ export default function App() {
                   {isEditor ? (
                     <MultiSelectDropdown
                       label="State (required)"
-                      options={availableStates}
+                      options={editorAssignableStates}
                       selected={newState}
                       onSelect={setNewState}
                       getValue={(s) => String(s.id)}
@@ -1615,7 +1625,6 @@ export default function App() {
                   )}
                 </div>
                 {!isEditor ? (
-                <>
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
                   <MultiSelectDropdown
                     label="Party"
@@ -1633,6 +1642,7 @@ export default function App() {
                     }
                   />
                 </div>
+                ) : null}
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
                   <MultiSelectDropdown
                     label="Lok Sabha"
@@ -1659,8 +1669,6 @@ export default function App() {
                     searchable
                   />
                 </div>
-                </>
-                ) : null}
               </div>
             ) : null}
             <div className="rounded-2xl border border-slate-200 bg-white p-3">

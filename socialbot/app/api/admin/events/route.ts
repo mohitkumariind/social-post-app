@@ -358,7 +358,10 @@ export async function POST(request: NextRequest) {
   }
 
   if (isEditor(auth)) {
-    const editorErr = validateEditorEventPayload(payload, 'create');
+    if (auth.assigned_state_ids.length === 0) {
+      return json({ error: 'Editor has no assigned states — contact an admin' }, 403);
+    }
+    const editorErr = validateEditorEventPayload(payload, 'create', auth.assigned_state_ids);
     if (editorErr) return json({ error: editorErr }, 403);
   }
 
@@ -533,7 +536,7 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (isEditor(auth)) {
-    const editorErr = validateEditorEventPayload(patch, 'patch');
+    const editorErr = validateEditorEventPayload(patch, 'patch', auth.assigned_state_ids);
     if (editorErr) return json({ error: editorErr }, 403);
   }
 

@@ -34,8 +34,12 @@ export function toNumArray(v: unknown): number[] {
   return arr.map((x) => Number(x)).filter((n) => Number.isFinite(n));
 }
 
-/** Editor: require ≥1 state, forbid global (0) and dashboard quick-category global events. */
-export function validateEditorEventPayload(payload: Record<string, unknown>, mode: 'create' | 'patch'): string | null {
+/** Editor: require ≥1 state, optional Lok Sabha/Assembly; forbid global/party/group publish fields. */
+export function validateEditorEventPayload(
+  payload: Record<string, unknown>,
+  mode: 'create' | 'patch',
+  assignedStateIds: number[] = []
+): string | null {
   if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category')) {
     const dc = payload.dashboard_category;
     if (dc != null && dc !== '' && isActiveEventDashboardCategory(dc)) {
@@ -47,11 +51,7 @@ export function validateEditorEventPayload(payload: Record<string, unknown>, mod
   const forbidden = [
     'party',
     'state',
-    'loksabha',
-    'assembly',
     'party_id',
-    'loksabha_id',
-    'assembly_id',
     'target_groups',
     'profile_ids',
     'group_id',
@@ -70,7 +70,22 @@ export function validateEditorEventPayload(payload: Record<string, unknown>, mod
     const stateIds = toNumArray(payload.state_id);
     if (stateIds.length === 0) return 'Editor must select at least one state';
     if (stateIds.includes(0)) return 'Editor cannot use global / all-states targeting';
+    const allowed = new Set(assignedStateIds.map((n) => Number(n)).filter((n) => Number.isFinite(n)));
+    if (allowed.size > 0 && !stateIds.every((id) => allowed.has(id))) {
+      return 'Forbidden: state outside editor assigned states';
+    }
     (payload as { state_id: number[] }).state_id = stateIds;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'loksabha_id')) {
+    const lokIds = toNumArray(payload.loksabha_id);
+    (payload as { loksabha_id: number[] }).loksabha_id = lokIds;
+    delete (payload as { loksabha?: unknown }).loksabha;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'assembly_id')) {
+    const asmIds = toNumArray(payload.assembly_id);
+    (payload as { assembly_id: number[] }).assembly_id = asmIds;
+    delete (payload as { assembly?: unknown }).assembly;
   }
 
   return null;
@@ -144,7 +159,9 @@ export async function assertPostEventOwnedByActor(
       .eq('id', id)
       .is('created_by', null);
     if (!backfillErr) ownerStr = actorUserId;
-    else if (!isMissingCreatedByColumn(backfillErr)) {
+    else if (isMissingCreatedByColumn(backfillErr)) {
+      ownerStr = actorUserId;
+    } else {
       return { ok: false, error: backfillErr.message };
     }
   }
@@ -183,7 +200,7 @@ export function inheritEventScopeForPostPayload(
   if (r === 'campaign_manager' || r === 'admin' || r === 'super_admin') {
     if (!has('target_groups') && eventRow.target_groups != null) postPayload.target_groups = eventRow.target_groups;
   }
-  if (r === 'admin' || r === 'super_admin' || r === 'moderator') {
+  if (r === 'admin' || r === 'super_admin' || r === 'moderator' || r === 'editor') {
     if (!has('party_id') && eventRow.party_id != null) postPayload.party_id = eventRow.party_id;
     if (!has('loksabha_id') && eventRow.loksabha_id != null) postPayload.loksabha_id = eventRow.loksabha_id;
     if (!has('assembly_id') && eventRow.assembly_id != null) postPayload.assembly_id = eventRow.assembly_id;

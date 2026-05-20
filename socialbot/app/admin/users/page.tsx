@@ -786,10 +786,10 @@ export default function UserManagement() {
                 </select>
               </div>
 
-              {roleValue === 'moderator' ? (
+              {roleValue === 'moderator' || roleValue === 'editor' ? (
                 <div>
                   <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
-                    Assigned States
+                    Assigned States {roleValue === 'editor' ? '(editor)' : ''}
                   </label>
                   <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
                     <div className="flex flex-wrap gap-2 mb-3">
@@ -910,8 +910,11 @@ export default function UserManagement() {
                 type="button"
                 disabled={roleSaving}
                 onClick={async () => {
-                  if (roleValue === 'moderator' && roleStateIds.length === 0) {
-                    setToast({ message: 'Select at least one state for moderator', tone: 'error' });
+                  if ((roleValue === 'moderator' || roleValue === 'editor') && roleStateIds.length === 0) {
+                    setToast({
+                      message: `Select at least one state for ${roleValue === 'editor' ? 'editor' : 'moderator'}`,
+                      tone: 'error',
+                    });
                     return;
                   }
                   if (roleValue === 'campaign_manager' && roleGroupIds.length === 0) {
@@ -936,7 +939,10 @@ export default function UserManagement() {
                       body: JSON.stringify({
                         id: String(roleUser.id),
                         role: nextRole,
-                        assigned_state_ids: nextRole === 'moderator' ? roleStateIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)) : [],
+                        assigned_state_ids:
+                          nextRole === 'moderator' || nextRole === 'editor'
+                            ? roleStateIds.map((x) => Number(x)).filter((n) => Number.isFinite(n))
+                            : [],
                         assigned_group_ids: nextRole === 'campaign_manager' ? roleGroupIds : [],
                       }),
                     });
