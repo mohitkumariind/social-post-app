@@ -101,9 +101,11 @@ export function buildScopedQuery(
         return baseQuery.not('dashboard_category', 'is', null).eq('created_by', user.id);
       }
       const sidList = canonical.stateIds.join(',');
+      // state_id containing 0 means "All states" — visible to any moderator with assignments.
+      const branchAllStates = 'state_id.ov.{0}';
       const branch1 = `and(state_id.not.is.null,state_id.neq.{},state_id.cd.{${sidList}})`;
       const branch2 = `and(dashboard_category.not.is.null,created_by.eq.${user.id})`;
-      return baseQuery.or(`${branch1},${branch2}`);
+      return baseQuery.or(`${branchAllStates},${branch1},${branch2}`);
     }
     // campaign_manager: require event.target_groups subset of assigned (effective) group ids.
     // Use normalized string IDs for PostgREST: `events.target_groups` is text[] (numeric strings) in canonical schema;
@@ -211,9 +213,10 @@ export function buildScopedAnalyticsQuery(
         return baseQuery.not('dashboard_category', 'is', null).eq('created_by', user.id);
       }
       const sidList = canonical.stateIds.join(',');
+      const branchAllStates = 'state_id.ov.{0}';
       const branch1 = `and(state_id.not.is.null,state_id.neq.{},state_id.cd.{${sidList}})`;
       const branch2 = `and(dashboard_category.not.is.null,created_by.eq.${user.id})`;
-      return baseQuery.or(`${branch1},${branch2}`);
+      return baseQuery.or(`${branchAllStates},${branch1},${branch2}`);
     }
     const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
     if (scopeGids.length === 0) {

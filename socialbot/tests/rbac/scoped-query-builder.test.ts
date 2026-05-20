@@ -80,6 +80,22 @@ describe('scoped query builder', () => {
     expect(q.calls[2]).toEqual({ method: 'containedBy', args: ['target_groups', ['1', '2', '3']] });
   });
 
+  it('includes all-states events for moderators with assignments', () => {
+    const q = new FakeQuery();
+    buildScopedQuery(
+      {
+        id: 'mod1',
+        role: 'moderator',
+        assigned_state_ids: [5, 10],
+        assigned_group_ids: [],
+      },
+      q,
+      'events'
+    );
+    const orCall = q.calls.find((c) => c.method === 'or');
+    expect(orCall?.args[0]).toContain('state_id.ov.{0}');
+  });
+
   it('keeps analytics scoping aligned for campaign manager events', () => {
     const q = new FakeQuery();
     buildScopedAnalyticsQuery(

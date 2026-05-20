@@ -258,7 +258,9 @@ export async function GET(request: NextRequest) {
   // Primary: created_at cursor pagination (preferred).
   let q: any = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit);
   if (!includeDeleted) q = q.is('deleted_at', null);
-  if (activeOnly) q = q.in('status', ['published', 'scheduled_publish']);
+  if (activeOnly) {
+    q = q.in('status', ['published', 'scheduled_publish', 'processing_publish']);
+  }
   if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
   q = applyScope(q);
 
@@ -268,7 +270,7 @@ export async function GET(request: NextRequest) {
   if (error && isMissingColumnErr(error, 'deleted_at')) {
     let q2: any = db.from('events').select('*').order('created_at', { ascending: false }).limit(limit);
     if (cursorCreatedAt) q2 = q2.lt('created_at', cursorCreatedAt);
-    if (activeOnly) q2 = q2.in('status', ['published', 'scheduled_publish']);
+    if (activeOnly) q2 = q2.in('status', ['published', 'scheduled_publish', 'processing_publish']);
     q2 = applyScope(q2);
     ({ data, error } = await q2);
   }
@@ -276,12 +278,12 @@ export async function GET(request: NextRequest) {
     let q3: any = db.from('events').select('*').order('id', { ascending: false }).limit(limit);
     // cursor_created_at is ignored in this compatibility mode.
     if (!includeDeleted) q3 = q3.is('deleted_at', null);
-    if (activeOnly) q3 = q3.in('status', ['published', 'scheduled_publish']);
+    if (activeOnly) q3 = q3.in('status', ['published', 'scheduled_publish', 'processing_publish']);
     q3 = applyScope(q3);
     ({ data, error } = await q3);
     if (error && isMissingColumnErr(error, 'deleted_at')) {
       let q4: any = db.from('events').select('*').order('id', { ascending: false }).limit(limit);
-      if (activeOnly) q4 = q4.in('status', ['published', 'scheduled_publish']);
+      if (activeOnly) q4 = q4.in('status', ['published', 'scheduled_publish', 'processing_publish']);
       q4 = applyScope(q4);
       ({ data, error } = await q4);
     }

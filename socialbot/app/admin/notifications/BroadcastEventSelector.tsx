@@ -2,9 +2,8 @@
 
 import { Loader2 } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
-
-const EVENT_ID_UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+import { isLikelyEventUuid } from '@/lib/captions';
+import { isBroadcastSelectableEventRow } from '@/lib/broadcast-event-eligibility';
 
 export type BroadcastMode = 'event' | 'global';
 
@@ -52,9 +51,10 @@ function statusLabelFromRow(row: Record<string, unknown>): 'live' | 'scheduled' 
 
 function mapApiRowsToEvents(rows: Record<string, unknown>[], states: StateRow[]): EventRow[] {
   return rows
+    .filter((r) => isBroadcastSelectableEventRow(r))
     .map((r) => {
       const id = String(r.id ?? '').trim();
-      if (!id || !EVENT_ID_UUID_RE.test(id)) return null;
+      if (!id || !isLikelyEventUuid(id)) return null;
       return {
         id,
         eventName: eventDisplayName(r),
@@ -76,31 +76,44 @@ export function BroadcastEventSelector({
   broadcast_mode: BroadcastMode;
   selected_event_id: string;
   onSelected_event_idChange: (id: string) => void;
-  /** UX-only: called with display name when an event is chosen or re-synced after load; parent may prefill composer if empty. */
   onEventSelectedForComposer?: (eventDisplayName: string) => void;
-  /** Keeps parent preview panel in sync with the selected event title/name. */
   onSelectedEventDisplayNameChange?: (displayName: string) => void;
   states: StateRow[];
 }) {
   const [rows, setRows] = useState<EventRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (broadcast_mode !== 'event') return;
     let cancelled = false;
     (async () => {
       setLoading(true);
+      setLoadError(null);
       try {
         const res = await fetch('/api/admin/events?limit=200&active=1', { credentials: 'same-origin' });
         const d = (await res.json().catch(() => ({}))) as { events?: unknown; error?: string };
-        if (!res.ok || !Array.isArray(d.events)) {
-          if (!cancelled) setRows([]);
+        if (!res.ok) {
+          if (!cancelled) {
+            setRows([]);
+            setLoadError(d.error?.trim() || `Could not load events (HTTP ${res.status}).`);
+          }
+          return;
+        }
+        if (!Array.isArray(d.events)) {
+          if (!cancelled) {
+            setRows([]);
+            setLoadError('Unexpected response when loading events.');
+          }
           return;
         }
         const mapped = mapApiRowsToEvents(d.events as Record<string, unknown>[], states);
         if (!cancelled) setRows(mapped);
       } catch {
-        if (!cancelled) setRows([]);
+        if (!cancelled) {
+          setRows([]);
+          setLoadError('Could not load events. Check your connection and try again.');
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -156,6 +169,8 @@ export function BroadcastEventSelector({
           <Loader2 className="h-4 w-4 animate-spin text-emerald-600" aria-hidden />
           Loading active events…
         </div>
+      ) : loadError ? (
+        <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm font-semibold text-red-800">{loadError}</p>
       ) : rows.length === 0 ? (
         <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-600">
           No active events found. Publish or schedule an event first.
