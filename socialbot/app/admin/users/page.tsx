@@ -761,21 +761,22 @@ export default function UserManagement() {
 
       {/* ROLE MANAGEMENT MODAL (admin-only) */}
       {isAdmin && roleUser ? (
-        <div className="fixed inset-0 z-[205] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-[40px] p-8 max-w-lg w-full space-y-6 shadow-2xl relative">
+        <div className="fixed inset-0 z-[205] flex items-start sm:items-center justify-center bg-black/50 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto overscroll-contain">
+          <div className="bg-white rounded-[32px] sm:rounded-[40px] w-full max-w-lg max-h-[min(90dvh,calc(100vh-1.5rem))] my-auto flex flex-col shadow-2xl relative overflow-hidden">
             <button
               onClick={() => setRoleUser(null)}
-              className="absolute top-6 right-6 w-10 h-10 bg-slate-900 text-white rounded-2xl flex items-center justify-center hover:bg-blue-600 transition-all shadow-xl"
+              className="absolute top-4 right-4 sm:top-6 sm:right-6 z-10 w-10 h-10 bg-slate-900 text-white rounded-2xl flex items-center justify-center hover:bg-blue-600 transition-all shadow-xl"
               aria-label="Close role management"
             >
               <X size={18} />
             </button>
 
-            <div className="space-y-1">
+            <div className="shrink-0 px-6 pt-6 pb-3 sm:px-8 sm:pt-8 pr-16 space-y-1">
               <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Role Management</p>
               <h3 className="text-xl font-black text-slate-900 leading-tight">{fmt(roleUser.name)}</h3>
             </div>
 
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 sm:px-8 pb-4">
             <div className="grid grid-cols-1 gap-4">
               <div>
                 <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Role</label>
@@ -955,8 +956,9 @@ export default function UserManagement() {
                 </div>
               ) : null}
             </div>
+            </div>
 
-            <div className="flex gap-3 pt-2">
+            <div className="shrink-0 flex gap-3 px-6 py-4 sm:px-8 sm:py-5 border-t border-slate-100 bg-white">
               <button
                 type="button"
                 onClick={() => setRoleUser(null)}
