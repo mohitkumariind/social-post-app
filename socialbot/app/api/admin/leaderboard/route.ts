@@ -7,7 +7,7 @@ import {
   fetchStateFilterOptions,
   resolveCmGroupIdsForLeaderboard,
 } from '@/lib/admin/leaderboardService';
-import { createServiceRoleClient, isCampaignManager, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, isCampaignManager, toVerifiedAdminAuth, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
   RbacError,
@@ -22,15 +22,6 @@ function csvEscapeCell(v: string): string {
   if (/^[=+\-@]/.test(s)) return `'${s.replace(/'/g, "''")}`;
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
-}
-
-function toVerifiedAuth(auth: Awaited<ReturnType<typeof validateAdminSession>> & { ok: true }) {
-  return {
-    role: auth.role,
-    user: { id: auth.user.id },
-    assigned_state_ids: auth.assigned_state_ids,
-    assigned_group_ids: auth.assigned_group_ids,
-  };
 }
 
 export async function GET(request: NextRequest) {
@@ -53,7 +44,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'SUPABASE_SERVICE_ROLE_KEY required for leaderboard' }, { status: 503 });
   }
 
-  const auth = toVerifiedAuth(session);
+  const auth = toVerifiedAdminAuth(session);
   const sp = request.nextUrl.searchParams;
 
   if (sp.get('meta') === 'states') {

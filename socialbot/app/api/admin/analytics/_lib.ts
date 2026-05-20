@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, toVerifiedAdminAuth, validateAdminSession } from '@/lib/admin-gate';
 import { resolveAdminAnalyticsScope } from '@/lib/admin/analyticsApi';
 import type { AdminAnalyticsScope } from '@/lib/admin/rbac';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
@@ -48,12 +48,7 @@ export async function requireAdminAnalyticsContext(): Promise<
       response: NextResponse.json({ error: 'SUPABASE_SERVICE_ROLE_KEY required for analytics' }, { status: 503 }),
     };
   }
-  const auth: VerifiedAdminAuth = {
-    role: session.role,
-    user: { id: session.user.id },
-    assigned_state_ids: session.assigned_state_ids,
-    assigned_group_ids: session.assigned_group_ids,
-  };
+  const auth = toVerifiedAdminAuth(session);
   const scoped = await resolveAdminAnalyticsScope(admin, auth);
   if (!scoped.ok) {
     return { ok: false, response: NextResponse.json({ error: scoped.error }, { status: scoped.status }) };

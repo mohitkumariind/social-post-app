@@ -1,5 +1,5 @@
 import type { PartyItem } from '@/lib/constants';
-import { toNumArray } from '@/lib/admin/event-form-hydration';
+import { toNumArr } from '@/lib/admin/event-form-hydration';
 
 export function normalizeAssignedPartyIds(raw: unknown): string[] {
   if (raw == null) return [];
@@ -53,7 +53,7 @@ export function validateEditorPartyScope(
     }
   }
 
-  const numericIds = toNumArray(payload.party_id);
+  const numericIds = toNumArr(payload.party_id);
   if (partySlugs.length === 0 && numericIds.length === 0) return null;
 
   for (const slug of partySlugs) {

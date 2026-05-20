@@ -123,6 +123,19 @@ export type VerifiedAdminAuth = {
   assigned_party_ids: string[];
 };
 
+/** Map validated admin session to full VerifiedAdminAuth shape. */
+export function toVerifiedAdminAuth(
+  session: Awaited<ReturnType<typeof validateAdminSession>> & { ok: true }
+): VerifiedAdminAuth {
+  return {
+    role: session.role,
+    user: { id: session.user.id },
+    assigned_state_ids: session.assigned_state_ids,
+    assigned_group_ids: session.assigned_group_ids,
+    assigned_party_ids: session.assigned_party_ids,
+  };
+}
+
 /** Map validated admin session to unified RBAC user (all AdminRole values). */
 export function toRbacUser(
   auth: Pick<VerifiedAdminAuth, 'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids'>

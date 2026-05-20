@@ -1,6 +1,6 @@
 import { fromPartyDB, type PartyLike } from '@/lib/party-mapper';
 
-export type StateOption = { id: string; name: string };
+export type StateOption = { id: string | number; name: string };
 
 /** Normalize party/state from DB: string | string[] -> string[] */
 export function toStrArr(v: string | string[] | null | undefined): string[] {
@@ -26,7 +26,7 @@ export function resolveStateSelectionsFromEvent(
       .map((n) => {
         const sid = String(n);
         const byId = states.find((s) => String(s.id) === sid);
-        if (byId) return byId.id;
+        if (byId) return String(byId.id);
         return sid;
       })
       .filter(Boolean);
@@ -37,9 +37,9 @@ export function resolveStateSelectionsFromEvent(
   return legacy
     .map((v) => {
       const byId = states.find((s) => s.id === v || String(s.id) === v);
-      if (byId) return byId.id;
+      if (byId) return String(byId.id);
       const byName = states.find((s) => s.name === v);
-      return byName?.id ?? v;
+      return byName?.id != null ? String(byName.id) : v;
     })
     .filter(Boolean);
 }
