@@ -17,7 +17,7 @@ const BODY_MAX = 2000;
 const HISTORY_PAGE_SIZE = 10;
 
 /** UX-only: suggested message body prefix in event campaign mode (applied only when body is empty). */
-const EVENT_CAMPAIGN_BODY_SUGGEST_PREFIX = 'Campaign Update: ';
+const EVENT_CAMPAIGN_BODY_SUGGEST_PREFIX = '📢 Campaign Update: ';
 
 const EVENT_ID_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -755,15 +755,25 @@ export default function NotificationBroadcastCenterPage() {
             Global Broadcast
           </button>
         </div>
+        <p className="mb-4 text-sm font-medium text-slate-600">
+          {broadcastMode === 'global'
+            ? 'Send general notification to selected audience.'
+            : 'Event campaign notification will be sent to event-based audience.'}
+        </p>
         {broadcastMode === 'event' ? (
-          <BroadcastEventSelector
-            broadcast_mode={broadcastMode}
-            selected_event_id={selected_event_id}
-            onSelected_event_idChange={setSelected_event_id}
-            onEventSelectedForComposer={suggestBodyPrefixForEventCampaign}
-            onSelectedEventDisplayNameChange={setSelected_event_display_name}
-            states={states}
-          />
+          <>
+            <span className="mb-3 inline-flex rounded-full bg-emerald-50 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-emerald-800">
+              Select an event for campaign
+            </span>
+            <BroadcastEventSelector
+              broadcast_mode={broadcastMode}
+              selected_event_id={selected_event_id}
+              onSelected_event_idChange={setSelected_event_id}
+              onEventSelectedForComposer={suggestBodyPrefixForEventCampaign}
+              onSelectedEventDisplayNameChange={setSelected_event_display_name}
+              states={states}
+            />
+          </>
         ) : null}
       </section>
 
@@ -914,7 +924,7 @@ export default function NotificationBroadcastCenterPage() {
           <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-4">
             <dt className="shrink-0 font-black uppercase tracking-wider text-slate-400 sm:w-32">Mode</dt>
             <dd className="font-bold text-slate-900">
-              {broadcastMode === 'event' ? 'Event Campaign' : 'Global Broadcast'}
+              {broadcastMode === 'event' ? 'Event Mode Active' : 'Global Mode Active'}
             </dd>
           </div>
           {broadcastMode === 'event' ? (
@@ -961,6 +971,9 @@ export default function NotificationBroadcastCenterPage() {
               placeholder="Short headline"
               className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 shadow-sm outline-none focus:border-[#25D366] focus:ring-2 focus:ring-[#25D366]/25"
             />
+            <p className="mt-1.5 text-xs font-medium text-slate-500">
+              This title will appear in notification preview
+            </p>
           </div>
           <div>
             <div className="mb-1.5 flex items-center justify-between">
@@ -1059,7 +1072,7 @@ export default function NotificationBroadcastCenterPage() {
           style={{ backgroundColor: ACCENT }}
         >
           <Send className="h-5 w-5" />
-          Send notification
+          {broadcastMode === 'global' ? 'Send Broadcast' : 'Send Event Notification'}
         </button>
       </section>
 
