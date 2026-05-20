@@ -50,14 +50,22 @@ export function adminStorageUploadWithProgress(
 
     xhr.addEventListener('load', () => {
       options?.signal?.removeEventListener('abort', onAbort);
-      let data: { error?: string; publicUrl?: string; path?: string } = {};
+      let data: {
+        error?: string;
+        step?: string;
+        reason?: string;
+        publicUrl?: string;
+        path?: string;
+      } = {};
       try {
         data = JSON.parse(xhr.responseText || '{}') as typeof data;
       } catch {
         data = {};
       }
       if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error(data.error || `Upload failed (${xhr.status})`));
+        const stepTag = data.step ? ` [${data.step}]` : '';
+        const reasonTag = data.reason ? ` (${data.reason})` : '';
+        reject(new Error((data.error || `Upload failed (${xhr.status})`) + stepTag + reasonTag));
         return;
       }
       if (!data.publicUrl || !data.path) {

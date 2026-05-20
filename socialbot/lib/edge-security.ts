@@ -79,12 +79,22 @@ export function requireAdminApiRequest(input: {
   if (input.isEditor) {
     const allowed = isEditorAllowedAdminApiPath(String(input.pathname ?? ''), String(input.method ?? 'GET'));
     if (!allowed) {
-      return { ok: false, status: 403, error: 'Forbidden', reason: 'editor-api-not-allowed' };
+      return {
+        ok: false,
+        status: 403,
+        error: `Forbidden: editor cannot call ${input.method ?? 'GET'} ${input.pathname ?? ''}`,
+        reason: 'editor-api-not-allowed',
+      };
     }
     return { ok: true };
   }
   if (!input.isAdmin && !input.isSuperAdmin && !input.isModerator && !input.isCampaignManager) {
-    return { ok: false, status: 403, error: 'Forbidden', reason: 'role-not-allowed' };
+    return {
+      ok: false,
+      status: 403,
+      error: 'Forbidden: role not allowed for admin API',
+      reason: 'role-not-allowed',
+    };
   }
   return { ok: true };
 }

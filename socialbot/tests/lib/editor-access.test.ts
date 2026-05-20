@@ -16,6 +16,8 @@ describe('editor-access', () => {
     expect(isEditorAllowedAdminApiPath('/api/admin/events', 'DELETE')).toBe(true);
     expect(isEditorAllowedAdminApiPath('/api/admin/events?id=1', 'GET')).toBe(true);
     expect(isEditorAllowedAdminApiPath('/api/admin/posts', 'POST')).toBe(true);
+    expect(isEditorAllowedAdminApiPath('/api/admin/storage/upload', 'POST')).toBe(true);
+    expect(isEditorAllowedAdminApiPath('/api/admin/storage/remove', 'POST')).toBe(true);
     expect(isEditorAllowedAdminApiPath('/api/admin/viewer', 'GET')).toBe(true);
     expect(isEditorAllowedAdminApiPath('/api/admin/banners', 'GET')).toBe(false);
   });

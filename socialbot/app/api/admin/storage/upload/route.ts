@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, isCampaignManager, isModerator, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import {
-  RbacError,
-  requireStandardRbacContext,
-} from '@/lib/rbac/require';
+  assertStorageUploadAllowed,
+  logStorageAuth,
+  STORAGE_UPLOAD_ROLES,
+  storageAuthJson,
+} from '@/lib/admin/storage-upload-auth';
+import { RbacError, requireStandardRbacContext } from '@/lib/rbac/require';
 import { SECURITY_LIMITS, envLimit } from '@/lib/security-limits';
 
 const ALLOWED_BUCKETS = new Set(['post-images', 'user-frames']);
@@ -24,31 +26,84 @@ function assertSafePath(path: string): string {
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const auth = await validateAdminSession(supabase);
+
   if (!auth.ok) {
-    return NextResponse.json(
-      { error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' },
-      { status: auth.status }
+    logStorageAuth('validateAdminSession', {
+      ok: false,
+      step: 'validateAdminSession',
+      reason: auth.status === 401 ? 'unauthorized' : 'forbidden',
+      status: auth.status,
+    });
+    return storageAuthJson(
+      {
+        error: auth.status === 401 ? 'Unauthorized' : 'Forbidden',
+        step: 'validateAdminSession',
+        reason: auth.status === 401 ? 'no_session' : 'not_admin_panel_role',
+      },
+      auth.status
     );
   }
+
+  logStorageAuth('session', {
+    ok: true,
+    step: 'validateAdminSession',
+    role: auth.role,
+    user_id: auth.user.id,
+  });
+
   try {
-    requireStandardRbacContext(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireStandardRbacContext(auth, [...STORAGE_UPLOAD_ROLES]);
   } catch (e) {
-    if (e instanceof RbacError) {
-      return NextResponse.json({ error: e.message }, { status: e.status });
-    }
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    const message = e instanceof RbacError ? e.message : 'Forbidden';
+    const status = e instanceof RbacError ? e.status : 403;
+    const reason =
+      message === 'Forbidden'
+        ? `role_${auth.role}_not_in_allowlist`
+        : message.toLowerCase().includes('assigned_state')
+          ? 'moderator_missing_states'
+          : message.toLowerCase().includes('assigned_group')
+            ? 'campaign_manager_missing_groups'
+            : 'rbac_context_failed';
+    return storageAuthJson(
+      {
+        error: message,
+        step: 'requireStandardRbacContext',
+        reason,
+        role: auth.role,
+        user_id: auth.user.id,
+      },
+      status
+    );
   }
 
   const admin = createServiceRoleClient();
   if (!admin) {
-    return NextResponse.json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, { status: 503 });
+    return storageAuthJson(
+      {
+        error: 'SUPABASE_SERVICE_ROLE_KEY not configured',
+        step: 'service_role_client',
+        reason: 'missing_service_role_key',
+        role: auth.role,
+        user_id: auth.user.id,
+      },
+      503
+    );
   }
 
   let form: FormData;
   try {
     form = await request.formData();
   } catch {
-    return NextResponse.json({ error: 'Expected multipart form data' }, { status: 400 });
+    return storageAuthJson(
+      {
+        error: 'Expected multipart form data',
+        step: 'parse_form',
+        reason: 'invalid_multipart',
+        role: auth.role,
+        user_id: auth.user.id,
+      },
+      400
+    );
   }
 
   const bucket = String(form.get('bucket') ?? '');
@@ -56,89 +111,83 @@ export async function POST(request: NextRequest) {
   const file = form.get('file');
 
   if (!ALLOWED_BUCKETS.has(bucket)) {
-    return NextResponse.json({ error: 'Invalid bucket' }, { status: 400 });
-  }
-  if (isModerator(auth)) {
-    if (auth.assigned_state_ids.length === 0) {
-      return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
-    }
-    if (bucket !== 'user-frames') {
-      return NextResponse.json({ error: 'Moderators can only upload user frames' }, { status: 403 });
-    }
-  }
-  if (isCampaignManager(auth)) {
-    if (bucket !== 'post-images') {
-      return NextResponse.json({ error: 'campaign_manager can only upload post images' }, { status: 403 });
-    }
+    return storageAuthJson(
+      {
+        error: 'Invalid bucket',
+        step: 'bucket_allowlist',
+        reason: 'bucket_not_allowed',
+        role: auth.role,
+        user_id: auth.user.id,
+      },
+      400
+    );
   }
 
   let path: string;
   try {
     path = assertSafePath(pathRaw);
   } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'Invalid path' },
-      { status: 400 }
+    return storageAuthJson(
+      {
+        error: e instanceof Error ? e.message : 'Invalid path',
+        step: 'path_safety',
+        reason: 'path_validation_failed',
+        role: auth.role,
+        user_id: auth.user.id,
+      },
+      400
     );
+  }
+
+  const perm = await assertStorageUploadAllowed({ auth, admin, bucket, path });
+  if (!perm.ok) {
+    return storageAuthJson(perm.body, perm.status);
   }
 
   if (!(file instanceof Blob)) {
-    return NextResponse.json({ error: 'Missing file' }, { status: 400 });
-  }
-  const maxUploadBytes = envLimit('STORAGE_UPLOAD_MAX_BYTES', SECURITY_LIMITS.storageUploadMaxBytes, 1024, 50 * 1024 * 1024);
-  if (file.size > maxUploadBytes) {
-    return NextResponse.json({ error: `File too large. Max ${maxUploadBytes} bytes` }, { status: 400 });
-  }
-
-  if (isModerator(auth)) {
-    // Enforce: public/<userId>/... and userId must belong to the moderator's assigned state.
-    const parts = path.split('/').filter(Boolean); // e.g. ["public","<userId>",...]
-    const userId = parts.length >= 2 && parts[0] === 'public' ? parts[1] : '';
-    if (!userId) {
-      return NextResponse.json({ error: 'Invalid path for moderator uploads' }, { status: 400 });
-    }
-    const { data: prof, error: profErr } = await admin
-      .from('profiles')
-      .select('id, assigned_state_ids')
-      .eq('id', userId)
-      .maybeSingle();
-    if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
-    const ok = canAccessResource(
+    return storageAuthJson(
       {
-        id: auth.user.id,
+        error: 'Missing file',
+        step: 'file_present',
+        reason: 'missing_file_blob',
         role: auth.role,
-        assigned_state_ids: auth.assigned_state_ids,
-        assigned_group_ids: auth.assigned_group_ids,
+        user_id: auth.user.id,
       },
-      { state_ids: (prof as any)?.assigned_state_ids },
-      { resourceType: 'profiles', audit: { resourceType: 'profiles', action: 'storage.upload.scope.validate' } }
+      400
     );
-    if (!ok) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
   }
 
-  if (isCampaignManager(auth)) {
-    // Enforce: public/events/<eventId>/... and event must belong to campaign_manager.
-    const parts = path.split('/').filter(Boolean); // e.g. ["public","events","<eventId>",...]
-    const eventId = parts.length >= 3 && parts[0] === 'public' && parts[1] === 'events' ? parts[2] : '';
-    if (!eventId) {
-      return NextResponse.json({ error: 'Invalid path for campaign_manager uploads' }, { status: 400 });
-    }
-    const { data: ev, error: evErr } = await admin
-      .from('events')
-      .select('id, created_by')
-      .eq('id', eventId)
-      .maybeSingle();
-    if (evErr) return NextResponse.json({ error: evErr.message }, { status: 500 });
-    const owner = String((ev as any)?.created_by ?? '').trim();
-    if (!owner || owner !== auth.user.id) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+  const maxUploadBytes = envLimit(
+    'STORAGE_UPLOAD_MAX_BYTES',
+    SECURITY_LIMITS.storageUploadMaxBytes,
+    1024,
+    50 * 1024 * 1024
+  );
+  if (file.size > maxUploadBytes) {
+    return storageAuthJson(
+      {
+        error: `File too large. Max ${maxUploadBytes} bytes`,
+        step: 'file_size',
+        reason: 'file_too_large',
+        role: auth.role,
+        user_id: auth.user.id,
+      },
+      400
+    );
   }
 
   const buf = Buffer.from(await file.arrayBuffer());
   const contentType = file.type || 'application/octet-stream';
+
+  logStorageAuth('supabase_storage_upload', {
+    ok: true,
+    role: auth.role,
+    user_id: auth.user.id,
+    bucket,
+    path,
+    bytes: buf.length,
+    note: 'service_role client bypasses storage RLS',
+  });
 
   const { error: uploadErr } = await admin.storage.from(bucket).upload(path, buf, {
     contentType,
@@ -146,10 +195,28 @@ export async function POST(request: NextRequest) {
   });
 
   if (uploadErr) {
-    return NextResponse.json({ error: uploadErr.message }, { status: 500 });
+    logStorageAuth('supabase_storage_upload', {
+      ok: false,
+      role: auth.role,
+      user_id: auth.user.id,
+      bucket,
+      path,
+      supabase_message: uploadErr.message,
+    });
+    return storageAuthJson(
+      {
+        error: uploadErr.message,
+        step: 'supabase_storage_upload',
+        reason: 'storage_api_error',
+        role: auth.role,
+        user_id: auth.user.id,
+      },
+      500
+    );
   }
 
   const { data: urlData } = admin.storage.from(bucket).getPublicUrl(path);
+  logStorageAuth('success', { ok: true, role: auth.role, user_id: auth.user.id, bucket, path });
   return NextResponse.json(
     { publicUrl: urlData.publicUrl, path, bucket },
     { headers: { 'Cache-Control': 'no-store' } }
