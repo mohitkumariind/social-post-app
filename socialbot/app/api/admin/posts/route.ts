@@ -26,6 +26,13 @@ import { resolvePostEventId } from '@/lib/admin/resolvePostEventId';
 import { assertPostEventOwnedByActor, inheritEventScopeForPostPayload, isEventsFullAdmin } from '@/lib/event-access';
 import { isEditor } from '@/lib/admin-gate';
 import { withAudit } from '@/lib/audit/withAudit';
+import {
+  failPostUpload,
+  formatSupabaseError,
+  logPostUploadTrace,
+  sanitizePayloadForDebug,
+  type PostUploadTraceStep,
+} from '@/lib/admin/post-upload-trace';
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -34,6 +41,36 @@ function json(body: unknown, status = 200) {
 function isMissingColumnErr(err: { message?: string } | null | undefined, columnName: string) {
   const msg = String(err?.message ?? '').toLowerCase();
   return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column'));
+}
+
+/** Never strip event_id — analytics schema requires it when NOT NULL. */
+const INSERT_STRIP_COLUMNS_ON_MISSING = ['created_by', 'status', 'scheduled_at', 'dashboard_category'] as const;
+
+function normalizeCaptionsForInsert(captions: unknown): unknown {
+  if (captions == null) return undefined;
+  if (Array.isArray(captions)) return captions;
+  if (typeof captions === 'string') {
+    const t = captions.trim();
+    if (!t) return [];
+    try {
+      const parsed = JSON.parse(t) as unknown;
+      return Array.isArray(parsed) ? parsed : [t];
+    } catch {
+      return [t];
+    }
+  }
+  return captions;
+}
+
+function postUploadErrorResponse(
+  steps: PostUploadTraceStep[],
+  step: string,
+  status: number,
+  message: string,
+  extra?: Record<string, unknown>
+) {
+  const body = failPostUpload(steps, step, status, message, extra);
+  return json(body, status);
 }
 
 type ScopeParse = { state_ids: number[]; group_id: string; group_ids: string[]; malformed: boolean };
@@ -165,6 +202,17 @@ export async function GET(request: NextRequest) {
 
 export const POST = withAudit(
   async ({ req, auth, admin }) => {
+    const trace: PostUploadTraceStep[] = [];
+    trace.push({
+      step: 'auth',
+      ok: true,
+      detail: {
+        user_id: auth.user.id,
+        role: auth.role,
+        auth_uid_matches_user_id: true,
+      },
+    });
+
     try {
       requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
       if (!isEditor(auth)) {
@@ -172,41 +220,109 @@ export const POST = withAudit(
         requireCampaignManagerHasAssignedGroups(auth);
       }
     } catch (e) {
-      if (e instanceof RbacError) return json({ error: e.message }, e.status);
-      return json({ error: 'Forbidden' }, 403);
+      if (e instanceof RbacError) {
+        return postUploadErrorResponse(trace, 'requireRole', e.status, e.message);
+      }
+      return postUploadErrorResponse(trace, 'requireRole', 403, 'Forbidden');
     }
 
     let body: any = {};
     try {
       body = await req.json();
     } catch {
-      return json({ error: 'Invalid JSON body' }, 400);
+      return postUploadErrorResponse(trace, 'parseBody', 400, 'Invalid JSON body');
     }
 
     const payload: Record<string, unknown> = { ...(body ?? {}) };
     payload.created_by = auth.user.id;
+    if (Object.prototype.hasOwnProperty.call(payload, 'captions')) {
+      payload.captions = normalizeCaptionsForInsert(payload.captions);
+    }
+
+    const eventIdRaw = String(payload.event_id ?? '').trim();
+    trace.push({ step: 'event_id_received', ok: !!eventIdRaw, detail: { event_id_raw: eventIdRaw || null } });
 
     const resolvedEventId = await resolvePostEventId(admin, payload);
-    if (!resolvedEventId) return json({ error: 'event_id is required and must reference an existing event' }, 400);
+    trace.push({
+      step: 'resolvePostEventId',
+      ok: !!resolvedEventId,
+      detail: { resolved_event_id: resolvedEventId, category: String(payload.category ?? '') },
+    });
+    if (!resolvedEventId) {
+      return postUploadErrorResponse(
+        trace,
+        'resolvePostEventId',
+        400,
+        'event_id is required and must reference an existing event',
+        { event_id_raw: eventIdRaw }
+      );
+    }
+
+    const { data: eventRowProbe, error: eventProbeErr } = await admin
+      .from('events')
+      .select('id, created_by, name')
+      .eq('id', resolvedEventId)
+      .maybeSingle();
+    trace.push({
+      step: 'events_row_probe',
+      ok: !eventProbeErr && !!eventRowProbe,
+      detail: {
+        event_exists: !!eventRowProbe,
+        event_created_by: (eventRowProbe as { created_by?: string | null } | null)?.created_by ?? null,
+        event_created_by_is_null: (eventRowProbe as { created_by?: string | null } | null)?.created_by == null,
+        supabase: formatSupabaseError(eventProbeErr),
+      },
+    });
+
     const eventOwn = await assertPostEventOwnedByActor(admin, resolvedEventId, auth.user.id);
-    if (!eventOwn.ok) return json({ error: eventOwn.error }, 403);
+    trace.push({
+      step: 'assertPostEventOwnedByActor',
+      ok: eventOwn.ok,
+      detail: eventOwn.ok
+        ? {
+            event_id: eventOwn.event.id,
+            event_created_by: eventOwn.event.created_by,
+            actor_user_id: auth.user.id,
+            ownership_match:
+              String(eventOwn.event.created_by ?? '').trim() === String(auth.user.id).trim(),
+          }
+        : { error: eventOwn.error },
+    });
+    if (!eventOwn.ok) {
+      return postUploadErrorResponse(trace, 'assertPostEventOwnedByActor', 403, eventOwn.error);
+    }
+
     payload.event_id = resolvedEventId;
     if (!String(payload.category ?? '').trim()) payload.category = eventOwn.event.name;
 
-    const { data: eventScopeRow } = await admin
+    const { data: eventScopeRow, error: eventScopeErr } = await admin
       .from('events')
       .select('state_id, party_id, loksabha_id, assembly_id, target_groups, created_by')
       .eq('id', resolvedEventId)
       .maybeSingle();
+    if (eventScopeErr) {
+      trace.push({ step: 'event_scope_fetch', ok: false, detail: { supabase: formatSupabaseError(eventScopeErr) } });
+    }
     if (eventScopeRow && typeof eventScopeRow === 'object') {
       inheritEventScopeForPostPayload(eventScopeRow as Record<string, unknown>, payload, auth.role);
+      trace.push({
+        step: 'inheritEventScopeForPostPayload',
+        ok: true,
+        detail: {
+          state_id: payload.state_id,
+          target_groups: payload.target_groups,
+          party_id: payload.party_id,
+        },
+      });
     }
 
     if (isEventsFullAdmin(auth) && !isEditor(auth)) {
       const scheduled_at_raw = body?.scheduled_at != null ? String(body.scheduled_at).trim() : '';
       const scheduled_at = scheduled_at_raw ? new Date(scheduled_at_raw).toISOString() : null;
       const nowIso = new Date().toISOString();
-      if (scheduled_at && scheduled_at <= nowIso) return json({ error: 'scheduled_at must be in the future' }, 400);
+      if (scheduled_at && scheduled_at <= nowIso) {
+        return postUploadErrorResponse(trace, 'scheduled_at', 400, 'scheduled_at must be in the future');
+      }
       if (scheduled_at) {
         payload.scheduled_at = scheduled_at;
         payload.status = 'scheduled_publish';
@@ -227,7 +343,6 @@ export const POST = withAudit(
       }
     } catch (e) {
       if (e instanceof RbacError) {
-        // Ensure denied attempts are audited via scoped write engine.
         canPerformMutation(
           { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
           'posts.create',
@@ -235,32 +350,64 @@ export const POST = withAudit(
           payload as any,
           { resourceType: 'posts', resourceName: String((payload as any)?.title ?? '') }
         );
-        return json({ error: e.message }, e.status);
+        return postUploadErrorResponse(trace, 'scope_validation', e.status, e.message);
       }
-      return json({ error: 'Forbidden' }, 403);
+      return postUploadErrorResponse(trace, 'scope_validation', 403, 'Forbidden');
     }
 
-    {
-      const decision = canPerformMutation(
-        { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
-        'posts.create',
-        { created_by: auth.user.id },
-        payload as any,
-        { resourceType: 'posts', resourceName: String((payload as any)?.title ?? '') }
-      );
-      if (!decision.ok) return json({ error: decision.reason }, 403);
+    const mutationOwner =
+      eventOwn.event.created_by != null ? String(eventOwn.event.created_by).trim() : auth.user.id;
+    const decision = canPerformMutation(
+      { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
+      'posts.create',
+      { created_by: mutationOwner },
+      payload as any,
+      { resourceType: 'posts', resourceName: String((payload as any)?.title ?? '') }
+    );
+    trace.push({
+      step: 'canPerformMutation',
+      ok: decision.ok,
+      detail: {
+        action: 'posts.create',
+        mutation_owner: mutationOwner,
+        reason: decision.ok ? undefined : decision.reason,
+      },
+    });
+    if (!decision.ok) {
+      return postUploadErrorResponse(trace, 'canPerformMutation', 403, decision.reason);
     }
 
     let insertBody: Record<string, unknown> = { ...payload };
+    trace.push({
+      step: 'insert_payload',
+      ok: true,
+      detail: { payload: sanitizePayloadForDebug(insertBody) },
+    });
+
     let insertRes = await admin.from('posts').insert(insertBody as any).select('*').single();
-    for (const col of ['created_by', 'status', 'scheduled_at', 'event_id', 'dashboard_category']) {
+    trace.push({
+      step: 'posts.insert_attempt_1',
+      ok: !insertRes.error,
+      detail: {
+        supabase: formatSupabaseError(insertRes.error),
+        note: 'service_role client — RLS not applied on this path',
+      },
+    });
+
+    for (const col of INSERT_STRIP_COLUMNS_ON_MISSING) {
       if (insertRes.error && isMissingColumnErr(insertRes.error, col) && Object.prototype.hasOwnProperty.call(insertBody, col)) {
         const next = { ...insertBody };
         delete (next as Record<string, unknown>)[col];
         insertBody = next;
         insertRes = await admin.from('posts').insert(insertBody as any).select('*').single();
+        trace.push({
+          step: `posts.insert_retry_strip_${col}`,
+          ok: !insertRes.error,
+          detail: { stripped_column: col, supabase: formatSupabaseError(insertRes.error) },
+        });
       }
     }
+
     if (insertRes.error && String(insertRes.error.message ?? '').toLowerCase().includes('captions')) {
       const next = { ...insertBody };
       const cap = next.captions;
@@ -270,14 +417,60 @@ export const POST = withAudit(
         } catch {
           delete next.captions;
         }
+      } else if (Array.isArray(cap)) {
+        next.captions = cap;
+      } else {
+        delete next.captions;
       }
       insertBody = next;
       insertRes = await admin.from('posts').insert(insertBody as any).select('*').single();
+      trace.push({
+        step: 'posts.insert_retry_captions',
+        ok: !insertRes.error,
+        detail: { supabase: formatSupabaseError(insertRes.error) },
+      });
     }
 
-    if (insertRes.error) return json({ error: insertRes.error.message }, 500);
+    if (insertRes.error) {
+      return postUploadErrorResponse(trace, 'posts.insert', 500, insertRes.error.message, {
+        supabase: formatSupabaseError(insertRes.error),
+        final_payload: sanitizePayloadForDebug(insertBody),
+      });
+    }
 
-    return json({ post: insertRes.data });
+    const insertedId = (insertRes.data as { id?: string } | null)?.id;
+    if (insertedId == null || String(insertedId).trim() === '') {
+      return postUploadErrorResponse(trace, 'posts.insert_no_id', 500, 'Insert succeeded but no post id returned', {
+        supabase: formatSupabaseError(insertRes.error),
+      });
+    }
+
+    const verifyRes = await admin
+      .from('posts')
+      .select('id, event_id, created_by, title, image_url')
+      .eq('id', insertedId)
+      .maybeSingle();
+    trace.push({
+      step: 'posts.verify_row',
+      ok: !verifyRes.error && !!verifyRes.data,
+      detail: {
+        post_id: insertedId,
+        row: verifyRes.data ?? null,
+        supabase: formatSupabaseError(verifyRes.error),
+      },
+    });
+    if (verifyRes.error || !verifyRes.data) {
+      return postUploadErrorResponse(
+        trace,
+        'posts.verify_row',
+        500,
+        verifyRes.error?.message ?? 'Row not found in posts after insert',
+        { supabase: formatSupabaseError(verifyRes.error) }
+      );
+    }
+
+    logPostUploadTrace('success', trace);
+    return json({ post: insertRes.data, verified: true });
   },
   {
     action_type: 'post.created',

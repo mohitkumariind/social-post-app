@@ -935,6 +935,12 @@ export default function App() {
         postPayload.assembly_id = [];
       }
 
+      devConsole.log('[handleUpload] POST /api/admin/posts', {
+        event_id: postPayload.event_id,
+        role: 'session',
+        payload_keys: Object.keys(postPayload),
+      });
+
       const postRes = await fetch('/api/admin/posts', {
         method: 'POST',
         credentials: 'same-origin',
@@ -942,12 +948,33 @@ export default function App() {
         body: JSON.stringify(postPayload),
         signal,
       });
-      const postJson = (await postRes.json().catch(() => ({}))) as { post?: { id?: string }; error?: string };
+      const postJson = (await postRes.json().catch(() => ({}))) as {
+        post?: { id?: string };
+        error?: string;
+        step?: string;
+        supabase?: { message?: string; code?: string; details?: string; hint?: string };
+        debug?: { trace?: unknown[] };
+      };
       if (!postRes.ok) {
-        throw new Error(postJson.error || `Failed to save post (${postRes.status})`);
+        devConsole.error('[handleUpload] POST /api/admin/posts failed', {
+          status: postRes.status,
+          step: postJson.step,
+          error: postJson.error,
+          supabase: postJson.supabase,
+          debug: postJson.debug,
+          event_id: postPayload.event_id,
+        });
+        const supaMsg = postJson.supabase?.message?.trim();
+        const stepTag = postJson.step ? ` [${postJson.step}]` : '';
+        throw new Error(
+          (postJson.error || `Failed to save post (${postRes.status})`) +
+            stepTag +
+            (supaMsg ? ` — ${supaMsg}` : '')
+        );
       }
       const postId = postJson.post?.id;
       if (postId == null || String(postId).trim() === '') {
+        devConsole.error('[handleUpload] post ok but missing id', postJson);
         throw new Error('Post created but no id returned');
       }
 
