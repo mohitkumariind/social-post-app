@@ -143,7 +143,23 @@ export function canPerformMutation(
     return denied;
   }
 
-  if (user.role === 'admin') return { ok: true };
+  if (user.role === 'admin' || user.role === 'super_admin') return { ok: true };
+
+  if (user.role === 'editor') {
+    if (action === 'events.create') return { ok: true };
+    const denied = { ok: false as const, reason: 'Forbidden: editor may only create draft events' };
+    if (audit) {
+      auditDenied({
+        user,
+        action,
+        resourceType: audit.resourceType,
+        resourceId: audit.resourceId,
+        resourceName: audit.resourceName,
+        reason: denied.reason,
+      });
+    }
+    return denied;
+  }
 
   if (
     action === 'events.create' &&

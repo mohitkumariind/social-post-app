@@ -4,6 +4,7 @@ import {
   isAdminRole,
   isCampaignManagerRole,
   isModeratorRole,
+  isEditorRole,
   isSuperAdminRole,
 } from '@/lib/supabase/session-helpers';
 import type { AdminRole } from '@/lib/permissions';
@@ -48,6 +49,9 @@ export async function validateAdminSession(
   if (isSuperAdminRole(role)) {
     return { ok: true, user, role: 'super_admin', assigned_state_ids, assigned_group_ids };
   }
+  if (isEditorRole(role)) {
+    return { ok: true, user, role: 'editor', assigned_state_ids, assigned_group_ids: [] };
+  }
   if (isModeratorRole(role)) return { ok: true, user, role: 'moderator', assigned_state_ids, assigned_group_ids: [] };
   if (isCampaignManagerRole(role)) {
     return { ok: true, user, role: 'campaign_manager', assigned_state_ids, assigned_group_ids };
@@ -77,6 +81,10 @@ export function isAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
 
 export function isSuperAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
   return auth.role === 'super_admin';
+}
+
+export function isEditor(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
+  return auth.role === 'editor';
 }
 
 export function isModerator(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {

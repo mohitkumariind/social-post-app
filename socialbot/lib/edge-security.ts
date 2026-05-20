@@ -1,4 +1,5 @@
 import { type NextRequest } from 'next/server';
+import { isEditorAllowedAdminApiPath } from '@/lib/editor-access';
 
 type SecurityEvent = {
   event: string;
@@ -65,13 +66,24 @@ export function requireCronRequest(
 export function requireAdminApiRequest(input: {
   hasSessionUser: boolean;
   isAdmin: boolean;
+  isSuperAdmin?: boolean;
   isModerator: boolean;
   isCampaignManager: boolean;
+  isEditor?: boolean;
+  pathname?: string;
+  method?: string;
 }): { ok: true } | { ok: false; status: number; error: string; reason: string } {
   if (!input.hasSessionUser) {
     return { ok: false, status: 401, error: 'Unauthorized', reason: 'missing-auth-session' };
   }
-  if (!input.isAdmin && !input.isModerator && !input.isCampaignManager) {
+  if (input.isEditor) {
+    const allowed = isEditorAllowedAdminApiPath(String(input.pathname ?? ''), String(input.method ?? 'GET'));
+    if (!allowed) {
+      return { ok: false, status: 403, error: 'Forbidden', reason: 'editor-api-not-allowed' };
+    }
+    return { ok: true };
+  }
+  if (!input.isAdmin && !input.isSuperAdmin && !input.isModerator && !input.isCampaignManager) {
     return { ok: false, status: 403, error: 'Forbidden', reason: 'role-not-allowed' };
   }
   return { ok: true };

@@ -10,7 +10,7 @@ export async function GET() {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
   try {
-    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager']);
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

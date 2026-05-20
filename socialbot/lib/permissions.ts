@@ -1,4 +1,4 @@
-export type AdminRole = 'admin' | 'super_admin' | 'moderator' | 'campaign_manager';
+export type AdminRole = 'admin' | 'super_admin' | 'moderator' | 'campaign_manager' | 'editor';
 
 /** Roles allowed to use Banner Manager (admin UI + `/api/admin/banners`). */
 export const BANNER_MANAGER_ROLES: readonly AdminRole[] = ['admin', 'super_admin'];
@@ -15,6 +15,13 @@ export function isAdmin(role: string | null | undefined): boolean {
 export function isSuperAdmin(role: string | null | undefined): boolean {
   return typeof role === 'string' && role.trim().toLowerCase() === 'super_admin';
 }
+
+export function isEditor(role: string | null | undefined): boolean {
+  return typeof role === 'string' && role.trim().toLowerCase() === 'editor';
+}
+
+/** Roles that may POST new events (editors: draft-only; enforced in events API). */
+export const EVENT_CREATE_ROLES: readonly AdminRole[] = ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor'];
 
 export function canAccessBannerManager(role: string | null | undefined): boolean {
   return isAdmin(role) || isSuperAdmin(role);

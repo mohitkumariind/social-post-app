@@ -1,4 +1,4 @@
-export type RbacRole = 'admin' | 'super_admin' | 'moderator' | 'campaign_manager';
+export type RbacRole = 'admin' | 'super_admin' | 'moderator' | 'campaign_manager' | 'editor';
 
 export type RbacUser = {
   id: string;

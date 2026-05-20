@@ -6,9 +6,12 @@ import {
   fetchProfileAccessForMiddleware,
   isAdminRole,
   isCampaignManagerRole,
+  isEditorRole,
   isModeratorRole,
+  isSuperAdminRole,
   redirectPreservingAuthCookies,
 } from '@/lib/supabase/session-helpers';
+import { isEditorAllowedAdminPath } from '@/lib/editor-access';
 import {
   logEdgeSecurityEvent,
   requireAdminApiRequest,
@@ -135,7 +138,10 @@ export async function proxy(request: NextRequest) {
         errorMessage,
         isAdmin: isAdminRole(role),
       });
-      if (isAdminRole(role) || isModeratorRole(role) || isCampaignManagerRole(role)) {
+      if (isEditorRole(role)) {
+        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/events/create');
+      }
+      if (isAdminRole(role) || isSuperAdminRole(role) || isModeratorRole(role) || isCampaignManagerRole(role)) {
         return redirectPreservingAuthCookies(request, sessionResponse, '/admin');
       }
     }
@@ -182,14 +188,20 @@ export async function proxy(request: NextRequest) {
     });
 
     const isAdmin = isAdminRole(role);
+    const isSuperAdmin = isSuperAdminRole(role);
     const isModerator = isModeratorRole(role);
     const isCampaignManager = isCampaignManagerRole(role);
+    const isEditor = isEditorRole(role);
 
     const adminApiGate = requireAdminApiRequest({
       hasSessionUser: Boolean(user),
       isAdmin,
+      isSuperAdmin,
       isModerator,
       isCampaignManager,
+      isEditor,
+      pathname,
+      method,
     });
     if (!adminApiGate.ok && isAdminApi) {
       proxyLog('[proxy] Step 4: FORBIDDEN /api/admin/*', { errorMessage, reason: adminApiGate.reason });
@@ -206,13 +218,20 @@ export async function proxy(request: NextRequest) {
       return jsonPreservingAuthCookies(sessionResponse, { error: adminApiGate.error }, adminApiGate.status);
     }
 
-    if (!isAdmin && !isModerator && !isCampaignManager) {
+    if (!isAdmin && !isSuperAdmin && !isModerator && !isCampaignManager && !isEditor) {
       if (isAdminApi) {
         proxyLog('[proxy] Step 4: FORBIDDEN /api/admin/* → 403', { errorMessage });
         return jsonPreservingAuthCookies(sessionResponse, { error: 'Forbidden' }, 403);
       }
       proxyLog('[proxy] Step 4: FORBIDDEN → /admin/login?error=forbidden');
       return redirectPreservingAuthCookies(request, sessionResponse, '/admin/login?error=forbidden');
+    }
+
+    if (!isAdminApi && isEditor) {
+      if (!isEditorAllowedAdminPath(pathname)) {
+        proxyLog('[proxy] Step 4: editor blocked route', { pathname });
+        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/events/create');
+      }
     }
 
     // API routes are role-gated here; fine-grained RBAC remains in route handlers.

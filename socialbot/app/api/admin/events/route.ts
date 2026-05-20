@@ -4,9 +4,12 @@ import {
   createServiceRoleClient,
   isAdmin,
   isCampaignManager,
+  isEditor,
   isModerator,
+  isSuperAdmin,
   validateAdminSession,
 } from '@/lib/admin-gate';
+import { applyEditorEventCreatePayload, assertNotEditor } from '@/lib/editor-access';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
@@ -154,7 +157,8 @@ export async function GET(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    assertNotEditor(auth);
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
@@ -166,8 +170,8 @@ export async function GET(request: NextRequest) {
     return json({ error: 'Admin event access requires SUPABASE_SERVICE_ROLE_KEY' }, 503);
   }
   const db = admin;
-  const adminRole = isAdmin(auth);
-  if (adminRole) assertAdminRole(auth);
+  const adminRole = isAdmin(auth) || isSuperAdmin(auth);
+  if (isAdmin(auth)) assertAdminRole(auth);
 
   let cmEffectiveGroupIds: string[] | undefined;
   if (isCampaignManager(auth)) {
@@ -382,8 +386,8 @@ export async function POST(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
-    requireModeratorHasAssignedStates(auth);
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
+    if (!isEditor(auth)) requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -394,6 +398,10 @@ export async function POST(request: NextRequest) {
     payload = (await request.json()) as Record<string, unknown>;
   } catch {
     return json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  if (isEditor(auth)) {
+    applyEditorEventCreatePayload(payload);
   }
 
   if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category')) {
@@ -421,7 +429,7 @@ export async function POST(request: NextRequest) {
     if (!decision.ok) return json({ error: decision.reason }, 403);
   }
 
-  if (isModerator(auth)) {
+  if (isModerator(auth) && !isEditor(auth)) {
     if (!isActiveEventDashboardCategory(payload.dashboard_category)) {
       const stateIds = toNumArray(payload.state_id);
       if (stateIds.length === 0) {
@@ -439,7 +447,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (isCampaignManager(auth)) {
+  if (isCampaignManager(auth) && !isEditor(auth)) {
     if (!isActiveEventDashboardCategory(payload.dashboard_category)) {
       const tg = Array.isArray(payload.target_groups) ? payload.target_groups : [];
       if (tg.length === 0) return json({ error: 'Forbidden: campaign_manager must target_groups' }, 403);
@@ -453,21 +461,29 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Always set owner on creation (admin + moderator).
+  // Always set owner on creation.
   payload.created_by = auth.user.id;
 
-  // Scheduled publishing: store scheduled_at, set status.
-  const schedParsed = parseFutureScheduledAt((payload as any).scheduled_at);
-  if ('error' in schedParsed) return json({ error: schedParsed.error }, 400);
-  (payload as any).scheduled_at = schedParsed.scheduled_at;
-  if (schedParsed.shouldSchedule) {
-    (payload as any).status = 'scheduled_publish';
+  if (isEditor(auth)) {
+    applyEditorEventCreatePayload(payload);
+    (payload as any).scheduled_at = null;
+    (payload as any).status = 'draft';
     (payload as any).published_at = null;
     (payload as any).published_by = null;
   } else {
-    (payload as any).status = 'published';
-    (payload as any).published_at = new Date().toISOString();
-    (payload as any).published_by = auth.user.id;
+    // Scheduled publishing: store scheduled_at, set status.
+    const schedParsed = parseFutureScheduledAt((payload as any).scheduled_at);
+    if ('error' in schedParsed) return json({ error: schedParsed.error }, 400);
+    (payload as any).scheduled_at = schedParsed.scheduled_at;
+    if (schedParsed.shouldSchedule) {
+      (payload as any).status = 'scheduled_publish';
+      (payload as any).published_at = null;
+      (payload as any).published_by = null;
+    } else {
+      (payload as any).status = 'published';
+      (payload as any).published_at = new Date().toISOString();
+      (payload as any).published_by = auth.user.id;
+    }
   }
 
   // Best-effort compatibility for schema cache lag / partial migrations:
@@ -511,7 +527,8 @@ export async function PATCH(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    assertNotEditor(auth);
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
@@ -736,7 +753,8 @@ export async function DELETE(request: NextRequest) {
   const auth = await validateAdminSession(supabase);
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    assertNotEditor(auth);
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager']);
     requireModeratorHasAssignedStates(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
