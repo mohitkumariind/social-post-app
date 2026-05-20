@@ -25,7 +25,7 @@ GROUP BY severity;
 
 SELECT 'profiles.role invalid' AS check_name, role AS value, count(*) AS rows_count
 FROM public.profiles
-WHERE role NOT IN ('user', 'admin', 'moderator', 'campaign_manager')
+WHERE role NOT IN ('worker', 'moderator', 'user', 'admin', 'editor', 'super_admin', 'campaign_manager')
 GROUP BY role;
 
 -- 2) Malformed RBAC assignments

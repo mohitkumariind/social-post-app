@@ -28,6 +28,7 @@ import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 import { fromPartyDB, isNumeric } from '@/lib/party-mapper';
 import { API_MAX_FRAMES_LIMIT } from '@/lib/perf-defaults';
 import { sortUserFramesByDisplayKey } from '@/lib/sortUserFramesByDisplayKey';
+import { normalizeProfileRole, ROLE_OPTIONS, type ProfileRole } from '@/lib/profile-roles';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
 
@@ -520,14 +521,13 @@ export default function UserManagement() {
 
   const [roleUser, setRoleUser] = useState<AppUser | null>(null);
   const [roleSaving, setRoleSaving] = useState(false);
-  const [roleValue, setRoleValue] = useState<'user' | 'moderator' | 'admin' | 'campaign_manager'>('user');
+  const [roleValue, setRoleValue] = useState<ProfileRole>('user');
   const [roleStateIds, setRoleStateIds] = useState<string[]>([]);
   const [roleGroupIds, setRoleGroupIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (!roleUser) return;
-    const r = String(roleUser.role ?? 'user').trim().toLowerCase();
-    const role = (r === 'admin' || r === 'moderator' || r === 'campaign_manager' || r === 'user') ? (r as any) : 'user';
+    const role = normalizeProfileRole(roleUser.role) ?? 'user';
     setRoleValue(role);
     const sids = Array.isArray(roleUser.assigned_state_ids) ? roleUser.assigned_state_ids : [];
     setRoleStateIds(sids.map((n) => String(n)));
@@ -768,10 +768,11 @@ export default function UserManagement() {
                   onChange={(e) => setRoleValue(e.target.value as any)}
                   disabled={roleSaving}
                 >
-                  <option value="user">User</option>
-                  <option value="moderator">Moderator</option>
-                  <option value="admin">Admin</option>
-                  <option value="campaign_manager">Campaign Manager</option>
+                  {ROLE_OPTIONS.map(({ value, label }) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
                 </select>
               </div>
 

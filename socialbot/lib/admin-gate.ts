@@ -8,6 +8,7 @@ import {
   isSuperAdminRole,
 } from '@/lib/supabase/session-helpers';
 import type { AdminRole } from '@/lib/permissions';
+import { canAccessAdminPanel, normalizeProfileRole } from '@/lib/permissions';
 import type { RbacUser } from '@/lib/rbac/require';
 
 /**
@@ -45,7 +46,15 @@ export async function validateAdminSession(
     error,
   } = await supabase.auth.getUser();
   if (error || !user) return { ok: false, status: 401 };
-  const { role, assigned_state_ids, assigned_group_ids } = await fetchProfileAccessForMiddleware(user.id, supabase);
+  const { role: rawRole, assigned_state_ids, assigned_group_ids } = await fetchProfileAccessForMiddleware(
+    user.id,
+    supabase
+  );
+  const normalized = normalizeProfileRole(rawRole);
+  if (!normalized || !canAccessAdminPanel(normalized)) {
+    return { ok: false, status: 403 };
+  }
+  const role = normalized as AdminRole;
   if (isAdminRole(role)) return { ok: true, user, role: 'admin', assigned_state_ids, assigned_group_ids };
   if (isSuperAdminRole(role)) {
     return { ok: true, user, role: 'super_admin', assigned_state_ids, assigned_group_ids };

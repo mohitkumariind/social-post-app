@@ -98,7 +98,7 @@ export async function GET(request: NextRequest) {
   overview.allowed = await countObs(admin, sinceIso, { result: 'allowed' });
   overview.denied = await countObs(admin, sinceIso, { result: 'denied' });
 
-  const knownRoles = ['admin', 'moderator', 'campaign_manager', 'user', 'system'];
+  const knownRoles = ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor', 'worker', 'user', 'system'];
   for (const roleName of knownRoles) {
     const [allowed, denied, critical, warning] = await Promise.all([
       countObs(admin, sinceIso, { role: roleName, result: 'allowed' }),
@@ -115,32 +115,32 @@ export async function GET(request: NextRequest) {
     .from('rbac_observability_events')
     .select('id', { count: 'exact', head: true })
     .gte('created_at', sinceIso)
-    .not('role', 'in', '(admin,moderator,campaign_manager,user,system)') as any);
+    .not('role', 'in', '(admin,super_admin,moderator,campaign_manager,editor,worker,user,system)') as any);
   if (Number(unknownRoleRows ?? 0) > 0) {
     const [allowedQ, deniedQ, criticalQ, warningQ] = await Promise.all([
       admin
         .from('rbac_observability_events')
         .select('id', { count: 'exact', head: true })
         .gte('created_at', sinceIso)
-        .not('role', 'in', '(admin,moderator,campaign_manager,user,system)')
+        .not('role', 'in', '(admin,super_admin,moderator,campaign_manager,editor,worker,user,system)')
         .eq('result', 'allowed'),
       admin
         .from('rbac_observability_events')
         .select('id', { count: 'exact', head: true })
         .gte('created_at', sinceIso)
-        .not('role', 'in', '(admin,moderator,campaign_manager,user,system)')
+        .not('role', 'in', '(admin,super_admin,moderator,campaign_manager,editor,worker,user,system)')
         .eq('result', 'denied'),
       admin
         .from('rbac_observability_events')
         .select('id', { count: 'exact', head: true })
         .gte('created_at', sinceIso)
-        .not('role', 'in', '(admin,moderator,campaign_manager,user,system)')
+        .not('role', 'in', '(admin,super_admin,moderator,campaign_manager,editor,worker,user,system)')
         .eq('severity', 'critical'),
       admin
         .from('rbac_observability_events')
         .select('id', { count: 'exact', head: true })
         .gte('created_at', sinceIso)
-        .not('role', 'in', '(admin,moderator,campaign_manager,user,system)')
+        .not('role', 'in', '(admin,super_admin,moderator,campaign_manager,editor,worker,user,system)')
         .eq('severity', 'warning'),
     ]);
     const allowed = Number(allowedQ.count ?? 0);

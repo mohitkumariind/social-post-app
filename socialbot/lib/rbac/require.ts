@@ -1,4 +1,6 @@
-export type RbacRole = 'admin' | 'super_admin' | 'moderator' | 'campaign_manager' | 'editor';
+import type { AdminPanelRole } from '@/lib/profile-roles';
+
+export type RbacRole = AdminPanelRole;
 
 export type RbacUser = {
   id: string;

@@ -1,5 +1,6 @@
 'use client';
 
+import EditorRouteGuard from '@/components/admin/EditorRouteGuard';
 import Navbar from '@/components/admin/Navbar';
 import Sidebar from '@/components/admin/Sidebar';
 import { usePathname } from 'next/navigation';
@@ -47,7 +48,9 @@ export default function AdminLayout({
       <Sidebar />
       <div className="ml-64 flex flex-1 flex-col">
         <Navbar title={title} />
-        <main className="flex-1 p-6">{children}</main>
+        <main className="flex-1 p-6">
+          <EditorRouteGuard>{children}</EditorRouteGuard>
+        </main>
       </div>
     </div>
   );

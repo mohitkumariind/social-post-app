@@ -245,3 +245,11 @@ export function isSuperAdminRole(role: string | null): boolean {
 export function isEditorRole(role: string | null): boolean {
   return role != null && role.toLowerCase() === 'editor';
 }
+
+export function isWorkerRole(role: string | null): boolean {
+  return role != null && role.toLowerCase() === 'worker';
+}
+
+export function isUserRole(role: string | null): boolean {
+  return role != null && role.toLowerCase() === 'user';
+}

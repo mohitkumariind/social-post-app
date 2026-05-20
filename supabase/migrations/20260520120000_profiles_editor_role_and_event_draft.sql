@@ -9,7 +9,17 @@ BEGIN
     ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_whitelist;
     ALTER TABLE public.profiles
       ADD CONSTRAINT profiles_role_whitelist
-      CHECK (role IN ('user', 'admin', 'super_admin', 'moderator', 'campaign_manager', 'editor'))
+      CHECK (
+        role IN (
+          'worker',
+          'moderator',
+          'user',
+          'admin',
+          'editor',
+          'super_admin',
+          'campaign_manager'
+        )
+      )
       NOT VALID;
   END IF;
 END $$;

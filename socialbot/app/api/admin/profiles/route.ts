@@ -15,6 +15,7 @@ import {
 } from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { normalizeProfileRole } from '@/lib/profile-roles';
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireRole } from '@/lib/rbac/require';
 import { API_DEFAULT_LIMIT, API_MAX_LIMIT, clampLimit } from '@/lib/perf-defaults';
 
@@ -273,7 +274,7 @@ export async function DELETE(request: NextRequest) {
 
 type PatchBody = {
   id?: string;
-  role?: 'user' | 'moderator' | 'admin' | string;
+  role?: string;
   assigned_state_ids?: unknown;
   assigned_group_ids?: unknown;
 };
@@ -309,9 +310,13 @@ export async function PATCH(request: NextRequest) {
   const id = String(body.id ?? '').trim();
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 
-  const roleRaw = String(body.role ?? '').trim().toLowerCase();
-  const role = roleRaw === 'admin' || roleRaw === 'moderator' || roleRaw === 'campaign_manager' || roleRaw === 'user' ? roleRaw : '';
-  if (!role) return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
+  const role = normalizeProfileRole(body.role);
+  if (!role) {
+    return NextResponse.json(
+      { error: 'Invalid role. Allowed: worker, moderator, user, admin, editor, super_admin, campaign_manager' },
+      { status: 400 }
+    );
+  }
 
   let assigned_state_ids = toNumArr(body.assigned_state_ids);
   if (role !== 'moderator') assigned_state_ids = [];
