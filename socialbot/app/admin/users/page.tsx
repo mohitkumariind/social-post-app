@@ -22,7 +22,9 @@ import {
   X
 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
-import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
+import { adminStorageRemove, adminStorageUploadWithProgress } from '@/lib/admin-storage-client';
+import UploadQueuePanel from '@/components/admin/UploadQueuePanel';
+import { useAdminUploadQueue } from '@/hooks/useAdminUploadQueue';
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 import { fromPartyDB, isNumeric } from '@/lib/party-mapper';
@@ -124,6 +126,7 @@ async function fetchAllUserFramesForAdmin(userId: string, searchQuery: string): 
 
 export default function UserManagement() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const frameUploadQueue = useAdminUploadQueue(4);
   const ITEMS_PER_PAGE = 10;
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -604,28 +607,32 @@ export default function UserManagement() {
     const pngFiles = Array.from(files).filter((f) => f.type === 'image/png' || f.name.toLowerCase().endsWith('.png'));
     if (pngFiles.length === 0) return;
 
+    const userSnapshot = selectedUser;
     const newFrames: UserFrame[] = [];
-    for (const file of pngFiles) {
-      const storagePath = `public/${selectedUser.id}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-      let imageUrl: string;
-      try {
-        const up = await adminStorageUpload('user-frames', storagePath, file);
-        imageUrl = up.publicUrl;
-      } catch (uploadErr) {
-        if (__DEV__) console.error('Frame upload error:', uploadErr);
-        continue;
-      }
+
+    await frameUploadQueue.enqueueAndRun(pngFiles, async (item, { setProgress, signal }) => {
+      const file = item.file;
+      const storagePath = `public/${userSnapshot.id}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+
+      const up = await adminStorageUploadWithProgress('user-frames', storagePath, file, {
+        onProgress: (p) => setProgress(Math.min(88, p)),
+        signal,
+      });
+      const imageUrl = up.publicUrl;
+
+      setProgress(90);
 
       const res = await fetch('/api/admin/user-frames', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: String(selectedUser.id),
+          user_id: String(userSnapshot.id),
           url: imageUrl,
           overlay_url: imageUrl,
           file_name: file.name,
         }),
+        signal,
       });
       if (!res.ok) {
         let errText = '';
@@ -634,15 +641,16 @@ export default function UserManagement() {
         } catch {
           errText = '';
         }
-        console.error('[users] user_frames POST failed', res.status, errText.slice(0, 600));
-        if (__DEV__) console.error('user_frames insert error:', res.status, errText);
-        continue;
+        throw new Error(errText.slice(0, 200) || `Frame save failed (${res.status})`);
       }
+
       const insertJson = (await res.json().catch(() => ({}))) as {
         frame?: { id: unknown; url?: string; created_at?: string | null };
       };
       const fr = insertJson.frame;
-      if (fr?.id == null || fr.id === '') continue;
+      if (fr?.id == null || fr.id === '') {
+        throw new Error('Frame record missing from API response');
+      }
 
       const frameId: string | number =
         typeof fr.id === 'string' || typeof fr.id === 'number' ? fr.id : String(fr.id);
@@ -656,12 +664,14 @@ export default function UserManagement() {
         file_name: file.name,
       };
       newFrames.push(frame);
-    }
+      setProgress(100);
+      return { url: imageUrl };
+    });
 
     if (newFrames.length > 0) {
-      const updatedFrames = sortUserFramesByDisplayKey([...newFrames, ...selectedUser.personalFrames]);
-      setUsers((prev) => prev.map((u) => (u.id === selectedUser.id ? { ...u, personalFrames: updatedFrames } : u)));
-      setSelectedUser({ ...selectedUser, personalFrames: updatedFrames });
+      const updatedFrames = sortUserFramesByDisplayKey([...newFrames, ...userSnapshot.personalFrames]);
+      setUsers((prev) => prev.map((u) => (u.id === userSnapshot.id ? { ...u, personalFrames: updatedFrames } : u)));
+      setSelectedUser({ ...userSnapshot, personalFrames: updatedFrames });
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -1072,6 +1082,15 @@ export default function UserManagement() {
                         ) : null}
                       </div>
                     </div>
+
+                    <UploadQueuePanel
+                      items={frameUploadQueue.items}
+                      onRetry={(id) => void frameUploadQueue.retryItem(id)}
+                      onCancel={frameUploadQueue.cancelItem}
+                      onDismissCompleted={frameUploadQueue.dismissCompleted}
+                      title="Frame upload"
+                      className="px-2"
+                    />
 
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-6 pb-4">
                         {/* UPLOAD FRAME BOX */}

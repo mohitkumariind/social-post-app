@@ -145,6 +145,19 @@ export function canPerformMutation(
 
   if (user.role === 'admin' || user.role === 'super_admin') return { ok: true };
 
+  const mutationResourceOwner = (resource as { created_by?: unknown } | null)?.created_by;
+
+  if (
+    (action === 'posts.create' || action === 'posts.update') &&
+    resourceType === 'posts' &&
+    (user.role === 'moderator' || user.role === 'campaign_manager')
+  ) {
+    const owner = mutationResourceOwner != null ? String(mutationResourceOwner).trim() : '';
+    if (owner && owner === String(user.id).trim()) {
+      return { ok: true };
+    }
+  }
+
   if (user.role === 'editor') {
     if (action === 'events.create' || action === 'events.update' || action === 'posts.create' || action === 'posts.update') {
       return { ok: true };

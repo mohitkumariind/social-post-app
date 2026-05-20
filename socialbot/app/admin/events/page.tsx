@@ -21,7 +21,9 @@ import {
   X
 } from 'lucide-react';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { adminStorageRemove, adminStorageUpload } from '@/lib/admin-storage-client';
+import { adminStorageRemove, adminStorageUploadWithProgress } from '@/lib/admin-storage-client';
+import UploadQueuePanel from '@/components/admin/UploadQueuePanel';
+import { useAdminUploadQueue } from '@/hooks/useAdminUploadQueue';
 import { supabase } from '@/lib/supabase';
 import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 import { isPartyOtherId, PARTIES_DATA } from '@/lib/constants';
@@ -251,6 +253,7 @@ export default function App() {
   const [captionToDelete, setCaptionToDelete] = useState<number | null>(null); 
   const [newCaptionText, setNewCaptionText] = useState(''); 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaUploadQueue = useAdminUploadQueue(4);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 10000); 
@@ -854,8 +857,10 @@ export default function App() {
     );
     if (imageFiles.length === 0) return;
 
+    const eventSnapshot = selectedEvent;
+
     /** Always pull latest captions from `events` so new rows match DB (not stale React state). */
-    const evCaptionsRes = await fetchEventByIdOrName(selectedEvent);
+    const evCaptionsRes = await fetchEventByIdOrName(eventSnapshot);
     if (evCaptionsRes.error) {
       devConsole.error('[handleUpload] Failed to read events.captions:', evCaptionsRes.error.message, evCaptionsRes.error);
     }
@@ -864,101 +869,113 @@ export default function App() {
         ? (evCaptionsRes.data as unknown as Record<string, unknown>)
         : null;
     const fromDb = normalizeCaptionsFromDb(capRow?.captions);
-    const fromUi = normalizeCaptionsFromDb(selectedEvent.captions);
+    const fromUi = normalizeCaptionsFromDb(eventSnapshot.captions);
     const batchCaptions = fromDb.length > 0 ? fromDb : fromUi;
 
     const dashFromEvent =
       capRow && isActiveEventDashboardCategory((capRow as Record<string, unknown>).dashboard_category)
         ? String((capRow as Record<string, unknown>).dashboard_category)
-        : selectedEvent.dashboard_category && isActiveEventDashboardCategory(selectedEvent.dashboard_category)
-          ? selectedEvent.dashboard_category
+        : eventSnapshot.dashboard_category && isActiveEventDashboardCategory(eventSnapshot.dashboard_category)
+          ? eventSnapshot.dashboard_category
           : null;
     const isGlobalDashPost = dashFromEvent != null;
 
     const newPosts: Post[] = [];
-    for (const file of imageFiles) {
+
+    await mediaUploadQueue.enqueueAndRun(imageFiles, async (item, { setProgress, signal }) => {
+      const file = item.file;
       const ext = file.name.toLowerCase().endsWith('.jpeg')
         ? '.jpeg'
         : file.name.toLowerCase().endsWith('.png')
           ? '.png'
           : '.jpg';
       const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-      const storagePath = `public/events/${String(selectedEvent.id)}/${Date.now()}-${safeName}`;
+      const storagePath = `public/events/${String(eventSnapshot.id)}/${Date.now()}-${safeName}`;
 
-      let imageUrl: string;
-      try {
-        const up = await adminStorageUpload('post-images', storagePath, file);
-        imageUrl = up.publicUrl;
-      } catch (uploadErr) {
-        devConsole.error('Upload error:', uploadErr);
-        continue;
-      }
+      const up = await adminStorageUploadWithProgress('post-images', storagePath, file, {
+        onProgress: (p) => setProgress(Math.min(88, p)),
+        signal,
+      });
+      const imageUrl = up.publicUrl;
 
-      /** category = event name (manual match; no FK). Use event targeting columns directly. */
+      setProgress(90);
+
+      const scopeRow = capRow ?? {};
       const postPayload: Record<string, unknown> = {
         title: file.name.replace(ext, ''),
         image_url: imageUrl,
-        category: selectedEvent.name,
-        event_id: String(selectedEvent.id),
+        category: eventSnapshot.name,
+        event_id: String(eventSnapshot.id),
         dashboard_category: dashFromEvent,
-        /** Must match app/dashboard graphics filter (`is_video` false or null); DB default true would hide posts + break caption sync filters. */
         is_video: false,
-        captions: batchCaptions,
-        // Only numeric columns
-        party_id: isGlobalDashPost ? [] : toNumArr(selectedEvent.party),
-        state_id: isGlobalDashPost ? [] : toNumArr(selectedEvent.state),
-        loksabha_id: isGlobalDashPost ? [] : toNumArr(selectedEvent.loksabha),
-        assembly_id: isGlobalDashPost ? [] : toNumArr(selectedEvent.assembly),
+        captions: batchCaptions.length > 0 ? captionsJsonForPostColumn(batchCaptions) : batchCaptions,
+        party_id: isGlobalDashPost ? [] : toNumArr((scopeRow as { party_id?: unknown }).party_id ?? eventSnapshot.party),
+        state_id: isGlobalDashPost ? [] : toNumArr((scopeRow as { state_id?: unknown }).state_id ?? eventSnapshot.state),
+        loksabha_id: isGlobalDashPost ? [] : toNumArr((scopeRow as { loksabha_id?: unknown }).loksabha_id ?? eventSnapshot.loksabha),
+        assembly_id: isGlobalDashPost ? [] : toNumArr((scopeRow as { assembly_id?: unknown }).assembly_id ?? eventSnapshot.assembly),
       };
-      const targetGroupsArr = isGlobalDashPost ? [] : toStrArr(selectedEvent.target_groups);
+      const targetGroupsRaw =
+        (scopeRow as { target_groups?: string | string[] | null }).target_groups ?? eventSnapshot.target_groups;
+      const targetGroupsArr = isGlobalDashPost ? [] : toStrArr(targetGroupsRaw);
       postPayload.target_groups = targetGroupsArr;
-      // Priority rule: if target_groups is set, ignore geo filters on the post row.
       if (targetGroupsArr.length > 0) {
         postPayload.party_id = [];
         postPayload.state_id = [];
         postPayload.loksabha_id = [];
         postPayload.assembly_id = [];
-      } else {
-        // Keep numeric arrays as-is.
-      }
-      let { data: insertData, error: insertErr } = await supabase.from('posts').insert(postPayload).select('id').single();
-
-      if (insertErr && batchCaptions.length > 0) {
-        postPayload.captions = captionsJsonForPostColumn(batchCaptions);
-        ({ data: insertData, error: insertErr } = await supabase.from('posts').insert(postPayload).select('id').single());
       }
 
-      if (insertErr || !insertData) {
-        if (insertErr) devConsole.error('DB insert error:', insertErr);
-        continue;
+      const postRes = await fetch('/api/admin/posts', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(postPayload),
+        signal,
+      });
+      const postJson = (await postRes.json().catch(() => ({}))) as { post?: { id?: string }; error?: string };
+      if (!postRes.ok) {
+        throw new Error(postJson.error || `Failed to save post (${postRes.status})`);
       }
+      const postId = postJson.post?.id;
+      if (postId == null || String(postId).trim() === '') {
+        throw new Error('Post created but no id returned');
+      }
+
+      setProgress(100);
 
       newPosts.push({
-        id: (insertData as { id: string }).id,
+        id: String(postId),
         url: imageUrl,
         type: 'image',
         name: file.name,
         dashboard_category: dashFromEvent,
       });
-    }
+
+      return { url: imageUrl };
+    });
 
     if (newPosts.length > 0) {
       const updated = events.map((ev) =>
-        ev.id === selectedEvent.id ? { ...ev, posts: [...newPosts, ...ev.posts], assetsCount: (ev.assetsCount ?? ev.posts.length) + newPosts.length } : ev
+        ev.id === eventSnapshot.id
+          ? { ...ev, posts: [...newPosts, ...ev.posts], assetsCount: (ev.assetsCount ?? ev.posts.length) + newPosts.length }
+          : ev
       );
       setEvents(updated);
-      setSelectedEvent({ ...selectedEvent, posts: [...newPosts, ...selectedEvent.posts], assetsCount: (selectedEvent.assetsCount ?? selectedEvent.posts.length) + newPosts.length });
+      setSelectedEvent({
+        ...eventSnapshot,
+        posts: [...newPosts, ...eventSnapshot.posts],
+        assetsCount: (eventSnapshot.assetsCount ?? eventSnapshot.posts.length) + newPosts.length,
+      });
 
-      /** Re-read `events.captions` and push to every graphics post (same merge as inserts). */
-      const evSnapRes = await fetchEventByIdOrName(selectedEvent);
+      const evSnapRes = await fetchEventByIdOrName(eventSnapshot);
       if (evSnapRes.error) devConsole.error('[handleUpload] post-upload events read:', evSnapRes.error.message);
       const snapRow =
         !evSnapRes.error && evSnapRes.data != null
           ? (evSnapRes.data as unknown as Record<string, unknown>)
           : null;
       const snapDb = normalizeCaptionsFromDb(snapRow?.captions);
-      const latestCaptions = snapDb.length > 0 ? snapDb : normalizeCaptionsFromDb(selectedEvent.captions);
-      await syncGraphicsPostCaptions(selectedEvent, latestCaptions);
+      const latestCaptions = snapDb.length > 0 ? snapDb : normalizeCaptionsFromDb(eventSnapshot.captions);
+      await syncGraphicsPostCaptions(eventSnapshot, latestCaptions);
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -1833,6 +1850,13 @@ export default function App() {
         <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] px-2 flex items-center gap-2">
             <ImageIcon size={14} className="text-blue-500" /> Media ({selectedEvent?.posts.length})
         </h3>
+        <UploadQueuePanel
+          items={mediaUploadQueue.items}
+          onRetry={(id) => void mediaUploadQueue.retryItem(id)}
+          onCancel={mediaUploadQueue.cancelItem}
+          onDismissCompleted={mediaUploadQueue.dismissCompleted}
+          title="Graphics upload"
+        />
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
             <div onClick={() => fileInputRef.current?.click()} className="aspect-[9/16] bg-white border-4 border-dashed border-slate-200 rounded-[45px] flex flex-col items-center justify-center text-slate-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50/30 transition-all group active:scale-95">
                 <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all mb-4 shadow-inner"><Plus size={32} strokeWidth={3} /></div>

@@ -102,6 +102,11 @@ export function stripNonAdminPublishFields(
   }
 }
 
+function isMissingCreatedByColumn(err: { message?: string } | null | undefined): boolean {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return msg.includes('created_by') && (msg.includes('does not exist') || msg.includes('column') || msg.includes('schema cache'));
+}
+
 export async function assertPostEventOwnedByActor(
   admin: SupabaseClient,
   eventId: string,
@@ -111,11 +116,39 @@ export async function assertPostEventOwnedByActor(
   if (!id) return { ok: false, error: 'event_id is required' };
 
   const { data, error } = await admin.from('events').select('id, created_by, name').eq('id', id).maybeSingle();
+  if (error && isMissingCreatedByColumn(error)) {
+    const { data: legacy, error: legacyErr } = await admin.from('events').select('id, name').eq('id', id).maybeSingle();
+    if (legacyErr) return { ok: false, error: legacyErr.message };
+    if (!legacy) return { ok: false, error: 'Event not found' };
+    return {
+      ok: true,
+      event: {
+        id: String((legacy as { id: string }).id),
+        created_by: actorUserId,
+        name: String((legacy as { name?: string }).name ?? ''),
+      },
+    };
+  }
   if (error) return { ok: false, error: error.message };
   if (!data) return { ok: false, error: 'Event not found' };
 
-  const owner = (data as { created_by?: string | null }).created_by;
-  const ownerStr = owner != null ? String(owner).trim() : '';
+  let ownerStr =
+    (data as { created_by?: string | null }).created_by != null
+      ? String((data as { created_by?: string | null }).created_by).trim()
+      : '';
+
+  if (!ownerStr) {
+    const { error: backfillErr } = await admin
+      .from('events')
+      .update({ created_by: actorUserId })
+      .eq('id', id)
+      .is('created_by', null);
+    if (!backfillErr) ownerStr = actorUserId;
+    else if (!isMissingCreatedByColumn(backfillErr)) {
+      return { ok: false, error: backfillErr.message };
+    }
+  }
+
   if (!ownerStr || ownerStr !== actorUserId) {
     return { ok: false, error: 'Forbidden: post must belong to an event you created' };
   }
@@ -128,4 +161,31 @@ export async function assertPostEventOwnedByActor(
       name: String((data as { name?: string }).name ?? ''),
     },
   };
+}
+
+/** Copy event targeting onto post rows when the client omitted scope fields (common on graphics upload). */
+export function inheritEventScopeForPostPayload(
+  eventRow: Record<string, unknown>,
+  postPayload: Record<string, unknown>,
+  role: string
+): void {
+  const r = String(role ?? '').toLowerCase();
+  const has = (key: string) => {
+    const v = postPayload[key];
+    if (v == null) return false;
+    if (Array.isArray(v)) return v.length > 0;
+    return String(v).trim() !== '';
+  };
+
+  if (r === 'moderator' || r === 'editor' || r === 'admin' || r === 'super_admin') {
+    if (!has('state_id') && eventRow.state_id != null) postPayload.state_id = eventRow.state_id;
+  }
+  if (r === 'campaign_manager' || r === 'admin' || r === 'super_admin') {
+    if (!has('target_groups') && eventRow.target_groups != null) postPayload.target_groups = eventRow.target_groups;
+  }
+  if (r === 'admin' || r === 'super_admin' || r === 'moderator') {
+    if (!has('party_id') && eventRow.party_id != null) postPayload.party_id = eventRow.party_id;
+    if (!has('loksabha_id') && eventRow.loksabha_id != null) postPayload.loksabha_id = eventRow.loksabha_id;
+    if (!has('assembly_id') && eventRow.assembly_id != null) postPayload.assembly_id = eventRow.assembly_id;
+  }
 }

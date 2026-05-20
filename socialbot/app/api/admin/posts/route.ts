@@ -23,7 +23,7 @@ import {
   requireScopeState,
 } from '@/lib/rbac/require';
 import { resolvePostEventId } from '@/lib/admin/resolvePostEventId';
-import { assertPostEventOwnedByActor, isEventsFullAdmin } from '@/lib/event-access';
+import { assertPostEventOwnedByActor, inheritEventScopeForPostPayload, isEventsFullAdmin } from '@/lib/event-access';
 import { isEditor } from '@/lib/admin-gate';
 import { withAudit } from '@/lib/audit/withAudit';
 
@@ -193,6 +193,15 @@ export const POST = withAudit(
     payload.event_id = resolvedEventId;
     if (!String(payload.category ?? '').trim()) payload.category = eventOwn.event.name;
 
+    const { data: eventScopeRow } = await admin
+      .from('events')
+      .select('state_id, party_id, loksabha_id, assembly_id, target_groups, created_by')
+      .eq('id', resolvedEventId)
+      .maybeSingle();
+    if (eventScopeRow && typeof eventScopeRow === 'object') {
+      inheritEventScopeForPostPayload(eventScopeRow as Record<string, unknown>, payload, auth.role);
+    }
+
     if (isEventsFullAdmin(auth) && !isEditor(auth)) {
       const scheduled_at_raw = body?.scheduled_at != null ? String(body.scheduled_at).trim() : '';
       const scheduled_at = scheduled_at_raw ? new Date(scheduled_at_raw).toISOString() : null;
@@ -235,7 +244,7 @@ export const POST = withAudit(
       const decision = canPerformMutation(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
         'posts.create',
-        null,
+        { created_by: eventOwn.event.created_by },
         payload as any,
         { resourceType: 'posts', resourceName: String((payload as any)?.title ?? '') }
       );
@@ -304,6 +313,7 @@ export const PATCH = withAudit(
     const before: any = previous_data ?? null;
     if (!before) return json({ error: 'Not found' }, 404);
 
+    let eventOwnerForMutation: string | null = null;
     if (!isEventsFullAdmin(auth)) {
       const postOwner = String(before?.created_by ?? '').trim();
       if (postOwner && postOwner !== auth.user.id) {
@@ -313,6 +323,7 @@ export const PATCH = withAudit(
       if (eid) {
         const own = await assertPostEventOwnedByActor(admin, eid, auth.user.id);
         if (!own.ok) return json({ error: own.error }, 403);
+        eventOwnerForMutation = own.event.created_by;
       }
     }
 
@@ -351,7 +362,12 @@ export const PATCH = withAudit(
       const decision = canPerformMutation(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids } as any,
         'posts.update',
-        { created_by: (before as any)?.created_by, state_ids: beforeScope.state_ids, group_id: beforeScope.group_id, group_ids: beforeScope.group_ids } as any,
+        {
+          created_by: eventOwnerForMutation ?? (before as any)?.created_by,
+          state_ids: beforeScope.state_ids,
+          group_id: beforeScope.group_id,
+          group_ids: beforeScope.group_ids,
+        } as any,
         patch as any,
         { resourceType: 'posts', resourceId: id, resourceName: String((before as any)?.title ?? '') }
       );
