@@ -63,6 +63,7 @@ export default function Sidebar() {
       return navItems.filter(
         (i) =>
           i.href !== '/admin/parties' &&
+          i.href !== '/admin/banner-manager' &&
           i.href !== '/admin/activity-center' &&
           i.href !== '/admin/rbac-observability'
       );
@@ -80,10 +81,11 @@ export default function Sidebar() {
           i.href === '/admin/notifications'
       );
     }
-    // Admin (and only admin) can see Activity Center. Safe-by-default: hide until role is known.
-    if (r === 'admin') return navItems;
+    // Admin / super_admin: full nav. Safe-by-default: hide restricted items until role is known.
+    if (r === 'admin' || r === 'super_admin') return navItems;
     return navItems.filter(
       (i) =>
+        i.href !== '/admin/banner-manager' &&
         i.href !== '/admin/activity-center' &&
         i.href !== '/admin/rbac-observability' &&
         i.href !== '/admin/twitter-campaign'

@@ -1,5 +1,11 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
-import { fetchProfileAccessForMiddleware, isAdminRole, isCampaignManagerRole, isModeratorRole } from '@/lib/supabase/session-helpers';
+import {
+  fetchProfileAccessForMiddleware,
+  isAdminRole,
+  isCampaignManagerRole,
+  isModeratorRole,
+  isSuperAdminRole,
+} from '@/lib/supabase/session-helpers';
 import type { AdminRole } from '@/lib/permissions';
 
 /**
@@ -39,6 +45,9 @@ export async function validateAdminSession(
   if (error || !user) return { ok: false, status: 401 };
   const { role, assigned_state_ids, assigned_group_ids } = await fetchProfileAccessForMiddleware(user.id, supabase);
   if (isAdminRole(role)) return { ok: true, user, role: 'admin', assigned_state_ids, assigned_group_ids };
+  if (isSuperAdminRole(role)) {
+    return { ok: true, user, role: 'super_admin', assigned_state_ids, assigned_group_ids };
+  }
   if (isModeratorRole(role)) return { ok: true, user, role: 'moderator', assigned_state_ids, assigned_group_ids: [] };
   if (isCampaignManagerRole(role)) {
     return { ok: true, user, role: 'campaign_manager', assigned_state_ids, assigned_group_ids };
@@ -64,6 +73,10 @@ export type VerifiedAdminAuth = {
 
 export function isAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
   return auth.role === 'admin';
+}
+
+export function isSuperAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
+  return auth.role === 'super_admin';
 }
 
 export function isModerator(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {

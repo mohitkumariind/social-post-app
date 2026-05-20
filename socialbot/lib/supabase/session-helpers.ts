@@ -237,3 +237,7 @@ export function isModeratorRole(role: string | null): boolean {
 export function isCampaignManagerRole(role: string | null): boolean {
   return role != null && role.toLowerCase() === 'campaign_manager';
 }
+
+export function isSuperAdminRole(role: string | null): boolean {
+  return role != null && role.toLowerCase() === 'super_admin';
+}

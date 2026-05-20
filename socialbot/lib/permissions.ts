@@ -1,4 +1,7 @@
-export type AdminRole = 'admin' | 'moderator' | 'campaign_manager';
+export type AdminRole = 'admin' | 'super_admin' | 'moderator' | 'campaign_manager';
+
+/** Roles allowed to use Banner Manager (admin UI + `/api/admin/banners`). */
+export const BANNER_MANAGER_ROLES: readonly AdminRole[] = ['admin', 'super_admin'];
 
 export type ViewerAccess = {
   role: AdminRole | null;
@@ -7,6 +10,14 @@ export type ViewerAccess = {
 
 export function isAdmin(role: string | null | undefined): boolean {
   return typeof role === 'string' && role.trim().toLowerCase() === 'admin';
+}
+
+export function isSuperAdmin(role: string | null | undefined): boolean {
+  return typeof role === 'string' && role.trim().toLowerCase() === 'super_admin';
+}
+
+export function canAccessBannerManager(role: string | null | undefined): boolean {
+  return isAdmin(role) || isSuperAdmin(role);
 }
 
 export function isModerator(role: string | null | undefined): boolean {

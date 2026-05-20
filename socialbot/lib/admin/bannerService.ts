@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+/** Callers must enforce {@link canAccessBannerManager} (admin / super_admin only) before using these helpers. */
+
 export type BannerLinkType = 'none' | 'event' | 'post' | 'external_url';
 
 export type DashboardBannerRow = {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { BANNER_MANAGER_ROLES } from '@/lib/permissions';
 import { RbacError, requireRole } from '@/lib/rbac/require';
 import { listAllBanners, normalizeBannerInput, type DashboardBannerInput } from '@/lib/admin/bannerService';
 
@@ -8,10 +9,9 @@ function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
-function requireAdminOnly(auth: Extract<Awaited<ReturnType<typeof validateAdminSession>>, { ok: true }>) {
-  // Admin-only surface (validateAdminSession requires profiles.role = 'admin').
+function requireBannerManagerAccess(auth: Extract<Awaited<ReturnType<typeof validateAdminSession>>, { ok: true }>) {
   try {
-    requireRole(auth, ['admin']);
+    requireRole(auth, [...BANNER_MANAGER_ROLES]);
   } catch (e) {
     if (e instanceof RbacError) throw e;
     throw new RbacError('Forbidden', 403);
@@ -24,7 +24,7 @@ export async function GET() {
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
 
   try {
-    requireAdminOnly(auth);
+    requireBannerManagerAccess(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
 
   try {
-    requireAdminOnly(auth);
+    requireBannerManagerAccess(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -79,7 +79,7 @@ export async function PUT(request: NextRequest) {
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
 
   try {
-    requireAdminOnly(auth);
+    requireBannerManagerAccess(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -111,7 +111,7 @@ export async function PATCH(request: NextRequest) {
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
 
   try {
-    requireAdminOnly(auth);
+    requireBannerManagerAccess(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -148,7 +148,7 @@ export async function DELETE(request: NextRequest) {
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
 
   try {
-    requireAdminOnly(auth);
+    requireBannerManagerAccess(auth);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
