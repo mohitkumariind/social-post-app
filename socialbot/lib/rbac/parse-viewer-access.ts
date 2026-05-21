@@ -76,6 +76,12 @@ export function parseViewerDashboardAccess(
     assigned_party_ids: Array.isArray(raw.assigned_party_ids)
       ? (raw.assigned_party_ids as string[])
       : [],
+    assigned_loksabha_ids: Array.isArray(raw.assigned_loksabha_ids)
+      ? (raw.assigned_loksabha_ids as number[])
+      : [],
+    assigned_assembly_ids: Array.isArray(raw.assigned_assembly_ids)
+      ? (raw.assigned_assembly_ids as number[])
+      : [],
     user: { id: userId },
   });
 

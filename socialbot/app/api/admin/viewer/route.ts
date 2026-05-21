@@ -36,6 +36,8 @@ export async function GET() {
       assigned_state_ids: auth.assigned_state_ids,
       assigned_group_ids: auth.assigned_group_ids,
       assigned_party_ids: auth.assigned_party_ids,
+      assigned_loksabha_ids: auth.assigned_loksabha_ids,
+      assigned_assembly_ids: auth.assigned_assembly_ids,
       dashboard_access: {
         allowed_modules,
         hidden_modules,

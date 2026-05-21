@@ -633,6 +633,52 @@ export default function App() {
     })();
   }, [selectedStateKey]);
 
+  /** Campaign managers: load constituency options from profile assignment (not state filter). */
+  useEffect(() => {
+    if (!eventCaps.campaignManagerForm) return;
+    let cancelled = false;
+    (async () => {
+      setLoksabhasLoading(true);
+      setAssembliesLoading(true);
+      try {
+        const assignedLok = new Set((viewer?.assigned_loksabha_ids ?? []).map((n) => String(n)));
+        const assignedAsm = new Set((viewer?.assigned_assembly_ids ?? []).map((n) => String(n)));
+        const { data: lokRows } = await supabase.from('loksabha').select('id,name,state_id').order('name');
+        const { data: asmRows } = await supabase.from('assembly').select('id,name,loksabha_id').order('name');
+        if (cancelled) return;
+        const lokMapped = (lokRows ?? [])
+          .map((r: Record<string, unknown>) => ({
+            id: String(r.id ?? ''),
+            name: String(r.name ?? r.loksabha_name ?? ''),
+            state_id: String(r.state_id ?? ''),
+          }))
+          .filter((l) => l.id && l.name && (assignedLok.size === 0 || assignedLok.has(l.id)));
+        const asmMapped = (asmRows ?? [])
+          .map((r: Record<string, unknown>) => ({
+            id: String(r.id ?? ''),
+            name: String(r.name ?? r.assembly_name ?? ''),
+            loksabha_id: String(r.loksabha_id ?? ''),
+          }))
+          .filter((a) => a.id && a.name && (assignedAsm.size === 0 || assignedAsm.has(a.id)));
+        setAvailableLoksabhas(lokMapped);
+        setAvailableAssemblies(asmMapped);
+      } catch {
+        if (!cancelled) {
+          setAvailableLoksabhas([]);
+          setAvailableAssemblies([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoksabhasLoading(false);
+          setAssembliesLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [eventCaps.campaignManagerForm, viewer?.assigned_loksabha_ids, viewer?.assigned_assembly_ids]);
+
   // Prune selected LS to only those still available (preserve when possible).
   useEffect(() => {
     if (isEditMode) return;
@@ -827,11 +873,6 @@ export default function App() {
     const loksabhaArr = isCreateCategoryMode ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
     const assemblyArr = isCreateCategoryMode ? [] : newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
     const targetGroupsArr = isCreateCategoryMode ? [] : newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
-    if (eventCaps.campaignManagerForm && targetGroupsArr.length === 0 && dashDb == null) {
-      alert('Please select at least one Target Group.');
-      return;
-    }
-
     const partyIdArr =
       eventCaps.editorForm && editorPartyTargeting
         ? editorPartyTargeting.party_id
@@ -839,6 +880,17 @@ export default function App() {
     let stateIdArr = toNumArrFromStrIds(stateArr);
     const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
     const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
+
+    if (
+      eventCaps.campaignManagerForm &&
+      targetGroupsArr.length === 0 &&
+      loksabhaIdArr.length === 0 &&
+      assemblyIdArr.length === 0 &&
+      dashDb == null
+    ) {
+      alert('Please select at least one Target Group, Lok Sabha, or Assembly.');
+      return;
+    }
 
     if (eventCaps.editorForm) {
       stateIdArr = newState.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
@@ -874,12 +926,19 @@ export default function App() {
     } else if (eventCaps.campaignManagerForm) {
       payload.party = [];
       payload.state = [];
-      payload.loksabha = [];
-      payload.assembly = [];
       payload.party_id = [];
       payload.state_id = [];
-      payload.loksabha_id = [];
-      payload.assembly_id = [];
+      payload.loksabha = [];
+      payload.assembly = [];
+      if (targetGroupsArr.length > 0) {
+        payload.target_groups = targetGroupsArr;
+        payload.loksabha_id = [];
+        payload.assembly_id = [];
+      } else {
+        payload.target_groups = [];
+        payload.loksabha_id = loksabhaIdArr;
+        payload.assembly_id = assemblyIdArr;
+      }
     } else if (targetGroupsArr.length > 0) {
       // Priority rule: if target_groups is set, it overrides geo filters (store geo arrays empty).
       payload.party = [];
@@ -1995,6 +2054,36 @@ export default function App() {
                     getLabel={(a) => a.name}
                     allLabel="All Assembly Seats"
                     showAllOption={eventCaps.showAllStateOption}
+                    loading={assembliesLoading}
+                    searchable
+                  />
+                </div>
+              </div>
+            ) : null}
+            {eventCaps.campaignManagerForm && !isCreateCategoryMode ? (
+              <div className="col-span-2 lg:col-span-3 grid grid-cols-2 gap-4">
+                <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                  <MultiSelectDropdown
+                    label="Lok Sabha (constituency)"
+                    options={availableLoksabhas}
+                    selected={newLoksabha}
+                    onSelect={setNewLoksabha}
+                    getValue={(l) => l.id}
+                    getLabel={(l) => l.name}
+                    showAllOption={false}
+                    loading={loksabhasLoading}
+                    searchable
+                  />
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                  <MultiSelectDropdown
+                    label="Assembly (constituency)"
+                    options={availableAssemblies}
+                    selected={newAssembly}
+                    onSelect={setNewAssembly}
+                    getValue={(a) => a.id}
+                    getLabel={(a) => a.name}
+                    showAllOption={false}
                     loading={assembliesLoading}
                     searchable
                   />

@@ -18,6 +18,7 @@ import { normalizeActorId } from '@/lib/rbac/require';
 import { auditRbacMutation } from '@/lib/rbac/permission-audit';
 import { evaluateAnomaliesForUser, trackRbacEvent } from '@/lib/rbac/rbac-observability-engine';
 import { emitRbacAlerts } from '@/lib/rbac/rbac-alert-engine';
+import { rbacScopeMetadataFromUser } from '@/lib/rbac/scope-observability';
 import { resolveScope, type UnifiedResource, type UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import {
   auditUnsupportedResourceUsage,
@@ -110,6 +111,7 @@ function mutationDenialObservability(
   details?: Record<string, unknown>
 ): void {
   const scope = resolveScope(user);
+  const scopeMeta = rbacScopeMetadataFromUser(user);
   void trackRbacEvent({
     user_id: user.id,
     role: user.role,
@@ -121,7 +123,7 @@ function mutationDenialObservability(
     scope_state_ids: scope.type === 'STATE' ? scope.states : [],
     scope_group_ids: scope.type === 'GROUP' ? scope.groups : [],
     severity: 'warning',
-    metadata: { denied: true, reason, ...(details ?? {}) },
+    metadata: { denied: true, reason, ...scopeMeta, ...(details ?? {}) },
   });
   void (async () => {
     const signals = await evaluateAnomaliesForUser({ user_id: user.id, role: user.role });
@@ -153,7 +155,7 @@ function mutationDenialObservability(
     resource_name: ctx.resourceName ?? null,
     severity: 'warning',
     undoable: false,
-    metadata: { denied: true, reason, ...(details ?? {}) },
+    metadata: { denied: true, reason, ...scopeMeta, ...(details ?? {}) },
     scope_state_ids: scope.type === 'STATE' ? scope.states : [],
     scope_group_ids: scope.type === 'GROUP' ? scope.groups : [],
   });
@@ -223,8 +225,10 @@ export function canPerformMutation(
     return { ok: true };
   };
   const deny = (reason: string, details?: Record<string, unknown>): MutationDecision => {
-    if (auditCtx) auditMutationOutcome(user, action, auditCtx, { allowed: false, reason, details });
-    return { ok: false, reason, details };
+    const scopeMeta = rbacScopeMetadataFromUser(user);
+    const merged = { ...scopeMeta, ...(details ?? {}) };
+    if (auditCtx) auditMutationOutcome(user, action, auditCtx, { allowed: false, reason, details: merged });
+    return { ok: false, reason, details: merged };
   };
 
   const resourceType = String(audit?.resourceType ?? '').trim();

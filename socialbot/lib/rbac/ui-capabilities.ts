@@ -19,7 +19,9 @@ import {
   canViewEvent,
   type RbacActor,
 } from '@/lib/rbac/permission-engine';
+import { toRbacActorForEventRead } from '@/lib/rbac/editor-scope';
 import { getCachedNormalizedScope } from '@/lib/rbac/scope-cache';
+import type { VerifiedAdminAuth } from '@/lib/admin-gate';
 
 export type { EventFormUiCapabilities, EventFormUiMode } from '@/lib/rbac/dashboard-permissions';
 
@@ -53,13 +55,23 @@ export function buildUiPermissions(actor: DashboardActor): UiPermissionBundle {
     effective_group_ids: actor.effective_group_ids,
   };
 
+  const readActor = toRbacActorForEventRead({
+    role: actor.role as VerifiedAdminAuth['role'],
+    user: { id: actor.id },
+    assigned_state_ids: actor.assigned_state_ids,
+    assigned_group_ids: actor.assigned_group_ids,
+    assigned_party_ids: actor.assigned_party_ids,
+    assigned_loksabha_ids: actor.assigned_loksabha_ids ?? [],
+    assigned_assembly_ids: actor.assigned_assembly_ids ?? [],
+  });
+
   return {
     actor: rbacActor,
     normalized_scope: getCachedNormalizedScope(rbacActor),
     filterVisibility: getDashboardFilterVisibility(actor),
     canUseGlobalFilters: canUseGlobalFilters(actor),
     canAccessModule: (module) => canAccessDashboardModule(actor, module),
-    canViewEvent: (row) => canViewEvent(rbacActor, row).allowed,
+    canViewEvent: (row) => canViewEvent(readActor, row).allowed,
     canEditEvent: (row) => canEditEvent(rbacActor, row).allowed,
     canDeleteEvent: (row) => canDeleteEvent(rbacActor, row).allowed,
     canUploadPost: (row) => canUploadPost(rbacActor, row).allowed,

@@ -55,6 +55,8 @@ interface AppUser {
   assigned_state_ids?: number[];
   assigned_group_ids?: string[];
   assigned_party_ids?: string[];
+  assigned_loksabha_ids?: number[];
+  assigned_assembly_ids?: number[];
   party: string;
   party_label: string;
   designation1?: string;
@@ -83,6 +85,7 @@ interface AppUser {
 
 type StateRow = { id: string; name: string };
 type GroupRow = { id: string; name: string };
+type ConstituencyRow = { id: string; name: string };
 
 type UserFrameRow = { id: string | number; url: string; created_at: string | null; file_name?: unknown };
 
@@ -283,6 +286,12 @@ export default function UserManagement() {
     assigned_party_ids: Array.isArray((row as any).assigned_party_ids)
       ? (row as any).assigned_party_ids.map((x: any) => String(x ?? '').trim().toLowerCase()).filter(Boolean)
       : [],
+    assigned_loksabha_ids: Array.isArray((row as any).assigned_loksabha_ids)
+      ? (row as any).assigned_loksabha_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
+      : [],
+    assigned_assembly_ids: Array.isArray((row as any).assigned_assembly_ids)
+      ? (row as any).assigned_assembly_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
+      : [],
     designation1: String(row.designation1 ?? row.designation ?? ''),
     designation2: String(row.designation2 ?? row.designation_2 ?? ''),
     designation3: String(row.designation3 ?? row.designation_3 ?? ''),
@@ -346,6 +355,9 @@ export default function UserManagement() {
   const [statesLoading, setStatesLoading] = useState(false);
   const [groupsList, setGroupsList] = useState<GroupRow[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
+  const [loksabhaList, setLoksabhaList] = useState<ConstituencyRow[]>([]);
+  const [assemblyList, setAssemblyList] = useState<ConstituencyRow[]>([]);
+  const [constituencyLoading, setConstituencyLoading] = useState(false);
 
   useEffect(() => {
     if (!canManageRoles) return;
@@ -389,6 +401,39 @@ export default function UserManagement() {
         if (!cancelled) setGroupsList([]);
       } finally {
         if (!cancelled) setGroupsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canManageRoles]);
+
+  useEffect(() => {
+    if (!canManageRoles) return;
+    let cancelled = false;
+    (async () => {
+      setConstituencyLoading(true);
+      try {
+        const { data: lok } = await supabase.from('loksabha').select('id,name').order('name');
+        const { data: asm } = await supabase.from('assembly').select('id,name').order('name');
+        if (cancelled) return;
+        setLoksabhaList(
+          (lok ?? [])
+            .map((r: any) => ({ id: String(r.id ?? ''), name: String(r.name ?? '').trim() }))
+            .filter((r) => r.id && r.name)
+        );
+        setAssemblyList(
+          (asm ?? [])
+            .map((r: any) => ({ id: String(r.id ?? ''), name: String(r.name ?? '').trim() }))
+            .filter((r) => r.id && r.name)
+        );
+      } catch {
+        if (!cancelled) {
+          setLoksabhaList([]);
+          setAssemblyList([]);
+        }
+      } finally {
+        if (!cancelled) setConstituencyLoading(false);
       }
     })();
     return () => {
@@ -501,6 +546,8 @@ export default function UserManagement() {
   const [roleStateIds, setRoleStateIds] = useState<string[]>([]);
   const [roleGroupIds, setRoleGroupIds] = useState<string[]>([]);
   const [rolePartyIds, setRolePartyIds] = useState<string[]>([]);
+  const [roleLokIds, setRoleLokIds] = useState<string[]>([]);
+  const [roleAsmIds, setRoleAsmIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (!roleUser) return;
@@ -512,6 +559,10 @@ export default function UserManagement() {
     setRoleGroupIds(gids.map((x) => String(x).trim()).filter(Boolean));
     const pids = Array.isArray(roleUser.assigned_party_ids) ? roleUser.assigned_party_ids : [];
     setRolePartyIds(pids.map((x) => String(x).trim().toLowerCase()).filter(Boolean));
+    const lokIds = Array.isArray(roleUser.assigned_loksabha_ids) ? roleUser.assigned_loksabha_ids : [];
+    setRoleLokIds(lokIds.map((n) => String(n)));
+    const asmIds = Array.isArray(roleUser.assigned_assembly_ids) ? roleUser.assigned_assembly_ids : [];
+    setRoleAsmIds(asmIds.map((n) => String(n)));
   }, [roleUser?.id]);
 
   // --- FILTER OPTIONS (derived from current dataset) ---
@@ -766,8 +817,13 @@ export default function UserManagement() {
               {roleValue === 'moderator' || roleValue === 'editor' ? (
                 <div>
                   <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
-                    Assigned States {roleValue === 'editor' ? '(editor)' : ''}
+                    Assigned States {roleValue === 'editor' ? '(optional — create cap only)' : '(required)'}
                   </label>
+                  {roleValue === 'editor' ? (
+                    <p className="mb-2 text-[10px] font-bold text-slate-500">
+                      Editors always see own events + global feed in lists. Empty states = any state on create.
+                    </p>
+                  ) : null}
                   <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
                     <div className="flex flex-wrap gap-2 mb-3">
                       {roleStateIds.length === 0 ? (
@@ -813,58 +869,6 @@ export default function UserManagement() {
                           );
                         })
                       )}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
-              {roleValue === 'editor' ? (
-                <div>
-                  <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
-                    Assigned Parties (optional — empty = all parties)
-                  </label>
-                  <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-                    <div className="flex flex-wrap gap-2 mb-3">
-                      {rolePartyIds.length === 0 ? (
-                        <span className="text-xs font-bold text-slate-400">All parties allowed</span>
-                      ) : (
-                        rolePartyIds.map((id) => {
-                          const label = PARTIES_DATA.find((p) => p.id === id)?.shortName ?? id;
-                          return (
-                            <button
-                              key={id}
-                              type="button"
-                              onClick={() => setRolePartyIds((prev) => prev.filter((x) => x !== id))}
-                              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-black text-slate-700"
-                              disabled={roleSaving}
-                            >
-                              {label}
-                              <X size={14} />
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                    <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-100">
-                      {PARTIES_DATA.map((p) => {
-                        const checked = rolePartyIds.includes(p.id);
-                        return (
-                          <label key={p.id} className="flex items-center gap-3 px-3 py-2 border-b border-slate-50 last:border-b-0 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(e) => {
-                                const on = e.target.checked;
-                                setRolePartyIds((prev) =>
-                                  on ? Array.from(new Set([...prev, p.id])) : prev.filter((x) => x !== p.id)
-                                );
-                              }}
-                              disabled={roleSaving}
-                            />
-                            <span className="text-sm font-bold text-slate-800">{p.shortName}</span>
-                          </label>
-                        );
-                      })}
                     </div>
                   </div>
                 </div>
@@ -922,6 +926,113 @@ export default function UserManagement() {
                       )}
                     </div>
                   </div>
+                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                        Assigned Lok Sabha (optional)
+                      </label>
+                      <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-100">
+                        {constituencyLoading ? (
+                          <div className="p-3 text-xs font-bold text-slate-400">Loading…</div>
+                        ) : (
+                          loksabhaList.map((l) => (
+                            <label key={l.id} className="flex items-center gap-3 px-3 py-2 border-b border-slate-50 last:border-b-0 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={roleLokIds.includes(l.id)}
+                                onChange={(e) => {
+                                  const on = e.target.checked;
+                                  setRoleLokIds((prev) => (on ? Array.from(new Set([...prev, l.id])) : prev.filter((x) => x !== l.id)));
+                                }}
+                                disabled={roleSaving}
+                              />
+                              <span className="text-sm font-bold text-slate-800">{l.name}</span>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                        Assigned Assembly (optional)
+                      </label>
+                      <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-100">
+                        {constituencyLoading ? (
+                          <div className="p-3 text-xs font-bold text-slate-400">Loading…</div>
+                        ) : (
+                          assemblyList.map((a) => (
+                            <label key={a.id} className="flex items-center gap-3 px-3 py-2 border-b border-slate-50 last:border-b-0 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={roleAsmIds.includes(a.id)}
+                                onChange={(e) => {
+                                  const on = e.target.checked;
+                                  setRoleAsmIds((prev) => (on ? Array.from(new Set([...prev, a.id])) : prev.filter((x) => x !== a.id)));
+                                }}
+                                disabled={roleSaving}
+                              />
+                              <span className="text-sm font-bold text-slate-800">{a.name}</span>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-4">
+                    <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                      Assigned Parties (optional)
+                    </label>
+                    <div className="max-h-32 overflow-y-auto rounded-xl border border-slate-100">
+                      {PARTIES_DATA.map((p) => {
+                        const checked = rolePartyIds.includes(p.id);
+                        return (
+                          <label key={p.id} className="flex items-center gap-3 px-3 py-2 border-b border-slate-50 last:border-b-0 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                const on = e.target.checked;
+                                setRolePartyIds((prev) =>
+                                  on ? Array.from(new Set([...prev, p.id])) : prev.filter((x) => x !== p.id)
+                                );
+                              }}
+                              disabled={roleSaving}
+                            />
+                            <span className="text-sm font-bold text-slate-800">{p.shortName}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {roleValue === 'moderator' ? (
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    Assigned Parties (optional)
+                  </label>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm max-h-40 overflow-y-auto">
+                    {PARTIES_DATA.map((p) => {
+                      const checked = rolePartyIds.includes(p.id);
+                      return (
+                        <label key={p.id} className="flex items-center gap-3 px-3 py-2 border-b border-slate-50 last:border-b-0 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const on = e.target.checked;
+                              setRolePartyIds((prev) =>
+                                on ? Array.from(new Set([...prev, p.id])) : prev.filter((x) => x !== p.id)
+                              );
+                            }}
+                            disabled={roleSaving}
+                          />
+                          <span className="text-sm font-bold text-slate-800">{p.shortName}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -940,11 +1051,8 @@ export default function UserManagement() {
                 type="button"
                 disabled={roleSaving}
                 onClick={async () => {
-                  if ((roleValue === 'moderator' || roleValue === 'editor') && roleStateIds.length === 0) {
-                    setToast({
-                      message: `Select at least one state for ${roleValue === 'editor' ? 'editor' : 'moderator'}`,
-                      tone: 'error',
-                    });
+                  if (roleValue === 'moderator' && roleStateIds.length === 0) {
+                    setToast({ message: 'Select at least one state for moderator', tone: 'error' });
                     return;
                   }
                   if (roleValue === 'campaign_manager' && roleGroupIds.length === 0) {
@@ -974,7 +1082,14 @@ export default function UserManagement() {
                             ? roleStateIds.map((x) => Number(x)).filter((n) => Number.isFinite(n))
                             : [],
                         assigned_group_ids: nextRole === 'campaign_manager' ? roleGroupIds : [],
-                        assigned_party_ids: nextRole === 'editor' ? rolePartyIds : [],
+                        assigned_party_ids:
+                          nextRole === 'moderator'
+                            ? rolePartyIds
+                            : nextRole === 'campaign_manager'
+                              ? rolePartyIds
+                              : [],
+                        assigned_loksabha_ids: nextRole === 'campaign_manager' ? roleLokIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)) : [],
+                        assigned_assembly_ids: nextRole === 'campaign_manager' ? roleAsmIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)) : [],
                       }),
                     });
                     const d = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; profile?: any };
@@ -993,6 +1108,12 @@ export default function UserManagement() {
                       Array.isArray(d.profile?.assigned_party_ids)
                         ? d.profile.assigned_party_ids.map((x: any) => String(x ?? '').trim().toLowerCase()).filter(Boolean)
                         : [];
+                    const updatedLokIds = Array.isArray(d.profile?.assigned_loksabha_ids)
+                      ? d.profile.assigned_loksabha_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
+                      : [];
+                    const updatedAsmIds = Array.isArray(d.profile?.assigned_assembly_ids)
+                      ? d.profile.assigned_assembly_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
+                      : [];
 
                     setUsers((prev) =>
                       prev.map((u) =>
@@ -1003,6 +1124,8 @@ export default function UserManagement() {
                               assigned_state_ids: updatedAssignedIds,
                               assigned_group_ids: updatedAssignedGroupIds,
                               assigned_party_ids: updatedAssignedPartyIds,
+                              assigned_loksabha_ids: updatedLokIds,
+                              assigned_assembly_ids: updatedAsmIds,
                             }
                           : u
                       )

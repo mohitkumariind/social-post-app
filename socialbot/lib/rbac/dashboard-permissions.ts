@@ -152,10 +152,10 @@ export function getDashboardFilterVisibility(actor: DashboardActor): DashboardFi
   return {
     canUseGlobalFilters: global,
     showStateFilter: global || r === 'moderator',
-    showPartyFilter: global || r === 'moderator',
+    showPartyFilter: global || r === 'moderator' || r === 'campaign_manager',
     showGroupFilter: global || r === 'campaign_manager',
-    showLokSabhaFilter: global,
-    showAssemblyFilter: global,
+    showLokSabhaFilter: global || r === 'campaign_manager',
+    showAssemblyFilter: global || r === 'campaign_manager',
     allowGlobalAllOption: global,
     active_scope,
   };
@@ -226,6 +226,7 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
   }
 
   const fv = getDashboardFilterVisibility(dashActor);
+  const r = normalizeRole(actor.role);
   if (fv.showGroupFilter && !fv.showStateFilter) {
     return withFormFlags('campaign_manager', {
       canUseGlobalTargeting: false,
@@ -234,7 +235,7 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
       showAllStateOption: false,
       showAllPartyOption: false,
       showGroupTargeting: true,
-      showGeoTargeting: false,
+      showGeoTargeting: true,
       requireStateSelection: false,
     });
   }
@@ -252,14 +253,27 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
     });
   }
 
-  return withFormFlags('editor', {
+  if (r === 'editor') {
+    return withFormFlags('editor', {
+      canUseGlobalTargeting: false,
+      canManageGroups: false,
+      canSchedulePublish: false,
+      showAllStateOption: false,
+      showAllPartyOption: false,
+      showGroupTargeting: false,
+      showGeoTargeting: true,
+      requireStateSelection: true,
+    });
+  }
+
+  return withFormFlags('denied', {
     canUseGlobalTargeting: false,
     canManageGroups: false,
     canSchedulePublish: false,
     showAllStateOption: false,
     showAllPartyOption: false,
     showGroupTargeting: false,
-    showGeoTargeting: true,
-    requireStateSelection: true,
+    showGeoTargeting: false,
+    requireStateSelection: false,
   });
 }
