@@ -37,6 +37,7 @@ import {
   resolveAssemblySelectionsFromEvent,
   resolveLoksabhaSelectionsFromEvent,
   editorGeoSelectionForForm,
+  resolveEditorGeoIdsForPayload,
   resolvePartySelectionsFromEvent,
   resolveStateSelectionsFromEvent,
   stateLabelsForIds,
@@ -355,11 +356,12 @@ export default function App() {
   const canUploadToEventRow = (ev: CampaignEvent) => eventPermissionById.get(String(ev.id))?.canUpload ?? false;
 
   const selectedEventPermissions = useMemo(() => {
-    if (!selectedEvent) return { canEdit: false, canUpload: false };
+    if (!selectedEvent) return { canEdit: false, canUpload: false, canDelete: false };
     const row = eventPermissionById.get(String(selectedEvent.id));
     return {
       canEdit: row?.canEdit ?? false,
       canUpload: row?.canUpload ?? false,
+      canDelete: row?.canDelete ?? false,
     };
   }, [selectedEvent, eventPermissionById]);
 
@@ -582,6 +584,7 @@ export default function App() {
 
   /** Fetch Lok Sabha when state selection changes. Uses integer IDs for Supabase query. */
   useEffect(() => {
+    if (eventCaps.editorForm || eventCaps.campaignManagerForm) return;
     const ids = selectedStateKey ? selectedStateKey.split(',').filter(Boolean) : [];
     if (ids.length === 0) {
       setAvailableLoksabhas([]);
@@ -631,7 +634,86 @@ export default function App() {
       setAvailableLoksabhas(mapped);
       setLoksabhasLoading(false);
     })();
-  }, [selectedStateKey]);
+  }, [selectedStateKey, eventCaps.editorForm, eventCaps.campaignManagerForm]);
+
+  /** Editors: lok sabha / assembly from profile assignment, optionally scoped to selected states. */
+  useEffect(() => {
+    if (!eventCaps.editorForm || !viewerReady) return;
+    let cancelled = false;
+    (async () => {
+      setLoksabhasLoading(true);
+      setAssembliesLoading(true);
+      try {
+        const assignedLok = new Set((viewer?.assigned_loksabha_ids ?? []).map((n) => String(n)));
+        const assignedAsm = new Set((viewer?.assigned_assembly_ids ?? []).map((n) => String(n)));
+        const stateFilterIds = new Set(
+          (newState.includes('ALL') ? editorAssignableStates : newState.filter((x) => x !== 'ALL'))
+            .map((x) => Number(x))
+            .filter((n) => Number.isFinite(n))
+        );
+
+        const { data: lokRows } = await supabase.from('loksabha').select('id,name,state_id').order('name');
+        if (cancelled) return;
+        let lokMapped = (lokRows ?? [])
+          .map((r: Record<string, unknown>) => ({
+            id: String(r.id ?? ''),
+            name: String(r.name ?? r.loksabha_name ?? ''),
+            state_id: String(r.state_id ?? ''),
+          }))
+          .filter((l) => l.id && l.name);
+        if (assignedLok.size > 0) lokMapped = lokMapped.filter((l) => assignedLok.has(l.id));
+        if (stateFilterIds.size > 0) {
+          lokMapped = lokMapped.filter((l) => stateFilterIds.has(Number(l.state_id)));
+        }
+
+        const lokIdsForAsm = newLoksabha.includes('ALL')
+          ? lokMapped.map((l) => l.id)
+          : newLoksabha.filter((x) => x !== 'ALL');
+        const lokIdSet = new Set(lokIdsForAsm.map(String));
+
+        const { data: asmRows } = await supabase.from('assembly').select('id,name,loksabha_id').order('name');
+        if (cancelled) return;
+        let asmMapped = (asmRows ?? [])
+          .map((r: Record<string, unknown>) => ({
+            id: String(r.id ?? ''),
+            name: String(r.name ?? r.assembly_name ?? ''),
+            loksabha_id: String(r.loksabha_id ?? ''),
+          }))
+          .filter((a) => a.id && a.name);
+        if (assignedAsm.size > 0) asmMapped = asmMapped.filter((a) => assignedAsm.has(a.id));
+        if (lokIdSet.size > 0) {
+          asmMapped = asmMapped.filter((a) => lokIdSet.has(String(a.loksabha_id)));
+        } else if (stateFilterIds.size > 0 && assignedAsm.size === 0) {
+          const visibleLokIds = new Set(lokMapped.map((l) => l.id));
+          asmMapped = asmMapped.filter((a) => visibleLokIds.has(String(a.loksabha_id)));
+        }
+
+        setAvailableLoksabhas(lokMapped);
+        setAvailableAssemblies(asmMapped);
+      } catch {
+        if (!cancelled) {
+          setAvailableLoksabhas([]);
+          setAvailableAssemblies([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoksabhasLoading(false);
+          setAssembliesLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    eventCaps.editorForm,
+    viewerReady,
+    viewer?.assigned_loksabha_ids,
+    viewer?.assigned_assembly_ids,
+    newState,
+    newLoksabha,
+    editorAssignableStates,
+  ]);
 
   /** Campaign managers: load constituency options from profile assignment (not state filter). */
   useEffect(() => {
@@ -700,6 +782,7 @@ export default function App() {
 
   /** Fetch Assembly when Lok Sabha selection changes. Uses integer IDs for Supabase query. */
   useEffect(() => {
+    if (eventCaps.editorForm || eventCaps.campaignManagerForm) return;
     const ids = selectedLoksabhaKey ? selectedLoksabhaKey.split(',').filter(Boolean) : [];
     if (ids.length === 0) {
       setAvailableAssemblies([]);
@@ -742,7 +825,7 @@ export default function App() {
       setAvailableAssemblies(mapped);
       setAssembliesLoading(false);
     })();
-  }, [selectedLoksabhaKey]);
+  }, [selectedLoksabhaKey, eventCaps.editorForm, eventCaps.campaignManagerForm]);
 
   // Prune selected assemblies to only those still available (preserve when possible).
   useEffect(() => {
@@ -898,10 +981,14 @@ export default function App() {
         alert('Please select at least one state.');
         return;
       }
-      const lokSel = editorGeoSelectionForForm(newLoksabha);
-      const asmSel = editorGeoSelectionForForm(newAssembly);
-      const lokIdArr = lokSel.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
-      const asmIdArr = asmSel.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+      const lokIdArr = resolveEditorGeoIdsForPayload(
+        newLoksabha,
+        availableLoksabhas.map((l) => l.id)
+      );
+      const asmIdArr = resolveEditorGeoIdsForPayload(
+        newAssembly,
+        availableAssemblies.map((a) => a.id)
+      );
       payload.state_id = stateIdArr;
       payload.loksabha_id = lokIdArr;
       payload.assembly_id = asmIdArr;
@@ -977,11 +1064,18 @@ export default function App() {
       alert('Event created but no id was returned — check Supabase RLS and .select() on insert.');
       return;
     }
+    const ownerId =
+      viewer?.id && viewer.id !== 'viewer' && viewer.id !== 'session'
+        ? String(viewer.id)
+        : (data as { created_by?: string | null })?.created_by != null
+          ? String((data as { created_by?: string | null }).created_by)
+          : null;
     const ev: CampaignEvent = {
       id: String(data.id).trim(),
       name: data.name,
       start: data.start ?? startVal,
       end: data.end ?? endVal,
+      created_by: ownerId,
       party: partyArr.length ? partyArr : undefined,
       state: stateArr.length ? stateArr : undefined,
       loksabha: loksabhaArr.length ? loksabhaArr : undefined,
@@ -1004,6 +1098,8 @@ export default function App() {
     setNewAssembly([]);
     setNewTargetGroups([]);
     setNewEventDashboardCategory('none');
+    await openEvent(ev);
+    setView('gallery');
   };
 
   const openEvent = async (ev: CampaignEvent) => {
@@ -1449,6 +1545,10 @@ export default function App() {
 
   const handleSaveEvent = async () => {
     if (!newName || !startDate || !endDate || !editingEvent) return;
+    if (eventCaps.editorForm && scheduledAt) {
+      alert('Editors cannot schedule publish; events are saved as drafts.');
+      return;
+    }
 
     const originalName = editingEvent.name;
 
@@ -1539,12 +1639,14 @@ export default function App() {
       updatePayload.party_id = editorPartyTargetingEdit.party_id;
       const editorStateIds = newState.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
       updatePayload.state_id = editorStateIds;
-      updatePayload.loksabha_id = editorGeoSelectionForForm(newLoksabha)
-        .map((x) => Number(x))
-        .filter((n) => Number.isFinite(n) && n > 0);
-      updatePayload.assembly_id = editorGeoSelectionForForm(newAssembly)
-        .map((x) => Number(x))
-        .filter((n) => Number.isFinite(n) && n > 0);
+      updatePayload.loksabha_id = resolveEditorGeoIdsForPayload(
+        newLoksabha,
+        availableLoksabhas.map((l) => l.id)
+      );
+      updatePayload.assembly_id = resolveEditorGeoIdsForPayload(
+        newAssembly,
+        availableAssemblies.map((a) => a.id)
+      );
       updatePayload.state = [];
       updatePayload.loksabha = [];
       updatePayload.assembly = [];
@@ -1655,6 +1757,7 @@ export default function App() {
       });
     }
 
+    const reopenGallery = selectedEvent?.id === editingEvent.id;
     setEditingEvent(null);
     setNewName('');
     setStartDate('');
@@ -1665,6 +1768,7 @@ export default function App() {
     setNewAssembly([]);
     setNewTargetGroups([]);
     setEditEventDashboardCategory('none');
+    if (reopenGallery) setView('gallery');
 
     let workerNotifyOk = false;
     try {
@@ -1743,6 +1847,7 @@ export default function App() {
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</label>
                     <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30" />
                   </div>
+                  {!eventCaps.editorForm ? (
                   <div className="flex flex-col">
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Dashboard Category</label>
                     <select
@@ -1761,6 +1866,7 @@ export default function App() {
                       <p className="mt-2 text-[10px] font-bold text-slate-500">Category events are global dashboard content events.</p>
                     ) : null}
                   </div>
+                  ) : null}
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-1">
                     {!eventCaps.campaignManagerForm ? (
                       <div
@@ -1769,7 +1875,19 @@ export default function App() {
                         }`}
                       >
                         <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                          {hasSingleAssignedState && singleAssignedStateId ? (
+                          {eventCaps.editorForm ? (
+                            <MultiSelectDropdown
+                              label="State (required)"
+                              options={editorAssignableStates}
+                              selected={newState}
+                              onSelect={setNewState}
+                              getValue={(s) => String(s.id)}
+                              getLabel={(s) => s.name}
+                              showAllOption={false}
+                              loading={statesLoading}
+                              searchable
+                            />
+                          ) : hasSingleAssignedState && singleAssignedStateId ? (
                             <div>
                               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">State</span>
                               <div className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-bold text-slate-800 text-sm">
@@ -1817,8 +1935,8 @@ export default function App() {
                             onSelect={setNewLoksabha}
                             getValue={(l) => l.id}
                             getLabel={(l) => l.name}
-                            allLabel="All LS Seats"
-                            showAllOption={eventCaps.showAllStateOption}
+                            allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Lok Sabha' : 'All LS Seats'}
+                            showAllOption={eventCaps.showAllAssignedGeoOption || eventCaps.showAllStateOption}
                             loading={loksabhasLoading}
                             searchable
                           />
@@ -1831,14 +1949,15 @@ export default function App() {
                             onSelect={setNewAssembly}
                             getValue={(a) => a.id}
                             getLabel={(a) => a.name}
-                            allLabel="All Assembly Seats"
-                            showAllOption={eventCaps.showAllStateOption}
+                            allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Assembly' : 'All Assembly Seats'}
+                            showAllOption={eventCaps.showAllAssignedGeoOption || eventCaps.showAllStateOption}
                             loading={assembliesLoading}
                             searchable
                           />
                         </div>
                       </div>
                     ) : null}
+                    {!eventCaps.editorForm ? (
                     <div className={`rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3 ${editEventDashboardCategory !== 'none' ? 'pointer-events-none opacity-50' : ''}`}>
                       <MultiSelectDropdown
                         label="Target Groups"
@@ -1864,6 +1983,7 @@ export default function App() {
                         )}
                       </div>
                     </div>
+                    ) : null}
                   </div>
                   <div className="flex gap-3">
                     <div className="flex flex-col flex-1">
@@ -1875,6 +1995,7 @@ export default function App() {
                       <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30" />
                     </div>
                   </div>
+                  {!eventCaps.editorForm ? (
                   <div className="flex gap-3 mt-4">
                     <div className="flex flex-col flex-1">
                       <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Schedule publish</label>
@@ -1896,6 +2017,7 @@ export default function App() {
                       </button>
                     </div>
                   </div>
+                  ) : null}
                 </div>
               </div>
               <div className="shrink-0 px-4 sm:px-5 py-4 border-t border-slate-100 bg-white">
@@ -2038,8 +2160,8 @@ export default function App() {
                     onSelect={setNewLoksabha}
                     getValue={(l) => l.id}
                     getLabel={(l) => l.name}
-                    allLabel="All LS Seats"
-                    showAllOption={eventCaps.showAllStateOption}
+                    allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Lok Sabha' : 'All LS Seats'}
+                    showAllOption={eventCaps.showAllAssignedGeoOption || eventCaps.showAllStateOption}
                     loading={loksabhasLoading}
                     searchable
                   />
@@ -2052,8 +2174,8 @@ export default function App() {
                     onSelect={setNewAssembly}
                     getValue={(a) => a.id}
                     getLabel={(a) => a.name}
-                    allLabel="All Assembly Seats"
-                    showAllOption={eventCaps.showAllStateOption}
+                    allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Assembly' : 'All Assembly Seats'}
+                    showAllOption={eventCaps.showAllAssignedGeoOption || eventCaps.showAllStateOption}
                     loading={assembliesLoading}
                     searchable
                   />
@@ -2204,7 +2326,7 @@ export default function App() {
                             {status.label}
                           </span>
                           {(canEditEventRow(ev) || canDeleteEventRow(ev)) ? (
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                          <div className={`flex items-center gap-1 transition-all ${eventCaps.editorForm ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                             {canEditEventRow(ev) ? (
                               <button type="button" onClick={() => void openEditModal(ev)} className="p-2 text-slate-200 hover:text-blue-600" aria-label="Edit event"><Pencil size={16}/></button>
                             ) : null}
@@ -2244,6 +2366,18 @@ export default function App() {
   // --- VIEW 2: GALLERY & CAPTION MANAGER ---
   return (
     <div className="max-w-6xl mx-auto p-4 space-y-8 animate-in slide-in-from-bottom-4 text-slate-700 pb-20">
+      {isDeleting ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-[40px] p-10 max-w-sm w-full text-center space-y-6 shadow-2xl animate-in zoom-in-95">
+            <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto shadow-inner"><AlertTriangle size={40} /></div>
+            <p className="font-black text-xl text-slate-900">Delete Event?</p>
+            <div className="flex gap-4">
+              <button onClick={() => setIsDeleting(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold">Cancel</button>
+              <button onClick={() => deleteEvent(isDeleting)} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold">Delete</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <input type="file" ref={fileInputRef} onChange={handleUpload} multiple accept="image/jpeg,image/png,.jpg,.jpeg,.png" className="hidden" />
 
       {/* Media Delete Popup */}
@@ -2279,7 +2413,32 @@ export default function App() {
         <button onClick={() => setView('list')} className="flex items-center gap-2 text-slate-400 hover:text-blue-600 font-black uppercase text-[10px] tracking-[0.2em] transition-all">
           <ArrowLeft size={20} /> Back
         </button>
-        <div className="md:text-right">
+        <div className="md:text-right flex flex-col items-end gap-2">
+          {(selectedEvent && (selectedEventPermissions.canEdit || selectedEventPermissions.canDelete)) ? (
+            <div className="flex items-center gap-2">
+              {selectedEventPermissions.canEdit ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void openEditModal(selectedEvent);
+                    setView('list');
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-slate-600 hover:border-blue-300 hover:text-blue-600"
+                >
+                  <Pencil size={14} /> Edit
+                </button>
+              ) : null}
+              {selectedEventPermissions.canDelete ? (
+                <button
+                  type="button"
+                  onClick={() => setIsDeleting(selectedEvent)}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-rose-600 hover:bg-rose-50"
+                >
+                  <Trash2 size={14} /> Delete
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <h2 className="text-3xl font-black text-slate-900 tracking-tight leading-none flex items-center gap-3 flex-wrap">
             {selectedEvent?.name}
           </h2>

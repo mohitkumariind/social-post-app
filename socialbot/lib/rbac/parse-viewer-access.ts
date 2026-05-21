@@ -65,8 +65,11 @@ export function parseViewerDashboardAccess(
     return null;
   }
 
+  const resolvedUserId = String(raw.user_id ?? userId).trim() || userId;
+
   const actor = toDashboardActor({
     role,
+    user: { id: resolvedUserId },
     assigned_state_ids: Array.isArray(raw.assigned_state_ids)
       ? (raw.assigned_state_ids as number[])
       : [],
@@ -82,7 +85,6 @@ export function parseViewerDashboardAccess(
     assigned_assembly_ids: Array.isArray(raw.assigned_assembly_ids)
       ? (raw.assigned_assembly_ids as number[])
       : [],
-    user: { id: userId },
   });
 
   const da = raw.dashboard_access as Record<string, unknown> | undefined;

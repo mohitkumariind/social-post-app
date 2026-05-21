@@ -125,6 +125,14 @@ export function editorGeoSelectionForForm(selected: string[]): string[] {
   return selected.filter((p) => String(p).trim().toUpperCase() !== 'ALL');
 }
 
+/** Expand editor "ALL" to assigned option ids for API payload (never sends literal ALL). */
+export function resolveEditorGeoIdsForPayload(selected: string[], availableIds: string[]): number[] {
+  const ids = selected.includes('ALL')
+    ? availableIds
+    : editorGeoSelectionForForm(selected);
+  return ids.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+}
+
 export function logEventFormHydration(phase: string, detail: Record<string, unknown>) {
   if (process.env.NODE_ENV === 'production') return;
   console.log('[event-form-hydration]', phase, detail);

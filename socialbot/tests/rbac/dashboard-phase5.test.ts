@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { resolveEditorGeoIdsForPayload } from '@/lib/admin/event-form-hydration';
 import { getDashboardFilterVisibility, getEventFormUiCapabilities } from '@/lib/rbac/dashboard-permissions';
+import { parseViewerDashboardAccess } from '@/lib/rbac/parse-viewer-access';
 import { rbacScopeMetadata } from '@/lib/rbac/scope-observability';
 
 describe('dashboard phase 5', () => {
@@ -35,6 +37,23 @@ describe('dashboard phase 5', () => {
     expect(caps.editorForm).toBe(true);
     expect(caps.canUseGlobalTargeting).toBe(false);
     expect(caps.showGroupTargeting).toBe(false);
+    expect(caps.showAllAssignedGeoOption).toBe(true);
+  });
+
+  it('parseViewerDashboardAccess binds real user_id to actor', () => {
+    const access = parseViewerDashboardAccess({
+      user_id: 'editor-uuid-99',
+      role: 'editor',
+      assigned_state_ids: [10],
+      assigned_group_ids: [],
+      assigned_party_ids: [],
+    });
+    expect(access?.actor.id).toBe('editor-uuid-99');
+  });
+
+  it('resolveEditorGeoIdsForPayload expands ALL to assigned ids', () => {
+    expect(resolveEditorGeoIdsForPayload(['ALL'], ['501', '502'])).toEqual([501, 502]);
+    expect(resolveEditorGeoIdsForPayload(['501'], ['501', '502'])).toEqual([501]);
   });
 
   it('scope metadata includes lok sabha and assembly ids', () => {

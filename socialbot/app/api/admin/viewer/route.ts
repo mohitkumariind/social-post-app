@@ -32,6 +32,7 @@ export async function GET() {
 
   return NextResponse.json(
     {
+      user_id: auth.user.id,
       role: auth.role,
       assigned_state_ids: auth.assigned_state_ids,
       assigned_group_ids: auth.assigned_group_ids,

@@ -51,6 +51,8 @@ export type EventFormUiCapabilities = {
   showGroupTargeting: boolean;
   showGeoTargeting: boolean;
   requireStateSelection: boolean;
+  /** Editor: "Select all" for lok sabha / assembly within assigned profile scope only. */
+  showAllAssignedGeoOption: boolean;
 };
 
 const ROLE_MODULES: Record<AdminPanelRole, readonly DashboardModuleId[]> = {
@@ -209,6 +211,7 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
       showGroupTargeting: false,
       showGeoTargeting: false,
       requireStateSelection: false,
+      showAllAssignedGeoOption: false,
     });
   }
 
@@ -222,6 +225,7 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
       showGroupTargeting: true,
       showGeoTargeting: true,
       requireStateSelection: false,
+      showAllAssignedGeoOption: false,
     });
   }
 
@@ -237,6 +241,7 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
       showGroupTargeting: true,
       showGeoTargeting: true,
       requireStateSelection: false,
+      showAllAssignedGeoOption: false,
     });
   }
 
@@ -250,6 +255,7 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
       showGroupTargeting: false,
       showGeoTargeting: true,
       requireStateSelection: true,
+      showAllAssignedGeoOption: false,
     });
   }
 
@@ -263,6 +269,7 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
       showGroupTargeting: false,
       showGeoTargeting: true,
       requireStateSelection: true,
+      showAllAssignedGeoOption: true,
     });
   }
 
@@ -275,5 +282,6 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
     showGroupTargeting: false,
     showGeoTargeting: false,
     requireStateSelection: false,
+    showAllAssignedGeoOption: false,
   });
 }
