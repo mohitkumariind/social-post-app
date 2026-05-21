@@ -1,10 +1,17 @@
 /**
- * Single source of truth for event read visibility (list + detail).
+ * Single source of truth for event **list + read** visibility (all non-admin roles).
  *
  * Visible when:
- * - owner (created_by = actor), OR
+ * - owner (`created_by` = actor), OR
  * - published + state overlap + party overlap, OR
- * - published + active dashboard_category (global feed)
+ * - published + active `dashboard_category` (global feed), OR
+ * - admin bypass (`isAdminRole` — unfiltered query / `isEventVisibleToActor` always true)
+ *
+ * **Non-negotiable:** Do not add per-role branches here. Constituency (Lok Sabha / Assembly)
+ * and group scope belong on **mutation** paths (`canAccessScope`, event create/update guards).
+ *
+ * List path must use {@link getEventVisibilityQuery} only — no `postFilterEventsList`,
+ * no `applyEventsListQueryScope`, no role-specific visibility forks.
  */
 import { PARTIES_DATA } from '@/lib/constants';
 import { normalizeAssignedPartyIds } from '@/lib/admin/editor-party-scope';

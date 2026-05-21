@@ -4,6 +4,7 @@ import { toRbacActor } from '@/lib/admin-gate';
 import { isSuperAdmin } from '@/lib/permissions';
 import { isAdminRole } from '@/lib/rbac/dashboard-permissions';
 import {
+  canAccessScope,
   canEditEvent,
   canTargetAudience,
   canUploadPost,
@@ -47,6 +48,54 @@ export function assertEventRowEditable(
   if (!decision.allowed) {
     throw new RbacError(decision.denied_reason ?? 'Forbidden: cannot edit event', 403);
   }
+}
+
+const CM_FORBIDDEN_SCOPE_KEYS = ['state', 'state_id', 'profile_ids', 'group_id'] as const;
+
+function scopeFieldPopulated(payload: Record<string, unknown>, key: string): boolean {
+  const v = payload[key];
+  if (v == null) return false;
+  if (Array.isArray(v)) return v.length > 0;
+  return String(v).trim().length > 0;
+}
+
+/**
+ * Campaign manager event create/update: Lok Sabha OR Assembly OR groups (subset of assignment).
+ * No state-wide or global targeting. List/read still uses unified visibility engine.
+ */
+export function validateCampaignManagerEventPayload(
+  auth: VerifiedAdminAuth,
+  payload: Record<string, unknown>,
+  options?: { effectiveGroupIds?: string[] }
+): string | null {
+  for (const k of CM_FORBIDDEN_SCOPE_KEYS) {
+    if (scopeFieldPopulated(payload, k)) {
+      return `Forbidden: campaign_manager cannot target ${k}`;
+    }
+  }
+
+  if (isActiveEventDashboardCategory(payload.dashboard_category)) return null;
+
+  const actor = toRbacActor({
+    ...auth,
+    assigned_group_ids:
+      options?.effectiveGroupIds && options.effectiveGroupIds.length > 0
+        ? options.effectiveGroupIds
+        : auth.assigned_group_ids,
+  });
+
+  const scope = normalizeResourceScope(payload);
+  const hasAnchor =
+    scope.group_ids.length > 0 || scope.loksabha_ids.length > 0 || scope.assembly_ids.length > 0;
+  if (!hasAnchor) {
+    return 'Forbidden: campaign_manager must target assigned Lok Sabha, Assembly, or groups';
+  }
+
+  const access = canAccessScope(actor, scope);
+  if (!access.allowed) {
+    return access.denied_reason ?? 'Forbidden: outside campaign manager scope';
+  }
+  return null;
 }
 
 export function assertEventTargetingAllowed(

@@ -91,6 +91,8 @@ export type ProfileAccessResult = {
   assigned_state_ids: number[];
   assigned_group_ids: string[];
   assigned_party_ids: string[];
+  assigned_loksabha_ids: number[];
+  assigned_assembly_ids: number[];
   usedServiceRole: boolean;
   errorMessage?: string;
 };
@@ -141,22 +143,29 @@ export async function fetchProfileAccessForMiddleware(
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
+  const emptyAccess = (): ProfileAccessResult => ({
+    role: null,
+    assigned_state_ids: [],
+    assigned_group_ids: [],
+    assigned_party_ids: [],
+    assigned_loksabha_ids: [],
+    assigned_assembly_ids: [],
+    usedServiceRole: false,
+    errorMessage: 'NEXT_PUBLIC_SUPABASE_URL missing',
+  });
+
   if (!url) {
-    return {
-      role: null,
-      assigned_state_ids: [],
-      assigned_group_ids: [],
-      assigned_party_ids: [],
-      usedServiceRole: false,
-      errorMessage: 'NEXT_PUBLIC_SUPABASE_URL missing',
-    };
+    return emptyAccess();
   }
 
   if (serviceKey) {
     const admin = createClient(url, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const selectFull = 'role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
+    const selectFull =
+      'role, assigned_state_ids, assigned_group_ids, assigned_party_ids, assigned_loksabha_ids, assigned_assembly_ids';
+    const selectNoConstituency =
+      'role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
     const selectNoParties = 'role, assigned_state_ids, assigned_group_ids';
     const selectNoGroups = 'role, assigned_state_ids';
     const selectRoleOnly = 'role';
@@ -164,12 +173,21 @@ export async function fetchProfileAccessForMiddleware(
     const fetchRow = async (cols: string) =>
       admin.from('profiles').select(cols).eq('id', userId).single();
 
-    let cols = selectFull;
-    let { data, error } = await fetchRow(cols);
     const downgrade = (err: { message?: string } | null, token: string) => {
       const msg = String(err?.message ?? '').toLowerCase();
       return msg.includes(token) && (msg.includes('does not exist') || msg.includes('schema cache'));
     };
+
+    let cols = selectFull;
+    let { data, error } = await fetchRow(cols);
+    if (error && downgrade(error, 'assigned_assembly_ids')) {
+      cols = selectNoConstituency;
+      ({ data, error } = await fetchRow(cols));
+    }
+    if (error && downgrade(error, 'assigned_loksabha_ids')) {
+      cols = selectNoConstituency;
+      ({ data, error } = await fetchRow(cols));
+    }
     if (error && downgrade(error, 'assigned_party_ids')) {
       cols = selectNoParties;
       ({ data, error } = await fetchRow(cols));
@@ -185,35 +203,34 @@ export async function fetchProfileAccessForMiddleware(
 
     if (error || data == null) {
       return {
-        role: null,
-        assigned_state_ids: [],
-        assigned_group_ids: [],
-        assigned_party_ids: [],
+        ...emptyAccess(),
         usedServiceRole: true,
         errorMessage: error?.message ?? 'no row (service role)',
       };
     }
 
-    const r = (data as { role?: unknown }).role;
-    const role =
-      typeof r === 'string' ? r.trim() : r != null ? String(r).trim() : null;
-    const assigned_state_ids = toNumArr((data as any).assigned_state_ids);
-    const assigned_group_ids = Array.isArray((data as any).assigned_group_ids)
-      ? (data as any).assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean)
-      : [];
-    const assigned_party_ids = toPartySlugArr((data as any).assigned_party_ids);
-    return { role, assigned_state_ids, assigned_group_ids, assigned_party_ids, usedServiceRole: true };
+    return parseProfileAccessRow(data, true);
   }
 
   const fetchAnon = async (cols: string) =>
     anonSupabase.from('profiles').select(cols).eq('id', userId).single();
 
-  let cols = 'role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
-  let { data, error } = await fetchAnon(cols);
   const downgrade = (err: { message?: string } | null, token: string) => {
     const msg = String(err?.message ?? '').toLowerCase();
     return msg.includes(token) && (msg.includes('does not exist') || msg.includes('schema cache'));
   };
+
+  let cols =
+    'role, assigned_state_ids, assigned_group_ids, assigned_party_ids, assigned_loksabha_ids, assigned_assembly_ids';
+  let { data, error } = await fetchAnon(cols);
+  if (error && downgrade(error, 'assigned_assembly_ids')) {
+    cols = 'role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
+    ({ data, error } = await fetchAnon(cols));
+  }
+  if (error && downgrade(error, 'assigned_loksabha_ids')) {
+    cols = 'role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
+    ({ data, error } = await fetchAnon(cols));
+  }
   if (error && downgrade(error, 'assigned_party_ids')) {
     cols = 'role, assigned_state_ids, assigned_group_ids';
     ({ data, error } = await fetchAnon(cols));
@@ -228,30 +245,38 @@ export async function fetchProfileAccessForMiddleware(
       console.warn('[proxy] profiles.role fetch (anon):', error?.message ?? 'no row');
     }
     return {
-      role: null,
-      assigned_state_ids: [],
-      assigned_group_ids: [],
-      assigned_party_ids: [],
-      usedServiceRole: false,
+      ...emptyAccess(),
       errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
     };
   }
 
-  const r = (data as { role?: unknown }).role;
-  const role =
-    typeof r === 'string' ? r.trim() : r != null ? String(r).trim() : null;
-  const assigned_state_ids = toNumArr((data as any).assigned_state_ids);
-  const assigned_group_ids = Array.isArray((data as any).assigned_group_ids)
-    ? (data as any).assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+  return {
+    ...parseProfileAccessRow(data, false),
+    errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
+  };
+}
+
+function parseProfileAccessRow(
+  data: Record<string, unknown>,
+  usedServiceRole: boolean
+): ProfileAccessResult {
+  const r = data.role;
+  const role = typeof r === 'string' ? r.trim() : r != null ? String(r).trim() : null;
+  const assigned_state_ids = toNumArr(data.assigned_state_ids);
+  const assigned_group_ids = Array.isArray(data.assigned_group_ids)
+    ? data.assigned_group_ids.map((x) => String(x ?? '').trim()).filter(Boolean)
     : [];
-  const assigned_party_ids = toPartySlugArr((data as any).assigned_party_ids);
+  const assigned_party_ids = toPartySlugArr(data.assigned_party_ids);
+  const assigned_loksabha_ids = toNumArr(data.assigned_loksabha_ids);
+  const assigned_assembly_ids = toNumArr(data.assigned_assembly_ids);
   return {
     role,
     assigned_state_ids,
     assigned_group_ids,
     assigned_party_ids,
-    usedServiceRole: false,
-    errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
+    assigned_loksabha_ids,
+    assigned_assembly_ids,
+    usedServiceRole,
   };
 }
 

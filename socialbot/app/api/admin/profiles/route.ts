@@ -294,6 +294,8 @@ type PatchBody = {
   assigned_state_ids?: unknown;
   assigned_group_ids?: unknown;
   assigned_party_ids?: unknown;
+  assigned_loksabha_ids?: unknown;
+  assigned_assembly_ids?: unknown;
 };
 
 function toPartySlugArr(v: unknown): string[] {
@@ -342,11 +344,8 @@ export async function PATCH(request: NextRequest) {
 
   let assigned_state_ids = toNumArr(body.assigned_state_ids);
   if (role !== 'moderator' && role !== 'editor') assigned_state_ids = [];
-  if ((role === 'moderator' || role === 'editor') && assigned_state_ids.length === 0) {
-    return NextResponse.json(
-      { error: `assigned_state_ids is required for ${role === 'editor' ? 'editors' : 'moderators'}` },
-      { status: 400 }
-    );
+  if (role === 'moderator' && assigned_state_ids.length === 0) {
+    return NextResponse.json({ error: 'assigned_state_ids is required for moderators' }, { status: 400 });
   }
 
   let assigned_group_ids = toStrArr(body.assigned_group_ids);
@@ -355,23 +354,47 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'assigned_group_ids is required for campaign managers' }, { status: 400 });
   }
 
+  let assigned_loksabha_ids = toNumArr(body.assigned_loksabha_ids);
+  let assigned_assembly_ids = toNumArr(body.assigned_assembly_ids);
+  if (role !== 'campaign_manager') {
+    assigned_loksabha_ids = [];
+    assigned_assembly_ids = [];
+  }
+
   let assigned_party_ids = toPartySlugArr(body.assigned_party_ids);
-  if (role !== 'moderator' && role !== 'editor') assigned_party_ids = [];
+  if (role !== 'moderator' && role !== 'editor' && role !== 'campaign_manager') assigned_party_ids = [];
 
   const admin = createServiceRoleClient();
   if (!admin) {
     return NextResponse.json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, { status: 503 });
   }
 
-  const { data: existingProfile, error: existingErr } = await admin
+  let existingSelect =
+    'id, role, assigned_state_ids, assigned_group_ids, assigned_party_ids, assigned_loksabha_ids, assigned_assembly_ids';
+  let { data: existingProfile, error: existingErr } = await admin
     .from('profiles')
-    .select('id, role, assigned_state_ids, assigned_group_ids, assigned_party_ids')
+    .select(existingSelect)
     .eq('id', id)
     .maybeSingle();
+  if (existingErr && isMissingColumnErr(existingErr, 'assigned_loksabha_ids')) {
+    existingSelect = 'id, role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
+    ({ data: existingProfile, error: existingErr } = await admin
+      .from('profiles')
+      .select(existingSelect)
+      .eq('id', id)
+      .maybeSingle());
+  }
   if (existingErr) return NextResponse.json({ error: existingErr.message }, { status: 500 });
   if (!existingProfile) return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
 
-  let updateBody: Record<string, unknown> = { role, assigned_state_ids, assigned_group_ids, assigned_party_ids };
+  let updateBody: Record<string, unknown> = {
+    role,
+    assigned_state_ids,
+    assigned_group_ids,
+    assigned_party_ids,
+    assigned_loksabha_ids,
+    assigned_assembly_ids,
+  };
   {
     const decision = canPerformMutation(
       {
@@ -388,8 +411,15 @@ export async function PATCH(request: NextRequest) {
     if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
   }
 
-  let selectCols = 'id, role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
+  let selectCols =
+    'id, role, assigned_state_ids, assigned_group_ids, assigned_party_ids, assigned_loksabha_ids, assigned_assembly_ids';
   let { data, error } = await admin.from('profiles').update(updateBody).eq('id', id).select(selectCols).single();
+
+  if (error && isMissingColumnErr(error as any, 'assigned_loksabha_ids')) {
+    updateBody = { role, assigned_state_ids, assigned_group_ids, assigned_party_ids };
+    selectCols = 'id, role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
+    ({ data, error } = await admin.from('profiles').update(updateBody).eq('id', id).select(selectCols).single());
+  }
 
   if (error && isMissingColumnErr(error as any, 'assigned_party_ids')) {
     updateBody = { role, assigned_state_ids, assigned_group_ids };

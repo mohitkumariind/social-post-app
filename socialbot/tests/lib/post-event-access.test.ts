@@ -28,6 +28,9 @@ describe('assertPostEventAccessibleForPostUpload', () => {
     user: { id: 'cm-1' } as { id: string },
     assigned_state_ids: [] as number[],
     assigned_group_ids: ['100'],
+    assigned_party_ids: [] as string[],
+    assigned_loksabha_ids: [] as number[],
+    assigned_assembly_ids: [] as number[],
   };
 
   it('allows moderator when event state is within assigned states (not owner)', async () => {
@@ -63,6 +66,21 @@ describe('assertPostEventAccessibleForPostUpload', () => {
       expect(res.scope_match).toBe(true);
       expect(res.access_reason).toBe('scope_upload');
     }
+  });
+
+  it('denies campaign_manager when event is state-only (no group/lok/asm anchor)', async () => {
+    const admin = mockAdmin({
+      id: 'ev-4',
+      created_by: 'admin-9',
+      name: 'E',
+      state_id: [20],
+      target_groups: [],
+      loksabha_id: [],
+      assembly_id: [],
+    });
+    const res = await assertPostEventAccessibleForPostUpload(admin, 'ev-4', cmAuth);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe('campaign_manager_event_missing_constituency_anchor');
   });
 
   it('denies editor when event not owned', async () => {

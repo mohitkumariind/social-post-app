@@ -18,6 +18,7 @@ import {
   assertEventTargetingAllowed,
   isEventsFullAdmin,
   stripNonAdminPublishFields,
+  validateCampaignManagerEventPayload,
   validateEditorEventPayload,
 } from '@/lib/event-access';
 import { logEditorTargetingDebug } from '@/lib/admin/editor-event-targeting';
@@ -156,7 +157,13 @@ async function resolveCmEffectiveGroupsOrError(
 function rbacUserForMutation(
   auth: Pick<
     VerifiedAdminAuth,
-    'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids' | 'assigned_party_ids'
+    | 'user'
+    | 'role'
+    | 'assigned_state_ids'
+    | 'assigned_group_ids'
+    | 'assigned_party_ids'
+    | 'assigned_loksabha_ids'
+    | 'assigned_assembly_ids'
   >,
   cmEffective?: string[]
 ) {
@@ -166,6 +173,8 @@ function rbacUserForMutation(
     assigned_state_ids: auth.assigned_state_ids,
     assigned_group_ids: isCampaignManager(auth) && cmEffective && cmEffective.length > 0 ? cmEffective : auth.assigned_group_ids,
     assigned_party_ids: auth.assigned_party_ids,
+    assigned_loksabha_ids: auth.assigned_loksabha_ids,
+    assigned_assembly_ids: auth.assigned_assembly_ids,
   } as const;
 }
 
@@ -376,9 +385,6 @@ export async function POST(request: NextRequest) {
   }
 
   if (isEditor(auth)) {
-    if (auth.assigned_state_ids.length === 0) {
-      return json({ error: 'Editor has no assigned states — contact an admin' }, 403);
-    }
     const editorErr = validateEditorEventPayload(payload, 'create', {
       assignedStateIds: auth.assigned_state_ids,
       assignedPartyIds: auth.assigned_party_ids,
@@ -410,9 +416,11 @@ export async function POST(request: NextRequest) {
 
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
+  let cmEffectiveGroupIds: string[] | undefined;
   {
     const { error: cmErr, ids: cmEff } = await resolveCmEffectiveGroupsOrError(admin, auth);
     if (cmErr) return cmErr;
+    cmEffectiveGroupIds = cmEff;
     const decision = canPerformMutation(
       rbacUserForMutation(auth, cmEff) as any,
       'events.create',
@@ -442,17 +450,10 @@ export async function POST(request: NextRequest) {
   }
 
   if (isCampaignManager(auth) && !isEditor(auth)) {
-    if (!isActiveEventDashboardCategory(payload.dashboard_category)) {
-      const tg = Array.isArray(payload.target_groups) ? payload.target_groups : [];
-      if (tg.length === 0) return json({ error: 'Forbidden: campaign_manager must target_groups' }, 403);
-    }
-    // No global/state-wide targeting for campaign_manager.
-    const forbiddenKeys = ['party', 'state', 'loksabha', 'assembly', 'party_id', 'state_id', 'loksabha_id', 'assembly_id', 'profile_ids', 'group_id'];
-    for (const k of forbiddenKeys) {
-      if (payload[k] != null && Array.isArray(payload[k]) ? (payload[k] as any[]).length > 0 : !!payload[k]) {
-        return json({ error: `Forbidden: campaign_manager cannot target ${k}` }, 403);
-      }
-    }
+    const cmErr = validateCampaignManagerEventPayload(auth, payload, {
+      effectiveGroupIds: cmEffectiveGroupIds,
+    });
+    if (cmErr) return json({ error: cmErr }, 403);
   }
 
   try {
@@ -655,21 +656,11 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (isCampaignManager(auth)) {
-    if (patch.target_groups != null) {
-      const tg = Array.isArray(patch.target_groups) ? patch.target_groups : [];
-      const effDash = pickEventDashboardCategory(patch, (evForGuard as any)?.dashboard_category);
-      if (tg.length === 0 && !isActiveEventDashboardCategory(effDash)) {
-        return json({ error: 'Forbidden: campaign_manager must target_groups' }, 403);
-      }
-    }
-
-    const forbiddenKeys = ['party', 'state', 'loksabha', 'assembly', 'party_id', 'state_id', 'loksabha_id', 'assembly_id', 'profile_ids', 'group_id'];
-    for (const k of forbiddenKeys) {
-      if (patch[k] != null && Array.isArray(patch[k]) ? (patch[k] as any[]).length > 0 : !!patch[k]) {
-        return json({ error: `Forbidden: campaign_manager cannot target ${k}` }, 403);
-      }
-    }
-
+    const mergedCm = { ...(evForGuard as object), ...patch };
+    const cmErr = validateCampaignManagerEventPayload(auth, mergedCm as Record<string, unknown>, {
+      effectiveGroupIds: cmEff,
+    });
+    if (cmErr) return json({ error: cmErr }, 403);
     if (patch.created_by != null) return json({ error: 'Forbidden' }, 403);
   }
 

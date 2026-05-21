@@ -47,6 +47,8 @@ export async function validateAdminSession(
       assigned_state_ids: number[];
       assigned_group_ids: string[];
       assigned_party_ids: string[];
+      assigned_loksabha_ids: number[];
+      assigned_assembly_ids: number[];
     }
   | { ok: false; status: 401 | 403 }
 > {
@@ -55,25 +57,32 @@ export async function validateAdminSession(
     error,
   } = await supabase.auth.getUser();
   if (error || !user) return { ok: false, status: 401 };
-  const { role: rawRole, assigned_state_ids, assigned_group_ids, assigned_party_ids } =
-    await fetchProfileAccessForMiddleware(user.id, supabase);
+  const {
+    role: rawRole,
+    assigned_state_ids,
+    assigned_group_ids,
+    assigned_party_ids,
+    assigned_loksabha_ids,
+    assigned_assembly_ids,
+  } = await fetchProfileAccessForMiddleware(user.id, supabase);
   const normalized = normalizeProfileRole(rawRole);
   if (!normalized || !canAccessAdminPanel(normalized)) {
     return { ok: false, status: 403 };
   }
   const role = normalized as AdminRole;
+  const scopeFields = {
+    assigned_state_ids,
+    assigned_group_ids,
+    assigned_party_ids,
+    assigned_loksabha_ids,
+    assigned_assembly_ids,
+  };
+
   if (isAdminRole(role)) {
-    return { ok: true, user, role: 'admin', assigned_state_ids, assigned_group_ids, assigned_party_ids };
+    return { ok: true, user, role: 'admin', ...scopeFields };
   }
   if (isSuperAdminRole(role)) {
-    return {
-      ok: true,
-      user,
-      role: 'super_admin',
-      assigned_state_ids,
-      assigned_group_ids,
-      assigned_party_ids,
-    };
+    return { ok: true, user, role: 'super_admin', ...scopeFields };
   }
   if (isEditorRole(role)) {
     return {
@@ -83,6 +92,8 @@ export async function validateAdminSession(
       assigned_state_ids,
       assigned_group_ids: [],
       assigned_party_ids,
+      assigned_loksabha_ids: [],
+      assigned_assembly_ids: [],
     };
   }
   if (isModeratorRole(role)) {
@@ -93,6 +104,8 @@ export async function validateAdminSession(
       assigned_state_ids,
       assigned_group_ids: [],
       assigned_party_ids,
+      assigned_loksabha_ids: [],
+      assigned_assembly_ids: [],
     };
   }
   if (isCampaignManagerRole(role)) {
@@ -100,9 +113,11 @@ export async function validateAdminSession(
       ok: true,
       user,
       role: 'campaign_manager',
-      assigned_state_ids,
+      assigned_state_ids: [],
       assigned_group_ids,
       assigned_party_ids,
+      assigned_loksabha_ids,
+      assigned_assembly_ids,
     };
   }
   return { ok: false, status: 403 };
@@ -123,6 +138,8 @@ export type VerifiedAdminAuth = {
   assigned_state_ids: number[];
   assigned_group_ids: string[];
   assigned_party_ids: string[];
+  assigned_loksabha_ids: number[];
+  assigned_assembly_ids: number[];
 };
 
 /** Map validated admin session to full VerifiedAdminAuth shape. */
@@ -135,6 +152,8 @@ export function toVerifiedAdminAuth(
     assigned_state_ids: session.assigned_state_ids,
     assigned_group_ids: session.assigned_group_ids,
     assigned_party_ids: session.assigned_party_ids,
+    assigned_loksabha_ids: session.assigned_loksabha_ids,
+    assigned_assembly_ids: session.assigned_assembly_ids,
   };
 }
 
@@ -147,6 +166,8 @@ export function toRbacUser(
     | 'assigned_state_ids'
     | 'assigned_group_ids'
     | 'assigned_party_ids'
+    | 'assigned_loksabha_ids'
+    | 'assigned_assembly_ids'
   >
 ): RbacUser {
   return {
@@ -155,6 +176,8 @@ export function toRbacUser(
     assigned_state_ids: auth.assigned_state_ids,
     assigned_group_ids: auth.assigned_group_ids,
     assigned_party_ids: auth.assigned_party_ids,
+    assigned_loksabha_ids: auth.assigned_loksabha_ids,
+    assigned_assembly_ids: auth.assigned_assembly_ids,
   };
 }
 
@@ -166,6 +189,8 @@ export function toRbacActor(auth: VerifiedAdminAuth) {
     assigned_state_ids: auth.assigned_state_ids,
     assigned_group_ids: auth.assigned_group_ids,
     assigned_party_ids: auth.assigned_party_ids,
+    assigned_loksabha_ids: auth.assigned_loksabha_ids,
+    assigned_assembly_ids: auth.assigned_assembly_ids,
   };
 }
 

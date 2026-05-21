@@ -300,13 +300,17 @@ export function canUploadPost(actor: RbacActor, rawEvent: Record<string, unknown
       debug.mutation_permission = true;
       return { allowed: true, debug };
     }
-    const scope = canAccessScope(actor, event);
-    if (scope.allowed && event.group_ids.length > 0) {
-      debug.mutation_permission = true;
-      return { allowed: true, debug };
+    const hasConstituencyAnchor =
+      event.group_ids.length > 0 || event.loksabha_ids.length > 0 || event.assembly_ids.length > 0;
+    if (!hasConstituencyAnchor) {
+      debug.denied_reason = 'campaign_manager_event_missing_constituency_anchor';
+      logRbacDebug('canUploadPost', debug);
+      return recordDecision(actor, 'upload_post', { allowed: false, denied_reason: debug.denied_reason, debug }, 'events', String(rawEvent.id ?? ''));
     }
-    if (scope.allowed && event.group_ids.length === 0 && event.state_ids.length > 0) {
+    const scope = canAccessScope(actor, event);
+    if (scope.allowed) {
       debug.mutation_permission = true;
+      debug.visibility_match = true;
       return { allowed: true, debug };
     }
     debug.denied_reason = scope.denied_reason ?? 'campaign_manager_event_outside_scope';
