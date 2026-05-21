@@ -367,6 +367,7 @@ export async function PATCH(request: NextRequest) {
   }
 
   let assigned_party_ids = toPartySlugArr(body.assigned_party_ids);
+  if (role === 'editor') assigned_party_ids = [];
   if (role !== 'moderator' && role !== 'editor' && role !== 'campaign_manager') assigned_party_ids = [];
 
   const admin = createServiceRoleClient();

@@ -22,6 +22,10 @@ import {
   validateEditorEventPayload,
 } from '@/lib/event-access';
 import { validateModeratorEventPayload } from '@/lib/rbac/moderator-scope';
+import {
+  eventVisibilityUserFromAuth,
+  resolveEditorAssignmentScope,
+} from '@/lib/rbac/editor-scope';
 import { logEditorTargetingDebug } from '@/lib/admin/editor-event-targeting';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
@@ -202,12 +206,7 @@ export async function GET(request: NextRequest) {
   const fullAdmin = isEventsFullAdmin(auth);
   if (isAdmin(auth)) assertAdminRole(auth);
 
-  const visibilityUser = {
-    id: auth.user.id,
-    role: auth.role,
-    assigned_state_ids: auth.assigned_state_ids,
-    assigned_party_ids: auth.assigned_party_ids,
-  };
+  const visibilityUser = eventVisibilityUserFromAuth(auth);
 
   const id = (request.nextUrl.searchParams.get('id') ?? '').trim();
   const name = (request.nextUrl.searchParams.get('name') ?? '').trim();
@@ -385,11 +384,13 @@ export async function POST(request: NextRequest) {
     return json({ error: 'Invalid JSON body' }, 400);
   }
 
+  const admin = createServiceRoleClient();
+  if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
+
+  let editorAssignmentScope = { assignedStateIds: auth.assigned_state_ids, assignedPartyIds: auth.assigned_party_ids };
   if (isEditor(auth)) {
-    const editorErr = validateEditorEventPayload(payload, 'create', {
-      assignedStateIds: auth.assigned_state_ids,
-      assignedPartyIds: auth.assigned_party_ids,
-    });
+    editorAssignmentScope = await resolveEditorAssignmentScope(admin, auth.user.id, auth);
+    const editorErr = validateEditorEventPayload(payload, 'create', editorAssignmentScope);
     if (editorErr) return json({ error: editorErr }, 403);
     const stateScope = toNumArray(payload.state_id);
     const partyScope = toNumArray(payload.party_id);
@@ -415,8 +416,6 @@ export async function POST(request: NextRequest) {
     applyDashboardCategoryGlobalEventFields(payload);
   }
 
-  const admin = createServiceRoleClient();
-  if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
   let cmEffectiveGroupIds: string[] | undefined;
   {
     const { error: cmErr, ids: cmEff } = await resolveCmEffectiveGroupsOrError(admin, auth);
@@ -573,10 +572,8 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (isEditor(auth)) {
-    const editorErr = validateEditorEventPayload(patch, 'patch', {
-      assignedStateIds: auth.assigned_state_ids,
-      assignedPartyIds: auth.assigned_party_ids,
-    });
+    const editorScope = await resolveEditorAssignmentScope(admin, auth.user.id, auth);
+    const editorErr = validateEditorEventPayload(patch, 'patch', editorScope);
     if (editorErr) return json({ error: editorErr }, 403);
     if (
       Object.prototype.hasOwnProperty.call(patch, 'party_id') ||

@@ -63,17 +63,23 @@ describe('permission-engine', () => {
     expect(canDeleteEvent(editorActor, other).allowed).toBe(false);
   });
 
-  it('editor uses unified visibility: state+party published or global dashboard feed', () => {
-    const otherPublished = {
-      created_by: 'other',
-      created_role: 'moderator',
-      status: 'published',
-      state_id: [10],
-      party: ['bjp'],
+  it('editor read scope: own events, global feed only (no cross-role state browse)', () => {
+    const readActor = {
+      ...editorActor,
+      assigned_state_ids: [] as number[],
+      assigned_party_ids: [] as string[],
     };
-    expect(canViewEvent(editorActor, otherPublished).allowed).toBe(true);
     expect(
-      canViewEvent(editorActor, {
+      canViewEvent(readActor, {
+        created_by: 'other',
+        created_role: 'moderator',
+        status: 'published',
+        state_id: [10],
+        party: ['bjp'],
+      }).allowed
+    ).toBe(false);
+    expect(
+      canViewEvent(readActor, {
         created_by: 'other',
         created_role: 'moderator',
         status: 'published',
@@ -83,14 +89,12 @@ describe('permission-engine', () => {
       }).allowed
     ).toBe(true);
     expect(
-      canViewEvent(editorActor, {
-        created_by: 'other',
-        created_role: 'moderator',
-        status: 'published',
+      canViewEvent(readActor, {
+        created_by: 'ed-1',
+        status: 'draft',
         state_id: [99],
-        party: ['bjp'],
       }).allowed
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('denies moderator editing others events', () => {

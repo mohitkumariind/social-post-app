@@ -284,7 +284,12 @@ export function canPerformMutation(
   if (action === 'profiles.bulk_tags') {
     if (isElevatedDashboardRole(user.role) || isAdminRole(user.role)) return allow();
     if (user.role === 'moderator' || user.role === 'campaign_manager') return allow();
+    if (user.role === 'editor') return deny('Forbidden: editor cannot bulk-update profile tags');
     return deny('Forbidden: cannot bulk-update profile tags');
+  }
+
+  if (user.role === 'editor' && action === 'groups.create') {
+    return deny('Forbidden: editor cannot create groups');
   }
 
   if (action === 'profiles.delete') {
@@ -411,6 +416,12 @@ export function canPerformMutation(
   }
 
   if (user.role === 'editor') {
+    if (
+      (action === 'events.create' || action === 'events.update') &&
+      isActiveEventDashboardCategory(effective.dashboard_category)
+    ) {
+      return deny('Forbidden: editor cannot create global dashboard events');
+    }
     if (action === 'events.create') return allow();
     if ((action === 'events.update' || action === 'events.delete') && eventRow) {
       const d = action === 'events.delete' ? canDeleteEvent(actor, eventRow) : canEditEvent(actor, eventRow);

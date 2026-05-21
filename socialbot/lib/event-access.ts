@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
 import { toRbacActor } from '@/lib/admin-gate';
+import { toRbacActorForEventRead } from '@/lib/rbac/editor-scope';
 import { isSuperAdmin } from '@/lib/permissions';
 import { isAdminRole } from '@/lib/rbac/dashboard-permissions';
 import {
@@ -34,7 +35,7 @@ export function assertEventRowReadable(
   auth: VerifiedAdminAuth,
   row: Record<string, unknown>
 ): void {
-  const decision = canViewEvent(toRbacActor(auth), row);
+  const decision = canViewEvent(toRbacActorForEventRead(auth), row);
   if (!decision.allowed) {
     throw new RbacError(decision.denied_reason ?? 'Forbidden: event not visible', 403);
   }
@@ -126,7 +127,10 @@ export type EditorEventScope = {
   assignedPartyIds?: string[];
 };
 
-/** Editor: require ≥1 state; optional party + Lok Sabha/Assembly; forbid global/group publish fields. */
+/**
+ * Editor mutations: require ≥1 state on payload; optional profile state cap when assigned;
+ * Lok Sabha/Assembly allowed on payload only; forbid global/group publish fields.
+ */
 export function validateEditorEventPayload(
   payload: Record<string, unknown>,
   mode: 'create' | 'patch',
@@ -149,6 +153,7 @@ export function validateEditorEventPayload(
     'target_groups',
     'profile_ids',
     'group_id',
+    'group_ids',
     'scheduled_at',
     'published_at',
     'published_by',
