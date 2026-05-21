@@ -30,6 +30,7 @@ function toNotificationAuth(
     role: auth.role,
     assigned_state_ids: auth.assigned_state_ids,
     assigned_group_ids: auth.assigned_group_ids,
+    assigned_party_ids: auth.assigned_party_ids,
   };
 }
 

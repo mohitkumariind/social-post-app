@@ -19,6 +19,8 @@ export type RbacActor = {
   assigned_party_ids: string[];
   assigned_loksabha_ids?: number[];
   assigned_assembly_ids?: number[];
+  /** Resolved CM group ids when membership expansion is applied. */
+  effective_group_ids?: string[];
 };
 
 export type NormalizedEventResource = CanonicalScope & {

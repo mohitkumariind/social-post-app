@@ -241,7 +241,7 @@ export async function assertPostEventAccessibleForPostUpload(
   if (error) return { ok: false, error: error.message, reason: 'event_lookup_error' };
   if (!data) return { ok: false, error: 'Event not found', reason: 'event_not_found' };
 
-  const row = { ...(data as Record<string, unknown>) };
+  const row = { ...(data as unknown as Record<string, unknown>) };
   let ownerStr = row.created_by != null ? String(row.created_by).trim() : '';
 
   if (!ownerStr && !isAdminRole(auth.role) && !isSuperAdmin(auth.role)) {

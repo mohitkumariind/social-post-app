@@ -13,7 +13,6 @@ import {
   resolveAllowedProfileIdsForCampaignManager,
   resolveEffectiveGroupIdsForCampaignManager,
 } from '@/lib/rbac/scoped-query-builder';
-import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { normalizeProfileRole } from '@/lib/profile-roles';
 import { isElevatedDashboardRole } from '@/lib/rbac/dashboard-permissions';

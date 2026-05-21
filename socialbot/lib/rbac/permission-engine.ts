@@ -22,8 +22,28 @@ export type { CanonicalScope, NormalizedEventResource, PermissionDecision, RbacA
 export { normalizeScope } from '@/lib/rbac/normalize-scope';
 export { getCachedNormalizedScope } from '@/lib/rbac/scope-cache';
 
-function actorScope(actor: RbacActor) {
-  return getCachedNormalizedScope(actor);
+function actorScope(
+  actor: Pick<
+    RbacActor,
+    | 'role'
+    | 'assigned_state_ids'
+    | 'assigned_group_ids'
+    | 'assigned_party_ids'
+    | 'assigned_loksabha_ids'
+    | 'assigned_assembly_ids'
+    | 'effective_group_ids'
+  > & { id?: string }
+) {
+  return getCachedNormalizedScope({
+    id: actor.id ?? '',
+    role: actor.role,
+    assigned_state_ids: actor.assigned_state_ids,
+    assigned_group_ids: actor.assigned_group_ids,
+    assigned_party_ids: actor.assigned_party_ids,
+    assigned_loksabha_ids: actor.assigned_loksabha_ids,
+    assigned_assembly_ids: actor.assigned_assembly_ids,
+    effective_group_ids: actor.effective_group_ids,
+  });
 }
 
 /** Read-path denials only — allows are not logged to avoid audit noise. Mutations use auditRbacMutation (allow + deny). */
@@ -110,7 +130,16 @@ export function eventVisibilityMatch(resource: NormalizedEventResource, actorSco
  * Empty resource dimension = no extra restriction inside actor scope (not global).
  */
 export function canAccessScope(
-  actor: Pick<RbacActor, 'role' | 'assigned_state_ids' | 'assigned_group_ids' | 'assigned_party_ids' | 'assigned_loksabha_ids' | 'assigned_assembly_ids'>,
+  actor: Pick<
+    RbacActor,
+    | 'role'
+    | 'assigned_state_ids'
+    | 'assigned_group_ids'
+    | 'assigned_party_ids'
+    | 'assigned_loksabha_ids'
+    | 'assigned_assembly_ids'
+    | 'effective_group_ids'
+  > & { id?: string },
   resourceScope: CanonicalScope | Record<string, unknown>
 ): PermissionDecision {
   const normalized_scope = actorScope(actor);

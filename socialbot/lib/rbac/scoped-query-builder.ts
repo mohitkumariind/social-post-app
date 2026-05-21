@@ -208,7 +208,12 @@ export function buildScopedAnalyticsQuery(
   }
 
   if (resourceType === 'profiles') {
-    if (role === 'moderator') return baseQuery.not('assigned_state_ids', 'is', null).neq('assigned_state_ids', '{}').containedBy('assigned_state_ids', canonical.stateIds);
+    if (user.role === 'moderator') {
+      return baseQuery
+        .not('assigned_state_ids', 'is', null)
+        .neq('assigned_state_ids', '{}')
+        .containedBy('assigned_state_ids', canonical.stateIds);
+    }
     const allowedRaw = Array.isArray(ctx.allowed_profile_ids) ? ctx.allowed_profile_ids.map((x) => String(x).trim()).filter(Boolean) : [];
     const allowed = toUuidList(allowedRaw);
     const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);

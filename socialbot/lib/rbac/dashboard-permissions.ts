@@ -76,8 +76,6 @@ const ROLE_MODULES: Record<AdminPanelRole, readonly DashboardModuleId[]> = {
     'twitter_campaign',
   ],
   editor: ['events'],
-  worker: [],
-  user: [],
 };
 
 function normalizeRole(role: string | null | undefined): AdminPanelRole | null {
@@ -87,9 +85,7 @@ function normalizeRole(role: string | null | undefined): AdminPanelRole | null {
     r === 'admin' ||
     r === 'moderator' ||
     r === 'campaign_manager' ||
-    r === 'editor' ||
-    r === 'worker' ||
-    r === 'user'
+    r === 'editor'
   ) {
     return r as AdminPanelRole;
   }

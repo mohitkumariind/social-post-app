@@ -24,7 +24,7 @@ const isMissingColumnErr = (err: { message?: string } | null | undefined, column
   return msg.includes(columnName.toLowerCase()) && (msg.includes('does not exist') || msg.includes('column'));
 };
 
-type AdminAuth = NonNullable<Awaited<ReturnType<typeof validateAdminSession>> extends { ok: true } ? Awaited<ReturnType<typeof validateAdminSession>> : never>;
+type AdminAuth = Extract<Awaited<ReturnType<typeof validateAdminSession>>, { ok: true }>;
 
 async function requireAdminSessionOrJson() {
   const supabase = await createSupabaseServerClient();

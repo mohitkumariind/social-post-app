@@ -10,9 +10,9 @@ import {
   canEditEvent,
   canTargetAudience,
   canUploadPost,
-  normalizeResourceScope,
   type RbacActor,
 } from '@/lib/rbac/permission-engine';
+import { normalizeResourceScope } from '@/lib/rbac/normalize-scope';
 import { isAdminRole, isElevatedDashboardRole } from '@/lib/rbac/dashboard-permissions';
 import { normalizeActorId } from '@/lib/rbac/require';
 import { auditRbacMutation } from '@/lib/rbac/permission-audit';
@@ -207,7 +207,7 @@ function effectiveResourceScope(
 export function canPerformMutation(
   user: UnifiedUser,
   action: MutationAction,
-  resource: UnifiedResource | null = null,
+  resource: UnifiedResource | Record<string, unknown> | null = null,
   payload: Record<string, unknown> | null = null,
   audit?: { resourceType: string; resourceId?: string | null; resourceName?: string | null }
 ): MutationDecision {

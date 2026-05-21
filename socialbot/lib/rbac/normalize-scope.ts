@@ -55,7 +55,8 @@ function parsePartySlugs(v: unknown): string[] {
 function slugToNumericPartyId(slug: string): number | null {
   const key = slug.trim().toLowerCase();
   const row = PARTIES_DATA.find((p) => p.id.toLowerCase() === key);
-  if (row?.numericId != null && Number.isFinite(row.numericId)) return row.numericId;
+  const numericId = (row as { numericId?: number } | undefined)?.numericId;
+  if (numericId != null && Number.isFinite(numericId)) return numericId;
   return null;
 }
 

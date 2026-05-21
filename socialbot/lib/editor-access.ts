@@ -6,9 +6,9 @@ export { assertNotEditor, applyEditorEventCreatePayload } from '@/lib/rbac/edito
 export const EDITOR_ALLOWED_ADMIN_PATH_PREFIXES = ['/admin/events'] as const;
 
 export function isEditorAllowedAdminPath(pathname: string): boolean {
-  return canAccessDashboardPath({ role: 'editor', assigned_state_ids: [], assigned_group_ids: [], assigned_party_ids: [], id: '' }, pathname);
+  return canAccessDashboardPath({ role: 'editor' }, pathname);
 }
 
 export function isEditorAllowedAdminApiPath(pathname: string, method: string): boolean {
-  return canAccessDashboardApi({ role: 'editor', assigned_state_ids: [], assigned_group_ids: [], assigned_party_ids: [], id: '' }, pathname, method);
+  return canAccessDashboardApi({ role: 'editor' }, pathname, method);
 }

@@ -125,7 +125,7 @@ export async function PUT(request: NextRequest) {
   const updateDecision = canPerformMutation(
     mutationUser,
     'banners.update',
-    { id },
+    null,
     norm.value as Record<string, unknown>,
     { resourceType: 'dashboard_banners', resourceId: id }
   );
@@ -215,7 +215,7 @@ export async function DELETE(request: NextRequest) {
   const deleteDecision = canPerformMutation(
     mutationUser,
     'banners.delete',
-    { id },
+    null,
     null,
     { resourceType: 'dashboard_banners', resourceId: id }
   );

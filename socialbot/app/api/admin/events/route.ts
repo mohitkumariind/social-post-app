@@ -557,15 +557,15 @@ export async function PATCH(request: NextRequest) {
   if (!evForGuard) return json({ error: 'Not found' }, 404);
 
   try {
-    assertEventRowReadable(auth, evForGuard as Record<string, unknown>);
-    assertEventRowEditable(auth, evForGuard as Record<string, unknown>);
+    assertEventRowReadable(auth, evForGuard as unknown as Record<string, unknown>);
+    assertEventRowEditable(auth, evForGuard as unknown as Record<string, unknown>);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
   }
 
   try {
-    assertEventTargetingAllowed(auth, { ...evForGuard, ...patch });
+    assertEventTargetingAllowed(auth, { ...(evForGuard as object), ...patch });
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -614,7 +614,7 @@ export async function PATCH(request: NextRequest) {
     const decision = canPerformMutation(
       rbacUserForMutation(auth, cmEff) as any,
       'events.update',
-      evForGuard as Record<string, unknown>,
+      evForGuard as unknown as Record<string, unknown>,
       mergedForRbac as any,
       { resourceType: 'events', resourceId: id, resourceName: String((evForGuard as any)?.name ?? '') }
     );

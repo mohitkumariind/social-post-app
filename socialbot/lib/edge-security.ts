@@ -92,17 +92,7 @@ export function requireAdminApiRequest(input: {
       reason: 'role-not-allowed',
     };
   }
-  const allowed = canAccessDashboardApi(
-    {
-      id: input.userId ?? '',
-      role,
-      assigned_state_ids: input.assigned_state_ids ?? [],
-      assigned_group_ids: input.assigned_group_ids ?? [],
-      assigned_party_ids: input.assigned_party_ids ?? [],
-    },
-    String(input.pathname ?? ''),
-    String(input.method ?? 'GET')
-  );
+  const allowed = canAccessDashboardApi({ role }, String(input.pathname ?? ''), String(input.method ?? 'GET'));
   if (!allowed) {
     return {
       ok: false,
