@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, isElevatedDashboardRole, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireRole } from '@/lib/rbac/require';
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
     .order('created_at', { ascending: false })
     .limit(limit) as any;
   if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
-  if (auth.role !== 'admin') q = q.eq('created_by', auth.user.id);
+  if (!isElevatedDashboardRole(auth.role)) q = q.eq('created_by', auth.user.id);
   const { data, error } = await q;
   if (error) return json({ error: error.message }, 500);
   const rows = (data ?? []) as any[];
@@ -118,7 +118,7 @@ export const PATCH = withAudit(
     const before = previous_data as any;
     if (!before || before.deleted_at != null) return json({ error: 'Not found' }, 404);
     if (
-      auth.role !== 'admin' &&
+      !isElevatedDashboardRole(auth.role) &&
       !canAccessResource(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
         { created_by: before.created_by },
@@ -182,7 +182,7 @@ export const DELETE = withAudit(
     const before = previous_data as any;
     if (!before || before.deleted_at != null) return json({ ok: true, alreadyDeleted: true });
     if (
-      auth.role !== 'admin' &&
+      !isElevatedDashboardRole(auth.role) &&
       !canAccessResource(
         { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
         { created_by: before.created_by },

@@ -1,17 +1,26 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
-import { isAdmin, isCampaignManager, isEditor, isModerator, isSuperAdmin } from '@/lib/permissions';
-import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { toRbacActor } from '@/lib/admin-gate';
+import { isSuperAdmin } from '@/lib/permissions';
+import { isAdminRole } from '@/lib/rbac/dashboard-permissions';
+import {
+  canEditEvent,
+  canTargetAudience,
+  canUploadPost,
+  canViewEvent,
+  isGlobalTargeting,
+  normalizeResourceScope,
+} from '@/lib/rbac';
 import { RbacError } from '@/lib/rbac/require';
 import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 import { validateEditorPartyScope } from '@/lib/admin/editor-party-scope';
 import { finalizeEditorEventTargetingPayload } from '@/lib/admin/editor-event-targeting';
 
 export function isEventsFullAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
-  return isAdmin(auth.role) || isSuperAdmin(auth.role);
+  return isAdminRole(auth.role) || isSuperAdmin(auth.role);
 }
 
-/** List/detail scope: admin sees all; everyone else sees only own events. */
+/** @deprecated Use applyEventsListQueryScope from event-list-scope for listings. */
 export function applyEventsOwnershipScope<T extends { eq: (col: string, val: string) => T }>(
   auth: Pick<VerifiedAdminAuth, 'role' | 'user'>,
   query: T
@@ -21,13 +30,39 @@ export function applyEventsOwnershipScope<T extends { eq: (col: string, val: str
 }
 
 export function assertEventRowReadable(
-  auth: Pick<VerifiedAdminAuth, 'role' | 'user'>,
-  row: { created_by?: string | null }
+  auth: VerifiedAdminAuth,
+  row: Record<string, unknown>
 ): void {
-  if (isEventsFullAdmin(auth)) return;
-  const owner = row.created_by != null ? String(row.created_by).trim() : '';
-  if (!owner || owner !== auth.user.id) {
-    throw new RbacError('Forbidden: event not owned by you', 403);
+  const decision = canViewEvent(toRbacActor(auth), row);
+  if (!decision.allowed) {
+    throw new RbacError(decision.denied_reason ?? 'Forbidden: event not visible', 403);
+  }
+}
+
+export function assertEventRowEditable(
+  auth: VerifiedAdminAuth,
+  row: Record<string, unknown>
+): void {
+  const decision = canEditEvent(toRbacActor(auth), row);
+  if (!decision.allowed) {
+    throw new RbacError(decision.denied_reason ?? 'Forbidden: cannot edit event', 403);
+  }
+}
+
+export function assertEventTargetingAllowed(
+  auth: VerifiedAdminAuth,
+  payload: Record<string, unknown>
+): void {
+  const scope = normalizeResourceScope(payload);
+  const decision = canTargetAudience(toRbacActor(auth), {
+    ...scope,
+    dashboard_category: payload.dashboard_category,
+  });
+  if (!decision.allowed) {
+    throw new RbacError(decision.denied_reason ?? 'Forbidden: targeting not allowed', 403);
+  }
+  if (!isEventsFullAdmin(auth) && isGlobalTargeting(scope, { dashboard_category: payload.dashboard_category })) {
+    throw new RbacError('Forbidden: global targeting is admin-only', 403);
   }
 }
 
@@ -188,7 +223,7 @@ export function logPostEventAccess(phase: string, detail: Record<string, unknown
 export async function assertPostEventAccessibleForPostUpload(
   admin: SupabaseClient,
   eventId: string,
-  auth: Pick<VerifiedAdminAuth, 'role' | 'user' | 'assigned_state_ids' | 'assigned_group_ids'>
+  auth: VerifiedAdminAuth
 ): Promise<PostEventAccessOk | PostEventAccessFail> {
   const id = String(eventId ?? '').trim();
   const actorId = String(auth.user.id).trim();
@@ -196,46 +231,20 @@ export async function assertPostEventAccessibleForPostUpload(
     return { ok: false, error: 'event_id is required', reason: 'missing_event_id' };
   }
 
-  if (isAdmin(auth.role) || isSuperAdmin(auth.role)) {
-    const { data, error } = await admin.from('events').select('id, created_by, name').eq('id', id).maybeSingle();
-    if (error) return { ok: false, error: error.message, reason: 'event_lookup_error' };
-    if (!data) return { ok: false, error: 'Event not found', reason: 'event_not_found' };
-    const owner = (data as { created_by?: string | null }).created_by;
-    logPostEventAccess('admin_allow', {
-      auth_role: auth.role,
-      event_id: id,
-      event_created_by: owner ?? null,
-      ownership_match: true,
-      scope_match: true,
-    });
-    return {
-      ok: true,
-      event: {
-        id: String((data as { id: string }).id),
-        created_by: owner != null ? String(owner).trim() : null,
-        name: String((data as { name?: string }).name ?? ''),
-      },
-      ownership_match: true,
-      scope_match: true,
-      access_reason: 'admin_unrestricted',
-    };
-  }
-
-  let selectCols = 'id, created_by, name, state_id, target_groups';
+  let selectCols =
+    'id, created_by, created_role, name, status, published_at, state_id, party_id, party, target_groups, loksabha_id, assembly_id';
   let { data, error } = await admin.from('events').select(selectCols).eq('id', id).maybeSingle();
   if (error && isMissingCreatedByColumn(error)) {
-    selectCols = 'id, name, state_id, target_groups';
+    selectCols = 'id, name, status, state_id, party_id, party, target_groups, loksabha_id, assembly_id';
     ({ data, error } = await admin.from('events').select(selectCols).eq('id', id).maybeSingle());
   }
   if (error) return { ok: false, error: error.message, reason: 'event_lookup_error' };
   if (!data) return { ok: false, error: 'Event not found', reason: 'event_not_found' };
 
-  let ownerStr =
-    (data as { created_by?: string | null }).created_by != null
-      ? String((data as { created_by?: string | null }).created_by).trim()
-      : '';
+  const row = { ...(data as Record<string, unknown>) };
+  let ownerStr = row.created_by != null ? String(row.created_by).trim() : '';
 
-  if (!ownerStr) {
+  if (!ownerStr && !isAdminRole(auth.role) && !isSuperAdmin(auth.role)) {
     const { error: backfillErr } = await admin
       .from('events')
       .update({ created_by: actorId })
@@ -244,133 +253,45 @@ export async function assertPostEventAccessibleForPostUpload(
     if (!backfillErr) ownerStr = actorId;
     else if (isMissingCreatedByColumn(backfillErr)) ownerStr = actorId;
     else return { ok: false, error: backfillErr.message, reason: 'created_by_backfill_failed' };
+    row.created_by = ownerStr;
   }
 
-  const ownership_match = ownerStr.length > 0 && ownerStr === actorId;
-  const rbacUser = {
-    id: auth.user.id,
-    role: auth.role,
-    assigned_state_ids: auth.assigned_state_ids,
-    assigned_group_ids: auth.assigned_group_ids ?? [],
-  };
+  const decision = canUploadPost(toRbacActor(auth), row);
+  const dbg = decision.debug;
 
-  const baseLog = {
+  logPostEventAccess(decision.allowed ? 'allow' : 'denied', {
     auth_role: auth.role,
     event_id: id,
     event_created_by: ownerStr || null,
-    ownership_match,
+    ownership_match: dbg.ownership_match,
+    visibility_match: dbg.visibility_match,
+    scope_match: dbg.mutation_permission,
+    normalized_scope: dbg.normalized_scope,
+    denied_reason: decision.denied_reason,
+  });
+
+  if (!decision.allowed) {
+    return {
+      ok: false,
+      error: decision.denied_reason ?? 'Forbidden: cannot upload to this event',
+      reason: decision.denied_reason ?? 'upload_denied',
+      event_created_by: ownerStr || null,
+      ownership_match: dbg.ownership_match,
+      scope_match: dbg.mutation_permission,
+    };
+  }
+
+  return {
+    ok: true,
+    event: {
+      id,
+      created_by: ownerStr || null,
+      name: String(row.name ?? ''),
+    },
+    ownership_match: dbg.ownership_match,
+    scope_match: dbg.mutation_permission,
+    access_reason: dbg.ownership_match ? 'ownership' : 'scope_upload',
   };
-
-  if (isEditor(auth.role)) {
-    if (!ownership_match) {
-      logPostEventAccess('editor_denied', { ...baseLog, scope_match: false, reason: 'editor_event_not_owned' });
-      return {
-        ok: false,
-        error: 'Forbidden: post must belong to an event you created',
-        reason: 'editor_event_not_owned',
-        event_created_by: ownerStr || null,
-        ownership_match: false,
-        scope_match: false,
-      };
-    }
-    logPostEventAccess('editor_allow', { ...baseLog, scope_match: true, access_reason: 'editor_ownership' });
-    return {
-      ok: true,
-      event: { id, created_by: ownerStr, name: String((data as { name?: string }).name ?? '') },
-      ownership_match: true,
-      scope_match: true,
-      access_reason: 'editor_ownership',
-    };
-  }
-
-  if (isModerator(auth.role)) {
-    if (ownership_match) {
-      logPostEventAccess('moderator_allow', { ...baseLog, scope_match: true, access_reason: 'moderator_ownership' });
-      return {
-        ok: true,
-        event: { id, created_by: ownerStr, name: String((data as { name?: string }).name ?? '') },
-        ownership_match: true,
-        scope_match: true,
-        access_reason: 'moderator_ownership',
-      };
-    }
-    const scope_match = canAccessResource(
-      rbacUser,
-      { state_ids: (data as { state_id?: unknown }).state_id },
-      { resourceType: 'events', allowOwnershipFallback: false, audit: { resourceType: 'events', action: 'posts.upload.event.scope' } }
-    );
-    if (scope_match) {
-      logPostEventAccess('moderator_allow', { ...baseLog, scope_match: true, access_reason: 'moderator_state_scope' });
-      return {
-        ok: true,
-        event: { id, created_by: ownerStr, name: String((data as { name?: string }).name ?? '') },
-        ownership_match: false,
-        scope_match: true,
-        access_reason: 'moderator_state_scope',
-      };
-    }
-    logPostEventAccess('moderator_denied', { ...baseLog, scope_match: false, reason: 'moderator_event_scope_denied' });
-    return {
-      ok: false,
-      error: 'Forbidden: event outside moderator assigned states',
-      reason: 'moderator_event_scope_denied',
-      event_created_by: ownerStr || null,
-      ownership_match: false,
-      scope_match: false,
-    };
-  }
-
-  if (isCampaignManager(auth.role)) {
-    if (ownership_match) {
-      logPostEventAccess('campaign_manager_allow', {
-        ...baseLog,
-        scope_match: true,
-        access_reason: 'campaign_manager_ownership',
-      });
-      return {
-        ok: true,
-        event: { id, created_by: ownerStr, name: String((data as { name?: string }).name ?? '') },
-        ownership_match: true,
-        scope_match: true,
-        access_reason: 'campaign_manager_ownership',
-      };
-    }
-    const scope_match = canAccessResource(
-      rbacUser,
-      { group_ids: (data as { target_groups?: unknown }).target_groups, created_by: ownerStr },
-      { resourceType: 'events', allowOwnershipFallback: false, audit: { resourceType: 'events', action: 'posts.upload.event.scope' } }
-    );
-    if (scope_match) {
-      logPostEventAccess('campaign_manager_allow', {
-        ...baseLog,
-        scope_match: true,
-        access_reason: 'campaign_manager_group_scope',
-      });
-      return {
-        ok: true,
-        event: { id, created_by: ownerStr, name: String((data as { name?: string }).name ?? '') },
-        ownership_match: false,
-        scope_match: true,
-        access_reason: 'campaign_manager_group_scope',
-      };
-    }
-    logPostEventAccess('campaign_manager_denied', {
-      ...baseLog,
-      scope_match: false,
-      reason: 'campaign_manager_event_scope_denied',
-    });
-    return {
-      ok: false,
-      error: 'Forbidden: event outside campaign_manager assigned groups',
-      reason: 'campaign_manager_event_scope_denied',
-      event_created_by: ownerStr || null,
-      ownership_match: false,
-      scope_match: false,
-    };
-  }
-
-  logPostEventAccess('denied', { ...baseLog, reason: 'role_not_allowed_for_post_upload' });
-  return { ok: false, error: 'Forbidden: role cannot upload posts for this event', reason: 'role_not_allowed' };
 }
 
 export async function assertPostEventOwnedByActor(

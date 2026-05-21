@@ -4,12 +4,8 @@ import Link from 'next/link';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { PARTIES_DATA } from '@/lib/constants';
 import type { AdminLeaderboardKpis, AdminLeaderboardRow } from '@/lib/admin/leaderboardService';
-
-type Viewer = {
-  role: 'admin' | 'moderator' | 'campaign_manager';
-  assigned_state_ids: number[];
-  assigned_group_ids: string[];
-};
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
+import { logDashboardUiRbac } from '@/lib/rbac/dashboard-ui-log';
 
 type GroupOpt = { id: number; name: string };
 type StateOpt = { state_id: number; state: string };
@@ -25,7 +21,6 @@ function addDays(d: Date, n: number): Date {
 }
 
 export default function LeaderboardManagementPage() {
-  const [viewer, setViewer] = useState<Viewer | null>(null);
   const [states, setStates] = useState<StateOpt[]>([]);
   const [groups, setGroups] = useState<GroupOpt[]>([]);
   const [search, setSearch] = useState('');
@@ -41,9 +36,23 @@ export default function LeaderboardManagementPage() {
   const [error, setError] = useState<string | null>(null);
   const limit = 50;
 
-  const isAdmin = viewer?.role === 'admin';
-  const isModerator = viewer?.role === 'moderator';
-  const isCm = viewer?.role === 'campaign_manager';
+  const { ready: accessReady, access: dashboardAccess } = useDashboardAccess();
+  const canAccessLeaderboard = dashboardAccess?.permissions.canAccessModule('leaderboard') ?? false;
+  const filterVisibility = dashboardAccess?.filter_visibility ?? null;
+  const canUseGlobal = filterVisibility?.canUseGlobalFilters ?? false;
+  const showStatePartyFilters = filterVisibility?.showStateFilter ?? false;
+  const showGroupFilter = filterVisibility?.showGroupFilter ?? false;
+  const assignedStateIds = dashboardAccess?.actor.assigned_state_ids ?? [];
+
+  useEffect(() => {
+    if (!dashboardAccess) return;
+    logDashboardUiRbac('leaderboard_page', {
+      role: dashboardAccess.actor.role,
+      allowed_modules: dashboardAccess.allowed_modules,
+      hidden_modules: dashboardAccess.hidden_modules,
+      filter_visibility: dashboardAccess.filter_visibility,
+    });
+  }, [dashboardAccess]);
 
   const contextLabel = useMemo(() => {
     const parts: string[] = [];
@@ -56,25 +65,12 @@ export default function LeaderboardManagementPage() {
   }, [party, stateId, groupId, dateFrom, dateTo, search]);
 
   const loadMeta = useCallback(async () => {
-    const [vr, st, gr] = await Promise.all([
-      fetch('/api/admin/viewer', { credentials: 'same-origin' }).then((r) => r.json().catch(() => ({}))),
-      fetch('/api/admin/leaderboard?meta=states', { credentials: 'same-origin' }).then((r) => r.json().catch(() => ({}))),
+    const [st, gr] = await Promise.all([
+      fetch('/api/admin/leaderboard?meta=states', { credentials: 'same-origin' }).then((r) =>
+        r.json().catch(() => ({}))
+      ),
       fetch('/api/admin/groups', { credentials: 'same-origin' }).then((r) => r.json().catch(() => ({}))),
     ]);
-    const role = vr?.role;
-    if (role === 'admin' || role === 'moderator' || role === 'campaign_manager') {
-      setViewer({
-        role,
-        assigned_state_ids: Array.isArray(vr.assigned_state_ids)
-          ? vr.assigned_state_ids.map((x: unknown) => Number(x)).filter((n: number) => Number.isFinite(n))
-          : [],
-        assigned_group_ids: Array.isArray(vr.assigned_group_ids)
-          ? vr.assigned_group_ids.map((x: unknown) => String(x ?? '').trim()).filter(Boolean)
-          : [],
-      });
-    } else {
-      setViewer(null);
-    }
     const sl = Array.isArray(st?.states) ? (st.states as StateOpt[]) : [];
     setStates(sl);
     const gl = Array.isArray(gr?.groups)
@@ -96,11 +92,15 @@ export default function LeaderboardManagementPage() {
         sp.set('offset', String(nextOffset));
         sp.set('limit', String(limit));
         if (search.trim()) sp.set('search', search.trim());
-        if (isAdmin) {
+        if (canUseGlobal) {
           if (stateId) sp.set('state_id', stateId);
           if (party) sp.set('party', party);
+          if (groupId) sp.set('group_id', groupId);
+        } else if (showGroupFilter && groupId) {
+          sp.set('group_id', groupId);
         }
-        if ((isAdmin || isCm) && groupId) sp.set('group_id', groupId);
+        if (showStatePartyFilters && stateId) sp.set('state_id', stateId);
+        if (showStatePartyFilters && party) sp.set('party', party);
         const res = await fetch(`/api/admin/leaderboard?${sp.toString()}`, { credentials: 'same-origin' });
         const d = (await res.json().catch(() => ({}))) as {
           error?: string;
@@ -110,30 +110,37 @@ export default function LeaderboardManagementPage() {
         };
         if (!res.ok) throw new Error(d?.error || 'Failed to load leaderboard');
         if (replace) {
+          setRows(d.rows ?? []);
           setKpis(d.kpis ?? null);
-          setTotalMatching(Number(d.total_matching ?? 0));
+          setTotalMatching(d.total_matching ?? 0);
+        } else {
+          setRows((prev) => [...prev, ...(d.rows ?? [])]);
         }
-        const nextRows = Array.isArray(d.rows) ? d.rows : [];
-        setRows((prev) => (replace ? nextRows : [...prev, ...nextRows]));
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to load');
+        setError(e instanceof Error ? e.message : 'Failed to load leaderboard');
+        if (replace) {
+          setRows([]);
+          setKpis(null);
+          setTotalMatching(0);
+        }
       } finally {
         setLoading(false);
       }
     },
-    [dateFrom, dateTo, search, stateId, party, groupId, isAdmin, isCm, limit]
+    [dateFrom, dateTo, search, stateId, party, groupId, canUseGlobal, showGroupFilter, showStatePartyFilters, limit]
   );
 
   useEffect(() => {
+    if (!accessReady || !canAccessLeaderboard) return;
     void loadMeta();
-  }, [loadMeta]);
+  }, [accessReady, canAccessLeaderboard, loadMeta]);
 
   useEffect(() => {
-    if (!viewer) return;
+    if (!accessReady || !canAccessLeaderboard) return;
     setRows([]);
     void fetchPage(0, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- initial load only when viewer resolved
-  }, [viewer]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initial load when access resolves
+  }, [accessReady, canAccessLeaderboard]);
 
   const onApply = () => {
     setRows([]);
@@ -151,20 +158,28 @@ export default function LeaderboardManagementPage() {
     sp.set('date_from', new Date(`${dateFrom}T00:00:00.000Z`).toISOString());
     sp.set('date_to', new Date(`${dateTo}T23:59:59.999Z`).toISOString());
     if (search.trim()) sp.set('search', search.trim());
-    if (isAdmin) {
+    if (canUseGlobal) {
       if (stateId) sp.set('state_id', stateId);
       if (party) sp.set('party', party);
+      if (groupId) sp.set('group_id', groupId);
+    } else if (showGroupFilter && groupId) {
+      sp.set('group_id', groupId);
     }
-    if ((isAdmin || isCm) && groupId) sp.set('group_id', groupId);
+    if (showStatePartyFilters && stateId) sp.set('state_id', stateId);
+    if (showStatePartyFilters && party) sp.set('party', party);
     window.open(`/api/admin/leaderboard?${sp.toString()}`, '_blank', 'noopener,noreferrer');
   };
 
-  if (!viewer) {
+  if (!accessReady) {
     return (
       <div className="text-sm text-zinc-400">
         {error ? <span className="text-red-300">{error}</span> : 'Checking access…'}
       </div>
     );
+  }
+
+  if (!canAccessLeaderboard) {
+    return <div className="text-sm text-red-300">Leaderboard is not available for your role.</div>;
   }
 
   return (
@@ -185,7 +200,7 @@ export default function LeaderboardManagementPage() {
                 placeholder="Search…"
               />
             </label>
-            {isAdmin ? (
+            {canUseGlobal ? (
               <>
                 <label className="flex min-w-[160px] flex-col gap-1 text-xs font-medium text-zinc-400">
                   State
@@ -234,12 +249,12 @@ export default function LeaderboardManagementPage() {
                 </label>
               </>
             ) : null}
-            {isModerator ? (
+            {showStatePartyFilters && !canUseGlobal ? (
               <p className="text-xs text-zinc-500">
-                Moderator scope: states {viewer.assigned_state_ids.join(', ') || '—'}
+                Scoped to states {assignedStateIds.join(', ') || '—'}
               </p>
             ) : null}
-            {isCm ? (
+            {showGroupFilter && !canUseGlobal ? (
               <label className="flex min-w-[200px] flex-col gap-1 text-xs font-medium text-zinc-400">
                 Group
                 <select
@@ -277,7 +292,8 @@ export default function LeaderboardManagementPage() {
             <button
               type="button"
               onClick={() => void onApply()}
-              className="rounded-md bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-white"
+              disabled={loading}
+              className="rounded-md bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-white disabled:opacity-40"
             >
               Apply
             </button>
@@ -294,7 +310,11 @@ export default function LeaderboardManagementPage() {
           </p>
         </div>
 
-        {error ? <div className="rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200">{error}</div> : null}
+        {error ? (
+          <div className="rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+            {error}
+          </div>
+        ) : null}
 
         {kpis ? (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

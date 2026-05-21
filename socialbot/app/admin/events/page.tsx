@@ -28,6 +28,9 @@ import { supabase } from '@/lib/supabase';
 import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 import { isPartyOtherId, PARTIES_DATA } from '@/lib/constants';
 import { getStateVisibility } from '@/lib/admin/state-filter';
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
+import { buildEventPermissionMap } from '@/lib/rbac/event-permission-map';
+import { getEventUiCapabilities } from '@/lib/rbac/ui-capabilities';
 import {
   logEventFormHydration,
   mergeStateOptionsForEdit,
@@ -79,8 +82,12 @@ interface CampaignEvent {
   start: string;
   end: string;
   scheduled_at?: string | null;
+  created_by?: string | null;
+  created_role?: string | null;
+  status?: string | null;
   party?: string[];
   state?: string[];
+  state_id?: number[];
   loksabha?: string[];
   assembly?: string[];
   target_groups?: string[];
@@ -307,88 +314,75 @@ export default function App() {
   const [workerNotifyToast, setWorkerNotifyToast] = useState(false);
   const skipLoksabhaResetCountRef = useRef(0);
 
-  const [viewer, setViewer] = useState<{
-    role: 'admin' | 'moderator' | 'campaign_manager' | 'editor';
-    assigned_state_ids: number[];
-    assigned_party_ids: string[];
-  } | null>(null);
-  const [viewerLoading, setViewerLoading] = useState(true);
+  const { ready: viewerReady, access: dashboardAccess } = useDashboardAccess();
+  const viewer = dashboardAccess?.actor ?? null;
+  const viewerLoading = !viewerReady;
+  const eventPermissions = dashboardAccess?.permissions;
+  const eventCaps = dashboardAccess?.permissions.events ?? getEventUiCapabilities({
+    id: '',
+    role: 'editor',
+    assigned_state_ids: [],
+    assigned_group_ids: [],
+    assigned_party_ids: [],
+  });
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
-        if (!res.ok) return;
-        const d = (await res.json().catch(() => ({}))) as {
-          role?: string;
-          assigned_state_ids?: unknown;
-          assigned_party_ids?: unknown;
-        };
-        if (cancelled) return;
-        const role =
-          d.role === 'moderator'
-            ? 'moderator'
-            : d.role === 'campaign_manager'
-              ? 'campaign_manager'
-              : d.role === 'editor'
-                ? 'editor'
-                : d.role === 'admin' || d.role === 'super_admin'
-                  ? 'admin'
-                  : null;
-        const ids = Array.isArray(d.assigned_state_ids)
-          ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
-          : [];
-        const partyIds = Array.isArray(d.assigned_party_ids)
-          ? d.assigned_party_ids.map((x: any) => String(x ?? '').trim().toLowerCase()).filter(Boolean)
-          : [];
-        if (role) setViewer({ role, assigned_state_ids: ids, assigned_party_ids: partyIds });
-      } catch {
-        // ignore
-      } finally {
-        if (!cancelled) setViewerLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const { visibleStates, viewerReady, isModerator, hasSingleAssignedState, singleAssignedStateId } = useMemo(
+  const { visibleStates, hasSingleAssignedState, singleAssignedStateId } = useMemo(
     () =>
       getStateVisibility({
-        viewer: viewer ? { role: viewer.role, assigned_state_ids: viewer.assigned_state_ids } : null,
+        viewer: viewer
+          ? {
+              role: viewer.role,
+              assigned_state_ids: viewer.assigned_state_ids,
+              assigned_group_ids: viewer.assigned_group_ids,
+              assigned_party_ids: viewer.assigned_party_ids,
+            }
+          : null,
         viewerLoading,
         allStates: availableStates,
       }),
     [viewer, viewerLoading, availableStates]
   );
 
-  const isCampaignManager = viewer?.role === 'campaign_manager';
-  const isEditor = viewer?.role === 'editor';
-  /** Global list filter: admin + super_admin only (viewer maps super_admin → admin). */
-  const canUseGlobalEventFilter = viewer?.role === 'admin';
+  const canUseGlobalEventFilter = eventCaps.canUseGlobalTargeting;
+
+  const eventPermissionById = useMemo(
+    () => buildEventPermissionMap(events, eventPermissions),
+    [events, eventPermissions]
+  );
+
+  const canEditEventRow = (ev: CampaignEvent) => eventPermissionById.get(String(ev.id))?.canEdit ?? false;
+  const canDeleteEventRow = (ev: CampaignEvent) => eventPermissionById.get(String(ev.id))?.canDelete ?? false;
+  const canUploadToEventRow = (ev: CampaignEvent) => eventPermissionById.get(String(ev.id))?.canUpload ?? false;
+
+  const selectedEventPermissions = useMemo(() => {
+    if (!selectedEvent) return { canEdit: false, canUpload: false };
+    const row = eventPermissionById.get(String(selectedEvent.id));
+    return {
+      canEdit: row?.canEdit ?? false,
+      canUpload: row?.canUpload ?? false,
+    };
+  }, [selectedEvent, eventPermissionById]);
 
   const editorAssignableStates = useMemo(() => {
-    if (!isEditor) return availableStates;
+    if (!eventCaps.editorForm) return availableStates;
     const ids = viewer?.assigned_state_ids ?? [];
     if (ids.length === 0) return [];
     const allowed = new Set(ids.map((n) => String(n)));
     return availableStates.filter((s) => allowed.has(String(s.id)));
-  }, [isEditor, viewer?.assigned_state_ids, availableStates]);
+  }, [eventCaps.editorForm, viewer?.assigned_state_ids, availableStates]);
 
   const editorAssignableParties = useMemo(() => {
-    if (!isEditor) return PARTIES_DATA;
+    if (!eventCaps.editorForm) return PARTIES_DATA;
     return partiesVisibleToEditor(PARTIES_DATA, viewer?.assigned_party_ids ?? []);
-  }, [isEditor, viewer?.assigned_party_ids]);
+  }, [eventCaps.editorForm, viewer?.assigned_party_ids]);
 
   const isEditMode = editingEvent != null;
 
   const editFormPartyOptions = useMemo(() => {
-    if (!isEditMode) return isEditor ? editorAssignableParties : PARTIES_DATA;
-    const visible = isEditor ? editorAssignableParties : PARTIES_DATA;
+    if (!isEditMode) return eventCaps.editorForm ? editorAssignableParties : PARTIES_DATA;
+    const visible = eventCaps.editorForm ? editorAssignableParties : PARTIES_DATA;
     return mergePartiesForEdit(visible, PARTIES_DATA, newParty);
-  }, [isEditMode, isEditor, editorAssignableParties, newParty]);
+  }, [isEditMode, eventCaps.editorForm, editorAssignableParties, newParty]);
 
   const editFormStateOptions = useMemo(() => {
     if (!isEditMode) return viewerReady ? visibleStates : [];
@@ -411,7 +405,7 @@ export default function App() {
       editStateReadonlyLabel,
       editFormStateOptionIds: editFormStateOptions.map((s) => s.id),
     });
-    if (isEditor) {
+    if (eventCaps.editorForm) {
       logEditorPartyDebug('edit_form_render_party', {
         editor_allowed_parties: editorAssignableParties.map((p) => p.id),
         selected_party: newParty,
@@ -427,7 +421,7 @@ export default function App() {
     newAssembly,
     editStateReadonlyLabel,
     editFormStateOptions,
-    isEditor,
+    eventCaps.editorForm,
     editorAssignableParties,
     editFormPartyOptions,
   ]);
@@ -494,8 +488,12 @@ export default function App() {
             name: string;
             start?: string;
             end?: string;
+            created_by?: string | null;
+            created_role?: string | null;
+            status?: string | null;
             party?: string | string[];
             state?: string | string[];
+            state_id?: number[] | string | null;
             loksabha?: string | string[];
             assembly?: string | string[];
             target_groups?: string | string[];
@@ -510,13 +508,20 @@ export default function App() {
                 : typeof ac === 'string' && ac.trim() !== ''
                   ? Number(ac)
                   : 0;
+            const stateIdArr = Array.isArray(row.state_id)
+              ? row.state_id.map((x) => Number(x)).filter((n) => Number.isFinite(n))
+              : [];
             return {
               id: String(row.id ?? '').trim(),
               name: row.name,
               start: row.start ?? '',
               end: row.end ?? '',
+              created_by: row.created_by != null ? String(row.created_by) : null,
+              created_role: row.created_role != null ? String(row.created_role) : null,
+              status: row.status != null ? String(row.status) : null,
               party: toStrArr(row.party),
               state: toStrArr(row.state),
+              state_id: stateIdArr.length > 0 ? stateIdArr : undefined,
               loksabha: toStrArr(row.loksabha),
               assembly: toStrArr(row.assembly),
               target_groups: toStrArr(row.target_groups),
@@ -537,7 +542,7 @@ export default function App() {
 
   // Moderator UX: lock state on CREATE only — never overwrite edit form; no global list filter UI.
   useEffect(() => {
-    if (!viewerReady || !isModerator || isEditMode) return;
+    if (!viewerReady || !eventCaps.lockCreateStateToScope || isEditMode) return;
     const allowedIds = visibleStates.map((s) => String(s.id));
     if (allowedIds.length === 0) return;
 
@@ -558,7 +563,7 @@ export default function App() {
     }
   }, [
     viewerReady,
-    isModerator,
+    eventCaps.lockCreateStateToScope,
     isEditMode,
     hasSingleAssignedState,
     singleAssignedStateId,
@@ -765,11 +770,28 @@ export default function App() {
    */
   const syncGraphicsPostCaptions = async (ev: CampaignEvent, captionsList: string[]) => {
     const jsonStr = captionsJsonForPostColumn(captionsList);
-    let { error } = await supabase.from('posts').update({ captions: captionsList }).eq('category', ev.name);
-    if (error) {
-      ({ error } = await supabase.from('posts').update({ captions: jsonStr }).eq('category', ev.name));
+    try {
+      let res = await fetch('/api/admin/posts', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: ev.name, patch: { captions: captionsList } }),
+      });
+      if (!res.ok) {
+        res = await fetch('/api/admin/posts', {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category: ev.name, patch: { captions: jsonStr } }),
+        });
+      }
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        devConsole.error('sync graphics captions to posts:', d.error ?? res.status);
+      }
+    } catch (e) {
+      devConsole.error('sync graphics captions to posts:', e);
     }
-    if (error) devConsole.error('sync graphics captions to posts:', error.message, error);
   };
 
   const createEvent = async () => {
@@ -777,11 +799,11 @@ export default function App() {
     const startVal = `${startDate}T00:00:00Z`;
     const endVal = `${endDate}T23:59:59Z`;
     const payload: Record<string, unknown> = { name: newName, start: startVal, end: endVal, captions: [] };
-    if (isEditor && scheduledAt) {
+    if (eventCaps.editorForm && scheduledAt) {
       alert('Editors cannot schedule publish; events are saved as drafts.');
       return;
     }
-    if (!isEditor && scheduledAt) {
+    if (!eventCaps.editorForm && scheduledAt) {
       const iso = new Date(scheduledAt).toISOString();
       if (iso <= new Date().toISOString()) {
         alert('scheduled_at must be a future date/time');
@@ -789,36 +811,36 @@ export default function App() {
       }
       payload.scheduled_at = iso;
     }
-    const dashDb = isEditor ? null : dashboardCategoryToDb(newEventDashboardCategory);
+    const dashDb = eventCaps.editorForm ? null : dashboardCategoryToDb(newEventDashboardCategory);
     if (dashDb != null) (payload as any).dashboard_category = dashDb;
 
-    const editorPartyTargeting = isEditor ? buildEditorPartyTargetingFromForm(newParty) : null;
+    const editorPartyTargeting = eventCaps.editorForm ? buildEditorPartyTargetingFromForm(newParty) : null;
     const partyArr = isCreateCategoryMode
       ? []
-      : isEditor && editorPartyTargeting
+      : eventCaps.editorForm && editorPartyTargeting
         ? editorPartyTargeting.party
         : newParty.includes('ALL')
           ? ['ALL']
           : newParty.filter(Boolean);
     const stateArr =
-      isEditor || isCreateCategoryMode ? [] : newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
+      eventCaps.editorForm || isCreateCategoryMode ? [] : newState.includes('ALL') ? ['ALL'] : newState.filter(Boolean);
     const loksabhaArr = isCreateCategoryMode ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
     const assemblyArr = isCreateCategoryMode ? [] : newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
     const targetGroupsArr = isCreateCategoryMode ? [] : newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
-    if (isCampaignManager && targetGroupsArr.length === 0 && dashDb == null) {
+    if (eventCaps.campaignManagerForm && targetGroupsArr.length === 0 && dashDb == null) {
       alert('Please select at least one Target Group.');
       return;
     }
 
     const partyIdArr =
-      isEditor && editorPartyTargeting
+      eventCaps.editorForm && editorPartyTargeting
         ? editorPartyTargeting.party_id
         : toNumArrFromStrIds(partyArr);
     let stateIdArr = toNumArrFromStrIds(stateArr);
     const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
     const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
 
-    if (isEditor) {
+    if (eventCaps.editorForm) {
       stateIdArr = newState.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
       if (stateIdArr.length === 0) {
         alert('Please select at least one state.');
@@ -849,7 +871,7 @@ export default function App() {
         selected_party: newParty,
         saved_party_payload: { party: payload.party, party_id: payload.party_id },
       });
-    } else if (isCampaignManager) {
+    } else if (eventCaps.campaignManagerForm) {
       payload.party = [];
       payload.state = [];
       payload.loksabha = [];
@@ -945,7 +967,21 @@ export default function App() {
         : ev.dashboard_category && isActiveEventDashboardCategory(ev.dashboard_category)
           ? ev.dashboard_category
           : null;
-    const evWithPartyState = { ...ev, party: evParty, state: evState, loksabha: evLoksabha, assembly: evAssembly, dashboard_category: evDashCat };
+    const evStateId = Array.isArray(eventRow?.state_id)
+      ? (eventRow!.state_id as unknown[]).map((x) => Number(x)).filter((n) => Number.isFinite(n))
+      : ev.state_id;
+    const evWithPartyState = {
+      ...ev,
+      party: evParty,
+      state: evState,
+      state_id: evStateId,
+      loksabha: evLoksabha,
+      assembly: evAssembly,
+      dashboard_category: evDashCat,
+      created_by: eventRow?.created_by != null ? String(eventRow.created_by) : ev.created_by ?? null,
+      created_role: eventRow?.created_role != null ? String(eventRow.created_role) : ev.created_role ?? null,
+      status: eventRow?.status != null ? String(eventRow.status) : ev.status ?? null,
+    };
     const postsFromDb: Post[] = (postsRes.data || []).map((p: { id: string; image_url: string; title: string; dashboard_category?: unknown }) => ({
       id: p.id,
       url: p.image_url,
@@ -1206,8 +1242,14 @@ export default function App() {
       }
 
       try {
-        const { error: postsErr } = await supabase.from('posts').delete().eq('category', ev.name);
-        if (postsErr) devConsole.error('Posts delete error:', postsErr);
+        const delRes = await fetch(
+          `/api/admin/posts?category=${encodeURIComponent(ev.name)}`,
+          { method: 'DELETE', credentials: 'same-origin' }
+        );
+        if (!delRes.ok) {
+          const d = (await delRes.json().catch(() => ({}))) as { error?: string };
+          devConsole.error('Posts delete error:', d.error ?? delRes.status);
+        }
       } catch (postsEx) {
         devConsole.error('Posts delete exception:', postsEx);
       }
@@ -1236,8 +1278,16 @@ export default function App() {
       return;
     }
 
-    const { error: dbError } = await supabase.from('posts').delete().eq('id', postId);
-    if (dbError) {
+    try {
+      const delRes = await fetch(`/api/admin/posts?id=${encodeURIComponent(postId)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      if (!delRes.ok) {
+        const d = (await delRes.json().catch(() => ({}))) as { error?: string };
+        devConsole.error('posts table delete error:', d.error ?? delRes.status);
+      }
+    } catch (dbError) {
       devConsole.error('posts table delete error:', dbError);
     }
 
@@ -1266,6 +1316,7 @@ export default function App() {
   };
 
   const openEditModal = async (ev: CampaignEvent) => {
+    if (!canEditEventRow(ev)) return;
     setEditingEvent(ev);
     setEditEventDashboardCategory(dashboardCategoryFromDb(ev.dashboard_category));
     setNewName(ev.name);
@@ -1294,10 +1345,10 @@ export default function App() {
     });
 
     const source = dbRow ?? (listRow as Record<string, unknown>);
-    const partySel = resolvePartySelectionsFromEvent(source, PARTIES_DATA, { forEditor: isEditor });
+    const partySel = resolvePartySelectionsFromEvent(source, PARTIES_DATA, { forEditor: eventCaps.editorForm });
     const stateIds = resolveStateSelectionsFromEvent(source, availableStates);
-    const lokSel = resolveLoksabhaSelectionsFromEvent(source, { forEditor: isEditor });
-    const asmSel = resolveAssemblySelectionsFromEvent(source, { forEditor: isEditor });
+    const lokSel = resolveLoksabhaSelectionsFromEvent(source, { forEditor: eventCaps.editorForm });
+    const asmSel = resolveAssemblySelectionsFromEvent(source, { forEditor: eventCaps.editorForm });
 
     logEventFormHydration('open_edit_hydrated_form', {
       event_id: ev.id,
@@ -1358,10 +1409,10 @@ export default function App() {
       updatePayload.scheduled_at = iso;
     }
     const isEditCat = editEventDashboardCategory !== 'none';
-    const editorPartyTargetingEdit = isEditor ? buildEditorPartyTargetingFromForm(newParty) : null;
+    const editorPartyTargetingEdit = eventCaps.editorForm ? buildEditorPartyTargetingFromForm(newParty) : null;
     const partyArr = isEditCat
       ? []
-      : isEditor && editorPartyTargetingEdit
+      : eventCaps.editorForm && editorPartyTargetingEdit
         ? editorPartyTargetingEdit.party
         : newParty.includes('ALL')
           ? ['ALL']
@@ -1370,18 +1421,18 @@ export default function App() {
     const loksabhaArr = isEditCat ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
     const assemblyArr = isEditCat ? [] : newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
     const targetGroupsArr = isEditCat ? [] : newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
-    if (isCampaignManager && targetGroupsArr.length === 0 && !isEditCat) {
+    if (eventCaps.campaignManagerForm && targetGroupsArr.length === 0 && !isEditCat) {
       alert('Please select at least one Target Group.');
       return;
     }
     const partyIdArr =
-      isEditor && editorPartyTargetingEdit
+      eventCaps.editorForm && editorPartyTargetingEdit
         ? editorPartyTargetingEdit.party_id
         : toNumArrFromStrIds(partyArr);
     const stateIdArr = toNumArrFromStrIds(stateArr);
     const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
     const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
-    if (isEditor && editorPartyTargetingEdit) {
+    if (eventCaps.editorForm && editorPartyTargetingEdit) {
       const editorStateScope = newState.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
       logEditorTargetingDebug('edit_saved_party_targeting', {
         editor_state_scope: editorStateScope,
@@ -1405,7 +1456,7 @@ export default function App() {
     }
     updatePayload.target_groups = targetGroupsArr;
     // Campaign Manager: groups-only targeting (always ignore geo/party arrays).
-    if (isCampaignManager) {
+    if (eventCaps.campaignManagerForm) {
       updatePayload.party = [];
       updatePayload.state = [];
       updatePayload.loksabha = [];
@@ -1424,7 +1475,7 @@ export default function App() {
       updatePayload.state_id = [];
       updatePayload.loksabha_id = [];
       updatePayload.assembly_id = [];
-    } else if (isEditor && !isEditCat && editorPartyTargetingEdit) {
+    } else if (eventCaps.editorForm && !isEditCat && editorPartyTargetingEdit) {
       updatePayload.party = editorPartyTargetingEdit.party;
       updatePayload.party_id = editorPartyTargetingEdit.party_id;
       const editorStateIds = newState.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
@@ -1458,8 +1509,12 @@ export default function App() {
 
     const targetCategory = newName.trim();
     if (targetCategory !== originalName) {
-      const catQ = supabase.from('posts').update({ category: targetCategory }).eq('category', originalName);
-      await catQ;
+      await fetch('/api/admin/posts', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: originalName, patch: { category: targetCategory } }),
+      });
     }
     const postUpdatePayload: Record<string, unknown> = {};
     postUpdatePayload.target_groups = targetGroupsArr;
@@ -1472,7 +1527,7 @@ export default function App() {
       postUpdatePayload.state_id = [];
       postUpdatePayload.loksabha_id = [];
       postUpdatePayload.assembly_id = [];
-    } else if (isEditor && !isEditCat && editorPartyTargetingEdit) {
+    } else if (eventCaps.editorForm && !isEditCat && editorPartyTargetingEdit) {
       postUpdatePayload.party_id = editorPartyTargetingEdit.party_id;
       postUpdatePayload.state_id = updatePayload.state_id;
       postUpdatePayload.loksabha_id = updatePayload.loksabha_id;
@@ -1492,13 +1547,22 @@ export default function App() {
       if (assemblyIdArr.length > 0) postUpdatePayload.assembly_id = assemblyIdArr;
     }
     if (Object.keys(postUpdatePayload).length > 0) {
-      const pq = supabase.from('posts').update(postUpdatePayload).eq('category', targetCategory);
-      await pq;
+      await fetch('/api/admin/posts', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: targetCategory, patch: postUpdatePayload }),
+      });
     }
 
     {
       const nextDash = dashboardCategoryToDb(editEventDashboardCategory);
-      await supabase.from('posts').update({ dashboard_category: nextDash }).eq('category', targetCategory);
+      await fetch('/api/admin/posts', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: targetCategory, patch: { dashboard_category: nextDash } }),
+      });
     }
 
     /** Edit Event "Save" updates `events.captions` but must also push to `posts.captions` (same as add/delete caption). */
@@ -1639,7 +1703,7 @@ export default function App() {
                     ) : null}
                   </div>
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-1">
-                    {!isCampaignManager ? (
+                    {!eventCaps.campaignManagerForm ? (
                       <div
                         className={`col-span-2 lg:col-span-3 grid grid-cols-2 lg:grid-cols-2 gap-4 ${
                           editEventDashboardCategory !== 'none' ? 'pointer-events-none opacity-50' : ''
@@ -1662,7 +1726,7 @@ export default function App() {
                               getValue={(s) => String(s.id)}
                               getLabel={(s) => s.name}
                               allLabel="All States"
-                              showAllOption={!isEditor}
+                              showAllOption={eventCaps.showAllStateOption}
                               loading={statesLoading || !viewerReady}
                               searchable
                             />
@@ -1695,7 +1759,7 @@ export default function App() {
                             getValue={(l) => l.id}
                             getLabel={(l) => l.name}
                             allLabel="All LS Seats"
-                            showAllOption={!isEditor}
+                            showAllOption={eventCaps.showAllStateOption}
                             loading={loksabhasLoading}
                             searchable
                           />
@@ -1709,7 +1773,7 @@ export default function App() {
                             getValue={(a) => a.id}
                             getLabel={(a) => a.name}
                             allLabel="All Assembly Seats"
-                            showAllOption={!isEditor}
+                            showAllOption={eventCaps.showAllStateOption}
                             loading={assembliesLoading}
                             searchable
                           />
@@ -1829,7 +1893,7 @@ export default function App() {
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</span>
               <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm" />
             </div>
-            {!isEditor ? (
+            {!eventCaps.editorForm ? (
               <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
                 <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Dashboard Category</span>
                 <select
@@ -1849,14 +1913,14 @@ export default function App() {
                 ) : null}
               </div>
             ) : null}
-            {!isCampaignManager ? (
+            {!eventCaps.campaignManagerForm ? (
               <div
                 className={`col-span-2 lg:col-span-3 grid grid-cols-2 lg:grid-cols-2 gap-4 ${
                   isCreateCategoryMode ? 'pointer-events-none opacity-50' : ''
                 }`}
               >
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                  {isEditor ? (
+                  {eventCaps.editorForm ? (
                     <MultiSelectDropdown
                       label="State (required)"
                       options={editorAssignableStates}
@@ -1892,7 +1956,7 @@ export default function App() {
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
                   <MultiSelectDropdown
                     label="Party"
-                    options={isEditor ? editorAssignableParties : PARTIES_DATA}
+                    options={eventCaps.editorForm ? editorAssignableParties : PARTIES_DATA}
                     selected={newParty}
                     onSelect={setNewParty}
                     getValue={(p) => p.id}
@@ -1916,7 +1980,7 @@ export default function App() {
                     getValue={(l) => l.id}
                     getLabel={(l) => l.name}
                     allLabel="All LS Seats"
-                    showAllOption={!isEditor}
+                    showAllOption={eventCaps.showAllStateOption}
                     loading={loksabhasLoading}
                     searchable
                   />
@@ -1930,7 +1994,7 @@ export default function App() {
                     getValue={(a) => a.id}
                     getLabel={(a) => a.name}
                     allLabel="All Assembly Seats"
-                    showAllOption={!isEditor}
+                    showAllOption={eventCaps.showAllStateOption}
                     loading={assembliesLoading}
                     searchable
                   />
@@ -1945,7 +2009,7 @@ export default function App() {
               <span className="text-[9px] font-black text-rose-400 uppercase tracking-widest mb-1">Expiry</span>
               <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-xs" />
             </div>
-            {!isEditor ? (
+            {!eventCaps.editorForm ? (
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Schedule publish</span>
               {!scheduleUiOpen ? (
@@ -1971,7 +2035,7 @@ export default function App() {
               )}
             </div>
             ) : null}
-            {!isEditor ? (
+            {!eventCaps.editorForm ? (
             <div className={`rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3 ${isCreateCategoryMode ? 'pointer-events-none opacity-50' : ''}`}>
               <MultiSelectDropdown
                 label="Target Groups"
@@ -2003,7 +2067,7 @@ export default function App() {
             <div className="col-span-2 lg:col-span-3 flex justify-end">
               <button
                 onClick={createEvent}
-                disabled={!newName || !startDate || !endDate || (isEditor && newState.length === 0)}
+                disabled={!newName || !startDate || !endDate || (eventCaps.editorForm && newState.length === 0)}
                 className="bg-blue-600 text-white px-8 py-2.5 rounded-2xl font-black text-xs hover:bg-slate-900 disabled:opacity-30 transition-all uppercase tracking-widest shrink-0"
               >
                 Add
@@ -2050,21 +2114,30 @@ export default function App() {
                           <span className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest border ${status.color}`}>
                             {status.label}
                           </span>
+                          {(canEditEventRow(ev) || canDeleteEventRow(ev)) ? (
                           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                            <button onClick={() => openEditModal(ev)} className="p-2 text-slate-200 hover:text-blue-600"><Pencil size={16}/></button>
-                            <button onClick={() => setIsDeleting(ev)} className="p-2 text-slate-200 hover:text-red-500"><Trash2 size={16}/></button>
+                            {canEditEventRow(ev) ? (
+                              <button type="button" onClick={() => void openEditModal(ev)} className="p-2 text-slate-200 hover:text-blue-600" aria-label="Edit event"><Pencil size={16}/></button>
+                            ) : null}
+                            {canDeleteEventRow(ev) ? (
+                              <button type="button" onClick={() => setIsDeleting(ev)} className="p-2 text-slate-200 hover:text-red-500" aria-label="Delete event"><Trash2 size={16}/></button>
+                            ) : null}
                           </div>
+                          ) : null}
                         </div>
                         <h4 className="font-black text-slate-900 text-xl mb-1 flex items-center gap-2 flex-wrap">
                           {ev.name}
                         </h4>
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-8 flex items-center gap-1.5"><Folder size={12} className="text-blue-500" /> {ev.assetsCount} Assets • {ev.captions.length} Captions</p>
+                        {(eventPermissionById.get(String(ev.id))?.canView ||
+                          eventPermissionById.get(String(ev.id))?.canUpload) ? (
                         <button 
                           onClick={() => openEvent(ev)}
                           className="w-full py-4 bg-slate-900 text-white rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] hover:bg-blue-600 transition-all flex items-center justify-center gap-2 shadow-lg"
                         >
                           Manage <ChevronRight size={16} />
                         </button>
+                        ) : null}
                       </div>
                     )
                   })}
@@ -2140,18 +2213,22 @@ export default function App() {
           title="Graphics upload"
         />
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
+            {selectedEventPermissions.canUpload ? (
             <div onClick={() => fileInputRef.current?.click()} className="aspect-[9/16] bg-white border-4 border-dashed border-slate-200 rounded-[45px] flex flex-col items-center justify-center text-slate-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50/30 transition-all group active:scale-95">
                 <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all mb-4 shadow-inner"><Plus size={32} strokeWidth={3} /></div>
                 <p className="font-black uppercase text-[10px] tracking-widest group-hover:text-blue-600">Upload Media</p>
             </div>
+            ) : null}
 
             {selectedEvent?.posts.map((post: Post) => (
             <div key={post.id} className="group animate-in zoom-in-95 relative aspect-[9/16] bg-slate-900 rounded-[45px] overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-500">
                 {post.type === 'video' ? <video src={post.url} className="w-full h-full object-cover opacity-80" /> : <img src={post.url} className="w-full h-full object-cover opacity-80" alt="asset" />}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60" />
+                {selectedEventPermissions.canUpload ? (
                 <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
-                    <button onClick={() => setPostToDelete(post)} className="w-10 h-10 bg-rose-500 text-white rounded-2xl flex items-center justify-center shadow-2xl hover:bg-rose-600 active:scale-90 transition-all"><Trash2 size={18} /></button>
+                    <button type="button" onClick={() => setPostToDelete(post)} className="w-10 h-10 bg-rose-500 text-white rounded-2xl flex items-center justify-center shadow-2xl hover:bg-rose-600 active:scale-90 transition-all" aria-label="Remove asset"><Trash2 size={18} /></button>
                 </div>
+                ) : null}
                 <div className="absolute bottom-6 left-6 w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-xl ring-4 ring-blue-600/20">
                     {post.type === 'video' ? <Video size={14} /> : <ImageIcon size={14} />}
                 </div>
@@ -2168,6 +2245,7 @@ export default function App() {
             </h3>
         </div>
 
+        {selectedEventPermissions.canEdit ? (
         <div className="flex flex-col md:flex-row gap-4">
             <div className="flex-1 flex items-center gap-4 bg-slate-50 p-4 rounded-[25px] border border-slate-100">
                 <FileText size={20} className="text-slate-400" />
@@ -2187,6 +2265,7 @@ export default function App() {
                 <PlusCircle size={18} /> Add
             </button>
         </div>
+        ) : null}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {selectedEvent?.captions.map((cap, idx) => (
@@ -2195,9 +2274,11 @@ export default function App() {
                         <span className="w-6 h-6 bg-slate-100 rounded-full flex items-center justify-center text-[10px] font-bold text-slate-400 shrink-0">{idx + 1}</span>
                         <p className="font-bold text-slate-700 text-sm leading-relaxed">{cap}</p>
                     </div>
-                    <button onClick={() => setCaptionToDelete(idx)} className="p-2.5 text-slate-200 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all opacity-0 group-hover:opacity-100">
+                    {selectedEventPermissions.canEdit ? (
+                    <button type="button" onClick={() => setCaptionToDelete(idx)} className="p-2.5 text-slate-200 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all opacity-0 group-hover:opacity-100" aria-label="Delete caption">
                         <Trash2 size={16} />
                     </button>
+                    ) : null}
                 </div>
             ))}
             {selectedEvent?.captions.length === 0 && (

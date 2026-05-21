@@ -3,6 +3,8 @@
 import { Download, LineChart, Loader2 } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { getPartyLabel } from '@/lib/constants';
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
+import { logDashboardUiRbac } from '@/lib/rbac/dashboard-ui-log';
 
 type KpiBuckets = {
   today: number;
@@ -71,7 +73,8 @@ export default function AdminAnalyticsPage() {
   const [partyOptions, setPartyOptions] = useState<PartyOpt[]>([]);
   const [stateId, setStateId] = useState('');
   const [party, setParty] = useState('');
-  const [viewerRole, setViewerRole] = useState<'admin' | 'moderator' | 'campaign_manager' | null>(null);
+  const { access: dashboardAccess } = useDashboardAccess();
+  const filterVisibility = dashboardAccess?.filter_visibility ?? null;
 
   const [kpis, setKpis] = useState<KpisResponse | null>(null);
   const [kpisLoading, setKpisLoading] = useState(true);
@@ -83,18 +86,23 @@ export default function AdminAnalyticsPage() {
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError, setEventsError] = useState<string | null>(null);
 
-  const showGeoFilters = viewerRole === 'admin' || viewerRole === 'moderator';
-  const showPartyFilter = viewerRole === 'admin';
+  const showGeoFilters = filterVisibility?.showStateFilter ?? false;
+  const showPartyFilter = filterVisibility?.showPartyFilter ?? false;
+
+  useEffect(() => {
+    if (!dashboardAccess) return;
+    logDashboardUiRbac('analytics_page', {
+      role: dashboardAccess.actor.role,
+      allowed_modules: dashboardAccess.allowed_modules,
+      hidden_modules: dashboardAccess.hidden_modules,
+      filter_visibility: dashboardAccess.filter_visibility,
+    });
+  }, [dashboardAccess]);
 
   const loadMeta = useCallback(async () => {
-    const [vr, fl] = await Promise.all([
-      fetch('/api/admin/viewer', { credentials: 'same-origin' }).then((r) => r.json().catch(() => ({}))),
-      fetch('/api/admin/analytics/filters', { credentials: 'same-origin' }).then((r) => r.json().catch(() => ({}))),
-    ]);
-    const role = vr?.role;
-    if (role === 'admin' || role === 'moderator' || role === 'campaign_manager') {
-      setViewerRole(role);
-    }
+    const fl = await fetch('/api/admin/analytics/filters', { credentials: 'same-origin' }).then((r) =>
+      r.json().catch(() => ({}))
+    );
     setStates(Array.isArray(fl?.states) ? (fl.states as StateOpt[]) : []);
   }, []);
 
@@ -191,18 +199,18 @@ export default function AdminAnalyticsPage() {
   }, [loadMeta]);
 
   useEffect(() => {
-    if (viewerRole === 'admin' && stateId) {
+    if (filterVisibility?.canUseGlobalFilters && stateId) {
       void loadPartiesForState(stateId);
     } else {
       setPartyOptions([]);
     }
-  }, [stateId, viewerRole, loadPartiesForState]);
+  }, [stateId, filterVisibility?.canUseGlobalFilters, loadPartiesForState]);
 
   useEffect(() => {
-    if (viewerRole == null) return;
+    if (filterVisibility == null) return;
     void loadKpis();
     void loadEvents(0);
-  }, [viewerRole, stateId, party, loadKpis, loadEvents]);
+  }, [filterVisibility, stateId, party, loadKpis, loadEvents]);
 
   const onStateChange = (next: string) => {
     setStateId(next);

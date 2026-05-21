@@ -34,7 +34,7 @@ describe('dashboard reader RBAC contract (client mirror of SQL)', () => {
     };
     const r = explainVisibility(user({}), content, loaded);
     expect(r.ok).toBe(true);
-    expect(r.reason).toBe('global');
+    expect(r.reason).toBe('global_content');
   });
 
   it('denies wrong state', () => {

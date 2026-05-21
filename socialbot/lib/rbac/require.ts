@@ -2,11 +2,16 @@ import type { AdminPanelRole } from '@/lib/profile-roles';
 
 export type RbacRole = AdminPanelRole;
 
+export { isElevatedDashboardRole } from '@/lib/rbac/dashboard-permissions';
+
 export type RbacUser = {
   id: string;
   role: RbacRole;
   assigned_state_ids: number[];
   assigned_group_ids?: string[];
+  assigned_party_ids?: string[];
+  assigned_loksabha_ids?: number[];
+  assigned_assembly_ids?: number[];
   owned_groups?: (string | number)[];
 };
 

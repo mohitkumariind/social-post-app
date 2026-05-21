@@ -4,13 +4,15 @@ import {
   createServiceRoleClient,
   isAdmin,
   isCampaignManager,
+  isElevatedDashboardRole,
   isModerator,
   validateAdminSession,
   type VerifiedAdminAuth,
 } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery } from '@/lib/rbac/scoped-query-builder';
-import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
+import { canPerformMutation } from '@/lib/rbac/mutation-gateway';
+import { assertEventRowEditable } from '@/lib/event-access';
 import {
   normalizeGroupId,
   parseGroupIds,
@@ -202,6 +204,188 @@ export async function GET(request: NextRequest) {
   }
   if (res.error) return json({ error: res.error.message }, 500);
   return json({ posts: res.data ?? [], usedServiceRole: true });
+}
+
+function mutationUser(auth: VerifiedAdminAuth) {
+  return {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+  };
+}
+
+async function loadEventByCategoryName(admin: NonNullable<ReturnType<typeof createServiceRoleClient>>, category: string) {
+  let q = admin
+    .from('events')
+    .select('id,name,created_by,state_id,target_groups')
+    .eq('name', category)
+    .limit(1);
+  q = q.is('deleted_at', null) as typeof q;
+  let res = await q.maybeSingle();
+  if (res.error && isMissingColumnErr(res.error, 'deleted_at')) {
+    res = await admin.from('events').select('id,name,created_by,state_id,target_groups').eq('name', category).limit(1).maybeSingle();
+  }
+  if (res.error) return { error: res.error.message as string, event: null as Record<string, unknown> | null };
+  return { error: null as string | null, event: (res.data as Record<string, unknown> | null) ?? null };
+}
+
+async function scopedPostIdsByCategory(
+  admin: NonNullable<ReturnType<typeof createServiceRoleClient>>,
+  auth: VerifiedAdminAuth,
+  category: string
+): Promise<{ error: string | null; ids: string[] }> {
+  const adminRole = isEventsFullAdmin(auth);
+  const scopedUser = mutationUser(auth);
+  let q = admin.from('posts').select('id').eq('category', category) as any;
+  if (!adminRole) q = buildScopedQuery(scopedUser as any, q, 'posts');
+  const { data, error } = await q;
+  if (error) return { error: error.message, ids: [] };
+  const ids = (data ?? []).map((r: { id?: unknown }) => String(r.id ?? '').trim()).filter(Boolean);
+  return { error: null, ids };
+}
+
+async function guardPostsByCategory(
+  admin: NonNullable<ReturnType<typeof createServiceRoleClient>>,
+  auth: VerifiedAdminAuth,
+  category: string,
+  action: 'posts.update' | 'posts.delete'
+): Promise<NextResponse | null> {
+  const { error: evErr, event } = await loadEventByCategoryName(admin, category);
+  if (evErr) return json({ error: evErr }, 500);
+  if (event?.id) {
+    try {
+      assertEventRowEditable(auth, event);
+    } catch (e) {
+      if (e instanceof RbacError) return json({ error: e.message }, e.status);
+      return json({ error: 'Forbidden' }, 403);
+    }
+    const decision = canPerformMutation(
+      mutationUser(auth) as any,
+      action,
+      {
+        created_by: event.created_by,
+        state_ids: event.state_id,
+        group_ids: event.target_groups,
+      } as any,
+      { category },
+      { resourceType: 'posts', resourceId: String(event.id ?? ''), resourceName: category }
+    );
+    if (!decision.ok) return json({ error: decision.reason }, 403);
+    return null;
+  }
+  const { error, ids } = await scopedPostIdsByCategory(admin, auth, category);
+  if (error) return json({ error }, 500);
+  if (ids.length === 0) return json({ error: 'Forbidden: no posts in scope for category' }, 403);
+  const decision = canPerformMutation(
+    mutationUser(auth) as any,
+    action,
+    { category } as any,
+    { category },
+    { resourceType: 'posts', resourceName: category }
+  );
+  if (!decision.ok) return json({ error: decision.reason }, 403);
+  return null;
+}
+
+/** Bulk patch posts for an event category (events admin UI — replaces client Supabase writes). */
+export async function PUT(request: NextRequest) {
+  const supabase = await createSupabaseServerClient();
+  const auth = await validateAdminSession(supabase);
+  if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
+  try {
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
+    if (!isEditor(auth)) {
+      requireModeratorHasAssignedStates(auth);
+      requireCampaignManagerHasAssignedGroups(auth);
+    }
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message }, e.status);
+    return json({ error: 'Forbidden' }, 403);
+  }
+
+  let body: { category?: string; patch?: Record<string, unknown> } = {};
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return json({ error: 'Invalid JSON body' }, 400);
+  }
+  const category = String(body.category ?? '').trim();
+  const patch = body.patch && typeof body.patch === 'object' ? body.patch : null;
+  if (!category || !patch || Object.keys(patch).length === 0) return json({ error: 'Missing category or patch' }, 400);
+
+  const admin = createServiceRoleClient();
+  if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
+
+  const denied = await guardPostsByCategory(admin, auth, category, 'posts.update');
+  if (denied) return denied;
+
+  const { error, ids } = await scopedPostIdsByCategory(admin, auth, category);
+  if (error) return json({ error }, 500);
+  if (ids.length === 0) return json({ ok: true, updated: 0 });
+
+  const { error: updErr } = await admin.from('posts').update(patch as any).in('id', ids);
+  if (updErr) return json({ error: updErr.message }, 500);
+  return json({ ok: true, updated: ids.length });
+}
+
+/** Delete post by id or all posts in an event category (scoped + mutation gate). */
+export async function DELETE(request: NextRequest) {
+  const supabase = await createSupabaseServerClient();
+  const auth = await validateAdminSession(supabase);
+  if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
+  try {
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
+    if (!isEditor(auth)) {
+      requireModeratorHasAssignedStates(auth);
+      requireCampaignManagerHasAssignedGroups(auth);
+    }
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message }, e.status);
+    return json({ error: 'Forbidden' }, 403);
+  }
+
+  const sp = request.nextUrl.searchParams;
+  const id = (sp.get('id') ?? '').trim();
+  const category = (sp.get('category') ?? '').trim();
+  if (!id && !category) return json({ error: 'Missing id or category' }, 400);
+
+  const admin = createServiceRoleClient();
+  if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
+
+  if (id) {
+    const { data: row, error: readErr } = await admin.from('posts').select('id,category,created_by,event_id,state_id,group_id,target_groups').eq('id', id).maybeSingle();
+    if (readErr) return json({ error: readErr.message }, 500);
+    if (!row) return json({ error: 'Not found' }, 404);
+    const cat = String((row as any).category ?? '').trim();
+    if (cat) {
+      const denied = await guardPostsByCategory(admin, auth, cat, 'posts.delete');
+      if (denied) return denied;
+    } else {
+      const decision = canPerformMutation(
+        mutationUser(auth) as any,
+        'posts.delete',
+        row as any,
+        null,
+        { resourceType: 'posts', resourceId: id }
+      );
+      if (!decision.ok) return json({ error: decision.reason }, 403);
+    }
+    const { error: delErr } = await admin.from('posts').delete().eq('id', id);
+    if (delErr) return json({ error: delErr.message }, 500);
+    return json({ ok: true, deleted: 1 });
+  }
+
+  const denied = await guardPostsByCategory(admin, auth, category, 'posts.delete');
+  if (denied) return denied;
+
+  const { error, ids } = await scopedPostIdsByCategory(admin, auth, category);
+  if (error) return json({ error }, 500);
+  if (ids.length === 0) return json({ ok: true, deleted: 0 });
+
+  const { error: delErr } = await admin.from('posts').delete().in('id', ids);
+  if (delErr) return json({ error: delErr.message }, 500);
+  return json({ ok: true, deleted: ids.length });
 }
 
 export const POST = withAudit(
@@ -647,9 +831,9 @@ export const PATCH = withAudit(
     }
 
     // Prevent non-admin from changing ownership
-    if (auth.role !== 'admin') delete nextPatch.created_by;
+    if (!isElevatedDashboardRole(auth.role)) delete nextPatch.created_by;
     // Prevent non-admin from writing malformed scope payload.
-    if (auth.role !== 'admin') {
+    if (!isElevatedDashboardRole(auth.role)) {
       if (nextScope.state_ids.length > 0) nextPatch.state_id = nextScope.state_ids;
       if (nextScope.group_id) nextPatch.group_id = nextScope.group_id;
       if (nextScope.group_ids.length > 0) nextPatch.target_groups = nextScope.group_ids;

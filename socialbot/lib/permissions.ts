@@ -23,16 +23,25 @@ export type ViewerAccess = {
   assigned_state_ids: number[];
 };
 
+import {
+  isAdminRole,
+  isCampaignManagerRole,
+  isEditorRole,
+  isModeratorRole,
+} from '@/lib/rbac/dashboard-permissions';
+
+/** @deprecated Prefer {@link isAdminRole} from permission-engine / dashboard-permissions. */
 export function isAdmin(role: string | null | undefined): boolean {
-  return typeof role === 'string' && role.trim().toLowerCase() === 'admin';
+  return isAdminRole(role);
 }
 
 export function isSuperAdmin(role: string | null | undefined): boolean {
   return typeof role === 'string' && role.trim().toLowerCase() === 'super_admin';
 }
 
+/** @deprecated Prefer {@link isEditorRole} from dashboard-permissions. */
 export function isEditor(role: string | null | undefined): boolean {
-  return typeof role === 'string' && role.trim().toLowerCase() === 'editor';
+  return isEditorRole(role);
 }
 
 export function isWorker(role: string | null | undefined): boolean {
@@ -49,15 +58,17 @@ export const EVENT_CREATE_ROLES: readonly AdminRole[] = [
 ];
 
 export function canAccessBannerManager(role: string | null | undefined): boolean {
-  return isAdmin(role) || isSuperAdmin(role);
+  return isAdminRole(role) || isSuperAdmin(role);
 }
 
+/** @deprecated Prefer {@link isModeratorRole} from dashboard-permissions. */
 export function isModerator(role: string | null | undefined): boolean {
-  return typeof role === 'string' && role.trim().toLowerCase() === 'moderator';
+  return isModeratorRole(role);
 }
 
+/** @deprecated Prefer {@link isCampaignManagerRole} from dashboard-permissions. */
 export function isCampaignManager(role: string | null | undefined): boolean {
-  return typeof role === 'string' && role.trim().toLowerCase() === 'campaign_manager';
+  return isCampaignManagerRole(role);
 }
 
 /**

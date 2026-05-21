@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { validateAdminSession } from '@/lib/admin-gate';
-import { canAccessBannerManager } from '@/lib/permissions';
+import { canAccessDashboardModule, toDashboardActor } from '@/lib/rbac/dashboard-access';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import BannerManagerClient from './BannerManagerClient';
 
@@ -9,7 +9,7 @@ export default async function BannerManagerPage() {
   const auth = await validateAdminSession(supabase);
 
   if (!auth.ok) redirect('/admin/login');
-  if (!canAccessBannerManager(auth.role)) redirect('/admin');
+  if (!canAccessDashboardModule(toDashboardActor(auth), 'banner_manager')) redirect('/admin');
 
   return <BannerManagerClient />;
 }

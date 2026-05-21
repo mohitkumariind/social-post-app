@@ -8,7 +8,8 @@ export default async function RbacObservabilityPage() {
   const auth = await validateAdminSession(supabase);
 
   if (!auth.ok) redirect('/admin/login');
-  if (auth.role !== 'admin') redirect('/admin');
+  const { canAccessDashboardModule, toDashboardActor } = await import('@/lib/rbac/dashboard-access');
+  if (!canAccessDashboardModule(toDashboardActor(auth), 'rbac_observability')) redirect('/admin');
 
   return <RbacObservabilityClient />;
 }

@@ -37,7 +37,7 @@ describe('assertPostEventAccessibleForPostUpload', () => {
     if (res.ok) {
       expect(res.ownership_match).toBe(false);
       expect(res.scope_match).toBe(true);
-      expect(res.access_reason).toBe('moderator_state_scope');
+      expect(res.access_reason).toBe('scope_upload');
     }
   });
 
@@ -45,7 +45,7 @@ describe('assertPostEventAccessibleForPostUpload', () => {
     const admin = mockAdmin({ id: 'ev-1', created_by: 'admin-9', name: 'E', state_id: [99], target_groups: [] });
     const res = await assertPostEventAccessibleForPostUpload(admin, 'ev-1', modAuth);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toBe('moderator_event_scope_denied');
+    if (!res.ok) expect(res.reason).toBe('state_outside_assignment');
   });
 
   it('allows campaign_manager when event target_groups match assignment (not owner)', async () => {
@@ -61,7 +61,7 @@ describe('assertPostEventAccessibleForPostUpload', () => {
     if (res.ok) {
       expect(res.ownership_match).toBe(false);
       expect(res.scope_match).toBe(true);
-      expect(res.access_reason).toBe('campaign_manager_group_scope');
+      expect(res.access_reason).toBe('scope_upload');
     }
   });
 
@@ -74,6 +74,6 @@ describe('assertPostEventAccessibleForPostUpload', () => {
       assigned_group_ids: [],
     });
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toBe('editor_event_not_owned');
+    if (!res.ok) expect(res.reason).toBe('editor_may_only_upload_to_own_events');
   });
 });

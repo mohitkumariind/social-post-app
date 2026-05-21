@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { toRbacUser } from '@/lib/admin-gate';
+import { isElevatedDashboardRole, toRbacUser } from '@/lib/admin-gate';
 import { withAudit } from '@/lib/audit/withAudit';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { RbacError, requireRole } from '@/lib/rbac/require';
@@ -27,7 +27,7 @@ export const POST = withAudit(
 
     const u = toRbacUser(auth);
     if (
-      auth.role !== 'admin' &&
+      !isElevatedDashboardRole(auth.role) &&
       !canAccessResource(u, { created_by: before.created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })
     ) {
       return json({ error: 'Forbidden' }, 403);

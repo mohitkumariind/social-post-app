@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, toRbacUser, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, isElevatedDashboardRole, toRbacUser, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireRole } from '@/lib/rbac/require';
@@ -62,7 +62,7 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ id: str
 
   const u = toRbacUser(auth);
   if (
-    auth.role !== 'admin' &&
+    !isElevatedDashboardRole(auth.role) &&
     !canAccessResource(u, { created_by: (campaign as any).created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })
   ) {
     return json({ error: 'Forbidden' }, 403);
@@ -99,7 +99,7 @@ export const PATCH = withAudit(
 
     const u = toRbacUser(auth);
     if (
-      auth.role !== 'admin' &&
+      !isElevatedDashboardRole(auth.role) &&
       !canAccessResource(u, { created_by: before.created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })
     ) {
       return json({ error: 'Forbidden' }, 403);
@@ -235,7 +235,7 @@ export const DELETE = withAudit(
 
     const u = toRbacUser(auth);
     if (
-      auth.role !== 'admin' &&
+      !isElevatedDashboardRole(auth.role) &&
       !canAccessResource(u, { created_by: before.created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })
     ) {
       return json({ error: 'Forbidden' }, 403);

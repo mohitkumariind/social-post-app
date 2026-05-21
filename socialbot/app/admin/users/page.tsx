@@ -31,6 +31,7 @@ import { fromPartyDB, isNumeric } from '@/lib/party-mapper';
 import { API_MAX_FRAMES_LIMIT } from '@/lib/perf-defaults';
 import { sortUserFramesByDisplayKey } from '@/lib/sortUserFramesByDisplayKey';
 import { ADMIN_ROLE_UI_OPTIONS, normalizeProfileRole, type ProfileRole } from '@/lib/profile-roles';
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
 
 const __DEV__ = process.env.NODE_ENV !== 'production';
 
@@ -333,15 +334,13 @@ export default function UserManagement() {
 
   const waDigits = (v: unknown): string => String(v ?? '').replace(/[^\d]/g, '');
 
-  const [viewer, setViewer] = useState<{
-    role: 'admin' | 'moderator' | 'campaign_manager';
-    assigned_state_ids: number[];
-    assigned_group_ids: string[];
-  } | null>(null);
-  const isModerator = viewer?.role === 'moderator';
-  const isCampaignManager = viewer?.role === 'campaign_manager';
-  const isAdmin = viewer?.role === 'admin';
-  const isRestrictedViewer = isModerator || isCampaignManager;
+  const { access: dashboardAccess } = useDashboardAccess();
+  const canManageRoles = dashboardAccess?.permissions.canUseGlobalFilters ?? false;
+  const isRestrictedViewer =
+    dashboardAccess != null &&
+    !canManageRoles &&
+    (dashboardAccess.permissions.events.moderatorForm ||
+      dashboardAccess.permissions.events.campaignManagerForm);
 
   const [statesList, setStatesList] = useState<StateRow[]>([]);
   const [statesLoading, setStatesLoading] = useState(false);
@@ -349,7 +348,7 @@ export default function UserManagement() {
   const [groupsLoading, setGroupsLoading] = useState(false);
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canManageRoles) return;
     let cancelled = false;
     (async () => {
       setStatesLoading(true);
@@ -370,10 +369,10 @@ export default function UserManagement() {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
+  }, [canManageRoles]);
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canManageRoles) return;
     let cancelled = false;
     (async () => {
       setGroupsLoading(true);
@@ -395,37 +394,7 @@ export default function UserManagement() {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
-        if (!res.ok) return;
-        const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_ids?: unknown; assigned_group_ids?: unknown };
-        if (cancelled) return;
-        const role =
-          d.role === 'moderator'
-            ? 'moderator'
-            : d.role === 'admin'
-              ? 'admin'
-              : d.role === 'campaign_manager'
-                ? 'campaign_manager'
-                : null;
-        const ids = Array.isArray(d.assigned_state_ids)
-          ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
-          : [];
-        const gids = Array.isArray(d.assigned_group_ids) ? d.assigned_group_ids.map((x: any) => String(x ?? '').trim()).filter(Boolean) : [];
-        if (role) setViewer({ role, assigned_state_ids: ids, assigned_group_ids: gids });
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [canManageRoles]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterParty, setFilterParty] = useState('All');
@@ -760,7 +729,7 @@ export default function UserManagement() {
       )}
 
       {/* ROLE MANAGEMENT MODAL (admin-only) */}
-      {isAdmin && roleUser ? (
+      {canManageRoles && roleUser ? (
         <div className="fixed inset-0 z-[205] flex items-start sm:items-center justify-center bg-black/50 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto overscroll-contain">
           <div className="bg-white rounded-[32px] sm:rounded-[40px] w-full max-w-lg max-h-[min(90dvh,calc(100vh-1.5rem))] my-auto flex flex-col shadow-2xl relative overflow-hidden">
             <button
@@ -1302,7 +1271,7 @@ export default function UserManagement() {
             key={user.id}
             className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm hover:shadow-md transition-all duration-300 group flex flex-col relative overflow-hidden"
           >
-            {isAdmin ? (
+            {canManageRoles ? (
               <div className="absolute top-6 right-6">
                 <button onClick={() => setIsDeleting(user)} className="p-2 text-slate-200 hover:text-red-500 transition-all"><Trash2 size={18} /></button>
               </div>
@@ -1401,7 +1370,7 @@ export default function UserManagement() {
               {isRestrictedViewer ? 'Frames' : 'Profile & Frames'} <ExternalLink size={14} />
             </button>
 
-            {isAdmin ? (
+            {canManageRoles ? (
               <button
                 type="button"
                 onClick={() => setRoleUser(user)}

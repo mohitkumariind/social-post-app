@@ -1,6 +1,6 @@
 'use client';
 
-import { canAccessBannerManager } from '@/lib/permissions';
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
 import { useRouter } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image as ImageIcon, Plus, Save, Trash2, X, ArrowUp, ArrowDown, Link as LinkIcon } from 'lucide-react';
@@ -95,8 +95,7 @@ async function encodeWebpIfPossible(file: File): Promise<File> {
 
 export default function BannerManagerClient() {
   const router = useRouter();
-  const [role, setRole] = useState<string | null>(null);
-  const [loadingRole, setLoadingRole] = useState(true);
+  const { ready: accessReady, access: dashboardAccess } = useDashboardAccess();
 
   const [rows, setRows] = useState<BannerRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -121,23 +120,7 @@ export default function BannerManagerClient() {
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
-        const d = (await res.json().catch(() => ({}))) as { role?: string | null };
-        if (!cancelled) setRole(typeof d.role === 'string' ? d.role : null);
-      } finally {
-        if (!cancelled) setLoadingRole(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const canManageBanners = useMemo(() => canAccessBannerManager(role), [role]);
+  const canManageBanners = dashboardAccess?.permissions.canAccessModule('banner_manager') ?? false;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -156,13 +139,13 @@ export default function BannerManagerClient() {
   }, []);
 
   useEffect(() => {
-    if (loadingRole) return;
+    if (!accessReady) return;
     if (!canManageBanners) {
       router.replace('/admin');
       return;
     }
     void load();
-  }, [loadingRole, canManageBanners, load, router]);
+  }, [accessReady, canManageBanners, load, router]);
 
   useEffect(() => {
     if (!toast) return;
@@ -347,7 +330,7 @@ export default function BannerManagerClient() {
     }
   };
 
-  if (loadingRole) {
+  if (!accessReady) {
     return <div className="text-sm text-zinc-400">Checking access…</div>;
   }
 

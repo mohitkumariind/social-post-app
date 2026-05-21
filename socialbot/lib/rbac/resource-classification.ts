@@ -87,6 +87,22 @@ export const RBAC_RESOURCE_REGISTRY: Record<string, RbacResourcePolicy> = {
     analytics_behavior: 'not applicable',
     supported_layers: ['query', 'access', 'mutation'],
   },
+  parties: {
+    category: 'global',
+    scope_model: 'admin-only reference data',
+    ownership_behavior: 'elevated admin only',
+    allow_ownership_fallback: false,
+    analytics_behavior: 'not applicable',
+    supported_layers: ['mutation'],
+  },
+  dashboard_banners: {
+    category: 'global',
+    scope_model: 'banner manager roles only',
+    ownership_behavior: 'elevated admin / super_admin',
+    allow_ownership_fallback: false,
+    analytics_behavior: 'not applicable',
+    supported_layers: ['mutation'],
+  },
 };
 
 export const RBAC_SCOPED_RESOURCES = new Set<string>(

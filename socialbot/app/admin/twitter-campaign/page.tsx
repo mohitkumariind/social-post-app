@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, Save, Send, Share2, Trash2, ImageIcon } from 'lucide-react';
 import { getPartyLabel, PARTIES_DATA } from '@/lib/constants';
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
 
 const ACCENT = '#25D366';
 const TWEET_CHAR_LIMIT = 280;
@@ -95,8 +96,6 @@ function StatusChip({ status }: { status: string }) {
 }
 
 export default function TwitterCampaignPage() {
-  const [role, setRole] = useState<string | null>(null);
-  const [viewerLoading, setViewerLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
 
   const [campaignName, setCampaignName] = useState('');
@@ -117,34 +116,13 @@ export default function TwitterCampaignPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
-        if (!res.ok) return;
-        const d = (await res.json().catch(() => ({}))) as { role?: string | null };
-        if (!cancelled) setRole(typeof d.role === 'string' ? d.role : null);
-      } catch {
-        /* ignore */
-      } finally {
-        if (!cancelled) setViewerLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
     if (!toast) return;
     const t = window.setTimeout(() => setToast(null), 3200);
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  const canAccess = useMemo(() => {
-    const r = (role ?? '').toLowerCase();
-    return r === 'admin';
-  }, [role]);
+  const { ready: accessReady, access: dashboardAccess } = useDashboardAccess();
+  const canAccess = dashboardAccess?.permissions.canAccessModule('twitter_campaign') ?? false;
 
   const variants = campaignType === 'tweet' ? tweetVariants : retweetVariants;
   const variantCount = variants.length;
@@ -426,7 +404,7 @@ export default function TwitterCampaignPage() {
     }
   };
 
-  if (viewerLoading) {
+  if (!accessReady) {
     return <div className="text-sm font-medium text-zinc-400">Checking access…</div>;
   }
 

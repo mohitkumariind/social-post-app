@@ -16,6 +16,7 @@ import {
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { normalizeProfileRole } from '@/lib/profile-roles';
+import { isElevatedDashboardRole } from '@/lib/rbac/dashboard-permissions';
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireRole } from '@/lib/rbac/require';
 import { API_DEFAULT_LIMIT, API_MAX_LIMIT, clampLimit } from '@/lib/perf-defaults';
 
@@ -44,6 +45,12 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
+  try {
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager']);
+  } catch (e) {
+    if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
+    throw e;
+  }
   if (isModerator(auth) && auth.assigned_state_ids.length === 0) {
     return NextResponse.json({ error: 'Moderator is missing assigned_state_ids' }, { status: 403 });
   }
@@ -56,7 +63,7 @@ export async function GET(request: NextRequest) {
     );
   }
   const db = admin;
-  const adminRole = isAdmin(auth);
+  const adminRole = isElevatedDashboardRole(auth.role);
   if (adminRole) assertAdminRole(auth);
 
   let cmEffectiveGroupIds: string[] | undefined;
@@ -262,6 +269,15 @@ export async function DELETE(request: NextRequest) {
       { resourceType: 'profiles', resourceId: id }
     );
     if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+  } else {
+    const decision = canPerformMutation(
+      scopedUser,
+      'profiles.delete',
+      null,
+      { id },
+      { resourceType: 'profiles', resourceId: id }
+    );
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
   }
 
   const { error } = await db.from('profiles').delete().eq('id', id);
@@ -305,7 +321,7 @@ export async function PATCH(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (auth.role !== 'admin') {
+  if (!isElevatedDashboardRole(auth.role)) {
     return NextResponse.json({ error: 'Only admins can update roles' }, { status: 403 });
   }
 

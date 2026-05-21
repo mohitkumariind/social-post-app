@@ -13,8 +13,9 @@ import {
 import { assertNotEditor } from '@/lib/editor-access';
 import {
   applyEditorEventCreateDefaults,
-  applyEventsOwnershipScope,
+  assertEventRowEditable,
   assertEventRowReadable,
+  assertEventTargetingAllowed,
   isEventsFullAdmin,
   stripNonAdminPublishFields,
   validateEditorEventPayload,
@@ -24,6 +25,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { buildScopedQuery, resolveEffectiveGroupIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
+import { applyEventsListQueryScope, postFilterEventsList } from '@/lib/rbac/event-list-scope';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import {
   RbacError,
@@ -151,7 +153,10 @@ async function resolveCmEffectiveGroupsOrError(
 }
 
 function rbacUserForMutation(
-  auth: Pick<VerifiedAdminAuth, 'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids'>,
+  auth: Pick<
+    VerifiedAdminAuth,
+    'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids' | 'assigned_party_ids'
+  >,
   cmEffective?: string[]
 ) {
   return {
@@ -159,6 +164,7 @@ function rbacUserForMutation(
     role: auth.role,
     assigned_state_ids: auth.assigned_state_ids,
     assigned_group_ids: isCampaignManager(auth) && cmEffective && cmEffective.length > 0 ? cmEffective : auth.assigned_group_ids,
+    assigned_party_ids: auth.assigned_party_ids,
   } as const;
 }
 
@@ -224,8 +230,7 @@ export async function GET(request: NextRequest) {
     return json({ event: data, usedServiceRole: !!admin });
   }
 
-  // Listing: admin → all events; others → created_by only
-  const applyScope = (qIn: any) => applyEventsOwnershipScope(auth, qIn);
+  const applyScope = (qIn: any) => applyEventsListQueryScope(auth, qIn);
 
   const nowIso = new Date().toISOString();
   let activeFilterMode: ActiveEventsFilterMode = activeOnly ? 'status' : 'none';
@@ -305,7 +310,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (error) return json({ error: error.message }, 500);
-  const rows = (data ?? []) as any[];
+  const rows = postFilterEventsList(auth, (data ?? []) as Record<string, unknown>[]) as any[];
   const next_cursor_created_at = rows.length > 0 ? String((rows[rows.length - 1] as any)?.created_at ?? '') : '';
 
   const categoryNames = Array.from(
@@ -438,8 +443,15 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Always set owner on creation.
+  try {
+    assertEventTargetingAllowed(auth, payload);
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message }, e.status);
+    return json({ error: 'Forbidden' }, 403);
+  }
+
   payload.created_by = auth.user.id;
+  payload.created_role = auth.role;
 
   if (isEditor(auth)) {
     applyEditorEventCreateDefaults(payload);
@@ -468,7 +480,7 @@ export async function POST(request: NextRequest) {
   // Best-effort compatibility for schema cache lag / partial migrations:
   // retry inserts while stripping unknown columns indicated by PostgREST.
   // Never strip RBAC / scope columns on retry — partial inserts (e.g. missing target_groups) become invisible in scoped listings.
-  const requiredKeys = new Set(['name', 'start', 'end', 'target_groups', 'state_id', 'created_by']);
+  const requiredKeys = new Set(['name', 'start', 'end', 'target_groups', 'state_id', 'created_by', 'created_role']);
   let insertPayload: Record<string, unknown> = { ...payload };
   let insertRes = await admin.from('events').insert(insertPayload).select().single();
   for (let attempts = 0; attempts < 10 && insertRes.error; attempts++) {
@@ -545,7 +557,15 @@ export async function PATCH(request: NextRequest) {
   if (!evForGuard) return json({ error: 'Not found' }, 404);
 
   try {
-    assertEventRowReadable(auth, evForGuard as { created_by?: string | null });
+    assertEventRowReadable(auth, evForGuard as Record<string, unknown>);
+    assertEventRowEditable(auth, evForGuard as Record<string, unknown>);
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message }, e.status);
+    return json({ error: 'Forbidden' }, 403);
+  }
+
+  try {
+    assertEventTargetingAllowed(auth, { ...evForGuard, ...patch });
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -586,34 +606,6 @@ export async function PATCH(request: NextRequest) {
     applyDashboardCategoryGlobalEventFields(patch);
   }
 
-  if (isModerator(auth) && !isEditor(auth)) {
-    try {
-      if (hasStoredCreatedBy(evForGuard)) {
-        requireOwnership((evForGuard as any)?.created_by, auth.user.id);
-      }
-      const evIsCat = isActiveEventDashboardCategory((evForGuard as any)?.dashboard_category);
-      if (!evIsCat) {
-        const exStates = toNumArray((evForGuard as any)?.state_id);
-        if (exStates.length === 0) throw new RbacError('Forbidden', 403);
-        requireScopeState((evForGuard as any)?.state_id, auth.assigned_state_ids, 'subset');
-      }
-    } catch (e) {
-      if (e instanceof RbacError) return json({ error: e.message }, e.status);
-      return json({ error: 'Forbidden' }, 403);
-    }
-  }
-
-  if (isCampaignManager(auth) && !isEditor(auth)) {
-    try {
-      if (hasStoredCreatedBy(evForGuard)) {
-        requireOwnership((evForGuard as any)?.created_by, auth.user.id);
-      }
-    } catch (e) {
-      if (e instanceof RbacError) return json({ error: e.message }, e.status);
-      return json({ error: 'Forbidden' }, 403);
-    }
-  }
-
   const mergedForRbac: Record<string, unknown> = {
     ...patch,
     dashboard_category: pickEventDashboardCategory(patch, (evForGuard as any)?.dashboard_category),
@@ -622,11 +614,7 @@ export async function PATCH(request: NextRequest) {
     const decision = canPerformMutation(
       rbacUserForMutation(auth, cmEff) as any,
       'events.update',
-      {
-        created_by: (evForGuard as any)?.created_by,
-        state_ids: (evForGuard as any)?.state_id,
-        group_ids: (evForGuard as any)?.target_groups,
-      },
+      evForGuard as Record<string, unknown>,
       mergedForRbac as any,
       { resourceType: 'events', resourceId: id, resourceName: String((evForGuard as any)?.name ?? '') }
     );

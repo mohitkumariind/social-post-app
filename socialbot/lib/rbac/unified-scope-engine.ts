@@ -1,10 +1,7 @@
-import {
-  normalizeActorId,
-  normalizeGroupId,
-  parseGroupIds,
-  parseStateIds,
-  type RbacRole,
-} from '@/lib/rbac/require';
+import { canAccessScope, type RbacActor } from '@/lib/rbac/permission-engine';
+import { isAdminRole } from '@/lib/rbac/dashboard-permissions';
+import { normalizeResourceScope } from '@/lib/rbac/normalize-scope';
+import { normalizeActorId, parseGroupIds, parseStateIds, type RbacRole } from '@/lib/rbac/require';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { trackRbacEvent } from '@/lib/rbac/rbac-observability-engine';
 import {
@@ -24,6 +21,9 @@ export type UnifiedUser = {
   role: RbacRole;
   assigned_state_ids: number[];
   assigned_group_ids?: string[];
+  assigned_party_ids?: string[];
+  assigned_loksabha_ids?: number[];
+  assigned_assembly_ids?: number[];
 };
 
 export type UnifiedResource = {
@@ -54,30 +54,16 @@ export function resolveScope(user: Pick<UnifiedUser, 'role' | 'assigned_state_id
   return { type: 'GROUP', groups: parseGroupIds(user.assigned_group_ids).ids };
 }
 
-function stateScopeAllows(scope: Extract<UnifiedScope, { type: 'STATE' }>, resource: UnifiedResource): boolean {
-  const assignedParsed = parseStateIds(scope.states);
-  const resourceParsed = parseStateIds(resource.state_ids);
-  if (assignedParsed.malformed || resourceParsed.malformed) return false;
-  const assigned = new Set(assignedParsed.ids);
-  if (assigned.size === 0) return false;
-  const rStates = resourceParsed.ids;
-  if (rStates.length === 0) return false;
-  return rStates.every((n) => assigned.has(n));
-}
-
-function groupScopeAllows(scope: Extract<UnifiedScope, { type: 'GROUP' }>, resource: UnifiedResource): boolean {
-  const assignedParsed = parseGroupIds(scope.groups);
-  const gidsParsed = parseGroupIds(resource.group_ids);
-  if (assignedParsed.malformed || gidsParsed.malformed) return false;
-  const assigned = new Set(assignedParsed.ids);
-  if (assigned.size === 0) return false;
-
-  const gid = normalizeGroupId(resource.group_id) ?? '';
-  const gids = gidsParsed.ids;
-
-  if (gid) return assigned.has(gid);
-  if (gids.length > 0) return gids.every((g) => assigned.has(g));
-  return false;
+function toActor(user: UnifiedUser): RbacActor {
+  return {
+    id: user.id,
+    role: user.role,
+    assigned_state_ids: user.assigned_state_ids,
+    assigned_group_ids: user.assigned_group_ids ?? [],
+    assigned_party_ids: user.assigned_party_ids ?? [],
+    assigned_loksabha_ids: user.assigned_loksabha_ids,
+    assigned_assembly_ids: user.assigned_assembly_ids,
+  };
 }
 
 function isOwner(userId: string, createdBy: unknown): boolean {
@@ -143,61 +129,65 @@ export function canAccessResource(user: UnifiedUser, resource: UnifiedResource, 
     return false;
   }
 
-  if (user.role === 'admin') return true;
+  if (isAdminRole(user.role)) return true;
+
+  const actor = toActor(user);
+
+  if (resourceType === 'events' || resourceType === 'posts') {
+    const resourceScope = normalizeResourceScope({
+      state_ids: resource.state_ids,
+      state_id: resource.state_ids,
+      group_ids: resource.group_ids,
+      group_id: resource.group_id,
+      target_groups: resource.group_ids,
+      created_by: resource.created_by,
+    });
+    if (resourceScope.state_ids.length === 0 && resourceScope.group_ids.length === 0) {
+      auditAccessDenied(user, options.audit, 'Forbidden: missing event scope', { resourceType });
+      return false;
+    }
+    const decision = canAccessScope(actor, resourceScope);
+    if (!decision.allowed) {
+      auditAccessDenied(user, options.audit, decision.denied_reason ?? 'Forbidden: outside scope', {
+        resourceType,
+        normalized_scope: decision.debug.normalized_scope,
+      });
+    }
+    return decision.allowed;
+  }
 
   const allowOwnershipFallback = options.allowOwnershipFallback ?? canUseOwnershipFallback(resourceType);
-  const scope = resolveScope(user);
-  if (scope.type === 'STATE') {
-    const rStatesParsed = parseStateIds(resource.state_ids);
-    if (rStatesParsed.malformed) {
-      auditAccessDenied(user, options.audit, 'Forbidden: malformed state scope', { state_ids: resource.state_ids, resourceType });
-      return false;
+  const resourceScope = normalizeResourceScope({
+    state_ids: resource.state_ids,
+    state_id: resource.state_ids,
+    group_ids: resource.group_ids,
+    group_id: resource.group_id,
+    target_groups: resource.group_ids,
+    dashboard_category: resource.dashboard_category,
+  });
+
+  if (resourceScope.state_ids.length === 0 && resourceScope.group_ids.length === 0) {
+    if (
+      resourceType === 'events' &&
+      isActiveEventDashboardCategory(resource.dashboard_category) &&
+      isOwner(user.id, resource.created_by)
+    ) {
+      return true;
     }
-    const rStates = rStatesParsed.ids;
-    if (rStates.length === 0) {
-      if (
-        resourceType === 'events' &&
-        isActiveEventDashboardCategory(resource.dashboard_category) &&
-        isOwner(user.id, resource.created_by)
-      ) {
-        return true;
-      }
-      if (allowOwnershipFallback && isOwner(user.id, resource.created_by)) return true;
-      auditAccessDenied(user, options.audit, 'Forbidden: missing state scope', { state_ids: resource.state_ids, allowOwnershipFallback, resourceType });
-      return false;
-    }
-    const ok = stateScopeAllows(scope, resource);
-    if (!ok) {
-      auditAccessDenied(user, options.audit, 'Forbidden: outside assigned_state_ids', { state_ids: rStates, assigned_state_ids: scope.states, resourceType });
-    }
-    return ok;
+    if (allowOwnershipFallback && isOwner(user.id, resource.created_by)) return true;
+    auditAccessDenied(user, options.audit, 'Forbidden: missing resource scope', { resourceType });
+    return false;
   }
-  if (scope.type === 'GROUP') {
-    const gid = normalizeGroupId(resource.group_id) ?? '';
-    const gidsParsed = parseGroupIds(resource.group_ids);
-    if (gidsParsed.malformed) {
-      auditAccessDenied(user, options.audit, 'Forbidden: malformed group scope', { group_id: resource.group_id, group_ids: resource.group_ids, resourceType });
-      return false;
-    }
-    const gids = gidsParsed.ids;
-    if (!gid && gids.length === 0) {
-      if (
-        resourceType === 'events' &&
-        isActiveEventDashboardCategory(resource.dashboard_category) &&
-        isOwner(user.id, resource.created_by)
-      ) {
-        return true;
-      }
-      if (allowOwnershipFallback && isOwner(user.id, resource.created_by)) return true;
-      auditAccessDenied(user, options.audit, 'Forbidden: missing group scope', { group_id: resource.group_id, group_ids: resource.group_ids, allowOwnershipFallback, resourceType });
-      return false;
-    }
-    const ok = groupScopeAllows(scope, resource);
-    if (!ok) {
-      auditAccessDenied(user, options.audit, 'Forbidden: outside assigned_group_ids', { group_id: gid, group_ids: gids, assigned_group_ids: scope.groups, resourceType });
-    }
-    return ok;
-  }
+
+  const decision = canAccessScope(actor, resourceScope);
+  if (decision.allowed) return true;
+
+  if (allowOwnershipFallback && isOwner(user.id, resource.created_by)) return true;
+
+  auditAccessDenied(user, options.audit, decision.denied_reason ?? 'Forbidden: outside scope', {
+    resourceType,
+    normalized_scope: decision.debug.normalized_scope,
+  });
   return false;
 }
 

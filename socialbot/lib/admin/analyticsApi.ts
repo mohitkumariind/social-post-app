@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
-import { isCampaignManager, isModerator } from '@/lib/admin-gate';
+import { isCampaignManager } from '@/lib/admin-gate';
+import { assertAnalyticsGeoFiltersForDashboard, toDashboardActor } from '@/lib/rbac/dashboard-access';
 import type { AdminAnalyticsScope } from '@/lib/admin/rbac';
 import { getScopedFilters, toAdminAnalyticsUserContext } from '@/lib/admin/rbac';
 import { getPartyLabel } from '@/lib/constants';
@@ -167,24 +168,16 @@ export function parseAnalyticsGeoFilters(sp: URLSearchParams): AnalyticsGeoFilte
 }
 
 export function assertAnalyticsGeoFiltersAllowed(
-  auth: Pick<VerifiedAdminAuth, 'role' | 'assigned_state_ids'>,
+  auth: Pick<VerifiedAdminAuth, 'role' | 'assigned_state_ids' | 'assigned_group_ids' | 'assigned_party_ids' | 'user'>,
   filters: AnalyticsGeoFilters
 ): { ok: true } | { ok: false; message: string; status: number } {
-  if (isModerator(auth)) {
-    if (filters.party) {
-      return { ok: false, message: 'Forbidden: party filter not allowed for moderator', status: 403 };
-    }
-    if (filters.stateId != null) {
-      const allowed = auth.assigned_state_ids.some((x) => Number(x) === Number(filters.stateId));
-      if (!allowed) {
-        return { ok: false, message: 'Forbidden: state filter outside assigned states', status: 403 };
-      }
-    }
-  }
-  if (isCampaignManager(auth)) {
-    if (filters.stateId != null || filters.party) {
-      return { ok: false, message: 'Forbidden: state/party filters not allowed for campaign manager', status: 403 };
-    }
+  const actor = toDashboardActor(auth);
+  const result = assertAnalyticsGeoFiltersForDashboard(actor, {
+    stateId: filters.stateId,
+    party: filters.party,
+  });
+  if (!result.ok) {
+    return { ok: false, message: result.message, status: 403 };
   }
   return { ok: true };
 }

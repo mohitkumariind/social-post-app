@@ -6,6 +6,7 @@ import {
 } from '@/lib/broadcast-send';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getBroadcastScope, toDashboardActor } from '@/lib/rbac/dashboard-access';
 import { canAccessResource, type UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import { parseGroupIds, RbacError } from '@/lib/rbac/require';
 import {
@@ -16,7 +17,7 @@ import {
 
 export type NotificationAuth = Pick<
   VerifiedAdminAuth,
-  'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids'
+  'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids' | 'assigned_party_ids'
 >;
 
 function toGroupIdNums(groupIds: string[]): number[] {
@@ -37,31 +38,44 @@ export function applyCanonicalNotificationTargeting(
 ): BroadcastPayload {
   const lockedEventCampaignId = snapshotEventCampaignEventIdForAttribution(payload);
 
-  if (auth.role === 'admin') {
+  const actor = toDashboardActor(auth);
+  const scope = getBroadcastScope(actor);
+  if (scope.kind === 'denied') throw new RbacError('Forbidden: broadcast not available for role', 403);
+
+  if (scope.kind === 'unrestricted') {
     return remergeLockedEventCampaignAttribution(payload, lockedEventCampaignId);
   }
 
-  if (auth.role === 'moderator') {
+  if (scope.kind === 'state_party') {
+    const partyFilter =
+      scope.party_slugs.length > 0
+        ? { party: scope.party_slugs }
+        : {};
     return remergeLockedEventCampaignAttribution(
       {
         ...payload,
         all_workers: false,
         filters: {
           ...(payload.filters ?? {}),
-          assigned_state_ids: auth.assigned_state_ids,
+          assigned_state_ids: scope.state_ids,
+          ...partyFilter,
         } as BroadcastFilters,
       },
       lockedEventCampaignId
     );
   }
 
-  // campaign_manager: groups-only targeting with canonical numeric group ids.
-  const parsedGroupIds = parseGroupIds(auth.assigned_group_ids);
+  const parsedGroupIds = parseGroupIds(scope.group_ids);
   if (parsedGroupIds.malformed) throw new RbacError('Forbidden: malformed assigned_group_ids', 403);
   const groupIds = toGroupIdNums(parsedGroupIds.ids);
   if (groupIds.length === 0) throw new RbacError('Forbidden: no assigned groups to target', 403);
   const ok = canAccessResource(
-    { id: auth.user.id, role: auth.role, assigned_state_ids: auth.assigned_state_ids, assigned_group_ids: auth.assigned_group_ids },
+    {
+      id: auth.user.id,
+      role: auth.role,
+      assigned_state_ids: auth.assigned_state_ids,
+      assigned_group_ids: auth.assigned_group_ids,
+    },
     { group_ids: groupIds.map(String) },
     { resourceType: 'notifications', audit: { resourceType: 'notifications', action: auditAction } }
   );

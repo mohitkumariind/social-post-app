@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, isElevatedDashboardRole, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireRole } from '@/lib/rbac/require';
@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
     .order('created_at', { ascending: false })
     .limit(limit) as any;
   if (cursorCreatedAt) q = q.lt('created_at', cursorCreatedAt);
-  if (auth.role !== 'admin') q = q.eq('created_by', auth.user.id);
+  if (!isElevatedDashboardRole(auth.role)) q = q.eq('created_by', auth.user.id);
 
   const { data, error } = await q;
   if (error) {
@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
   });
 
   const filtered =
-    auth.role === 'admin'
+    isElevatedDashboardRole(auth.role)
       ? shaped
       : shaped.filter((row) =>
           canAccessResource(rbacUser, { created_by: row.created_by }, { resourceType: TWITTER_CAMPAIGN_RESOURCE })

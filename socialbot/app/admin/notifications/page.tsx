@@ -7,6 +7,8 @@ import { adminStorageUpload } from '@/lib/admin-storage-client';
 import { supabase } from '@/lib/supabase';
 import { getPartyLabel, normalizePartyId, PARTIES_DATA } from '@/lib/constants';
 import { getStateVisibility } from '@/lib/admin/state-filter';
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
+import { logDashboardUiRbac } from '@/lib/rbac/dashboard-ui-log';
 import { BROADCAST_EVENT_CAMPAIGN_REQUIRES_EVENT_MSG } from '@/lib/broadcast-constants';
 import { BroadcastEventSelector, type BroadcastMode } from './BroadcastEventSelector';
 
@@ -125,41 +127,31 @@ export default function NotificationBroadcastCenterPage() {
   const [assemblyId, setAssemblyId] = useState('');
   const [groupIds, setGroupIds] = useState<string[]>([]);
 
-  const [viewer, setViewer] = useState<{ role: 'admin' | 'moderator' | 'campaign_manager'; assigned_state_ids: number[] } | null>(null);
-  const isModerator = viewer?.role === 'moderator';
-  const isCampaignManager = viewer?.role === 'campaign_manager';
-  const [viewerLoading, setViewerLoading] = useState(true);
+  const { ready: accessReady, access: dashboardAccess } = useDashboardAccess();
+  const viewerLoading = !accessReady;
+  const viewer = dashboardAccess?.actor ?? null;
+  const filterVisibility = dashboardAccess?.filter_visibility ?? null;
+  const canSendBroadcast = dashboardAccess?.permissions.canAccessModule('broadcast') ?? false;
+
+  const canUseGlobal = filterVisibility?.canUseGlobalFilters ?? false;
+  const showGroupTargeting = filterVisibility?.showGroupFilter ?? false;
+  const showStatePartyTargeting = filterVisibility?.showStateFilter ?? false;
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
-        if (!res.ok) return;
-        const d = (await res.json().catch(() => ({}))) as { role?: string; assigned_state_ids?: unknown };
-        if (cancelled) return;
-        const role =
-          d.role === 'moderator'
-            ? 'moderator'
-            : d.role === 'campaign_manager'
-              ? 'campaign_manager'
-              : d.role === 'admin'
-                ? 'admin'
-                : null;
-        const ids = Array.isArray(d.assigned_state_ids)
-          ? d.assigned_state_ids.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
-          : [];
-        if (role) setViewer({ role, assigned_state_ids: ids });
-      } catch {
-        /* ignore */
-      } finally {
-        if (!cancelled) setViewerLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (!dashboardAccess) return;
+    logDashboardUiRbac('notifications_page', {
+      role: dashboardAccess.actor.role,
+      allowed_modules: dashboardAccess.allowed_modules,
+      hidden_modules: dashboardAccess.hidden_modules,
+      filter_visibility: dashboardAccess.filter_visibility,
+    });
+  }, [dashboardAccess]);
+
+  useEffect(() => {
+    if (!canUseGlobal && broadcastMode === 'global') {
+      setBroadcastMode('event');
+    }
+  }, [canUseGlobal, broadcastMode]);
 
   const [states, setStates] = useState<GeoRow[]>([]);
   const [loksabhas, setLoksabhas] = useState<GeoRow[]>([]);
@@ -200,7 +192,14 @@ export default function NotificationBroadcastCenterPage() {
   const { visibleStates, viewerReady, hasSingleAssignedState: moderatorHasSingleState, singleAssignedStateId } = useMemo(
     () =>
       getStateVisibility({
-        viewer: viewer ? { role: viewer.role, assigned_state_ids: viewer.assigned_state_ids } : null,
+        viewer: viewer
+          ? {
+              role: viewer.role,
+              assigned_state_ids: viewer.assigned_state_ids,
+              assigned_group_ids: viewer.assigned_group_ids,
+              assigned_party_ids: viewer.assigned_party_ids,
+            }
+          : null,
         viewerLoading,
         allStates: states,
       }),
@@ -220,7 +219,7 @@ export default function NotificationBroadcastCenterPage() {
   const trimmedImageUrl = imageUrl.trim();
 
   useEffect(() => {
-    if (!isModerator) return;
+    if (!showStatePartyTargeting) return;
     const ids = viewer?.assigned_state_ids ?? [];
     if (ids.length === 0) return;
     // Keep current if allowed; otherwise default to first allowed (or set if empty).
@@ -228,12 +227,12 @@ export default function NotificationBroadcastCenterPage() {
     const next = stateId && allowed.includes(stateId) ? stateId : allowed[0];
     if (stateId !== next) setStateId(next);
     if (allWorkers) setAllWorkers(false);
-  }, [isModerator, viewer?.assigned_state_ids, stateId, allWorkers]);
+  }, [showStatePartyTargeting, viewer?.assigned_state_ids, stateId, allWorkers]);
 
   useEffect(() => {
-    if (!isCampaignManager) return;
+    if (!showGroupTargeting) return;
     if (allWorkers) setAllWorkers(false);
-  }, [isCampaignManager, allWorkers]);
+  }, [showGroupTargeting, allWorkers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -422,7 +421,7 @@ export default function NotificationBroadcastCenterPage() {
   }, [loksabhaId]);
 
   const audiencePreviewLabel = useMemo(() => {
-    if (isCampaignManager) {
+    if (showGroupTargeting) {
       const picked = groups.filter((g) => groupIds.includes(String(g.tag)));
       if (picked.length === 0) return 'Target groups (none selected)';
       if (picked.length === 1) return picked[0].name || picked[0].tag;
@@ -446,7 +445,7 @@ export default function NotificationBroadcastCenterPage() {
     if (parts.length > 0) return parts.join(' · ');
     return 'Filtered workers (set filters or choose All workers)';
   }, [
-    isCampaignManager,
+    showGroupTargeting,
     groups,
     groupIds,
     allWorkers,
@@ -461,7 +460,7 @@ export default function NotificationBroadcastCenterPage() {
     setPreviewCount(null);
     setPreviewTokens(null);
     const stateName = selectedState?.name?.trim() || '';
-    const filters = isCampaignManager
+    const filters = showGroupTargeting
       ? {
           group_ids: groupIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)),
         }
@@ -483,7 +482,7 @@ export default function NotificationBroadcastCenterPage() {
             message: '',
             broadcastMode,
             selected_event_id,
-            all_workers: isCampaignManager ? false : allWorkers,
+            all_workers: showGroupTargeting ? false : allWorkers,
             filters,
           })
         ),
@@ -509,7 +508,7 @@ export default function NotificationBroadcastCenterPage() {
     } finally {
       setPreviewLoading(false);
     }
-  }, [isCampaignManager, allWorkers, partyId, selectedState?.name, loksabhaId, assemblyId, groupIds, broadcastMode, selected_event_id]);
+  }, [showGroupTargeting, allWorkers, partyId, selectedState?.name, loksabhaId, assemblyId, groupIds, broadcastMode, selected_event_id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -521,7 +520,7 @@ export default function NotificationBroadcastCenterPage() {
       setPanelReachLoading(false);
       return;
     }
-    if (isCampaignManager && groupIds.length === 0) {
+    if (showGroupTargeting && groupIds.length === 0) {
       setPanelReachCount(null);
       setPanelReachLoading(false);
       return;
@@ -533,7 +532,7 @@ export default function NotificationBroadcastCenterPage() {
         if (cancelled) return;
         setPanelReachLoading(true);
         const stateName = selectedState?.name?.trim() || '';
-        const filters = isCampaignManager
+        const filters = showGroupTargeting
           ? {
               group_ids: groupIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)),
             }
@@ -555,7 +554,7 @@ export default function NotificationBroadcastCenterPage() {
                 message: '',
                 broadcastMode,
                 selected_event_id,
-                all_workers: isCampaignManager ? false : allWorkers,
+                all_workers: showGroupTargeting ? false : allWorkers,
                 filters,
               })
             ),
@@ -584,7 +583,7 @@ export default function NotificationBroadcastCenterPage() {
   }, [
     broadcastMode,
     selected_event_id,
-    isCampaignManager,
+    showGroupTargeting,
     allWorkers,
     partyId,
     selectedState?.name,
@@ -637,7 +636,7 @@ export default function NotificationBroadcastCenterPage() {
     }
     setSendLoading(true);
     const stateName = selectedState?.name?.trim() || '';
-    const filters = isCampaignManager
+    const filters = showGroupTargeting
       ? {
           group_ids: groupIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)),
         }
@@ -647,7 +646,7 @@ export default function NotificationBroadcastCenterPage() {
           loksabha_id: loksabhaId ? Number(loksabhaId) : null,
           assembly_id: assemblyId ? Number(assemblyId) : null,
         };
-    const filter_labels = isCampaignManager
+    const filter_labels = showGroupTargeting
       ? { party: null, state: null, loksabha: null, assembly: null }
       : {
           party: partyId ? getPartyLabel(partyId) : null,
@@ -667,7 +666,7 @@ export default function NotificationBroadcastCenterPage() {
             message: body.trim(),
             broadcastMode,
             selected_event_id,
-            all_workers: isCampaignManager ? false : allWorkers,
+            all_workers: showGroupTargeting ? false : allWorkers,
             filters,
             filter_labels,
             image_url: imageUrl.trim() || null,
@@ -792,7 +791,7 @@ export default function NotificationBroadcastCenterPage() {
         <h2 className="mb-1 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Section 1 · Targeting</h2>
         <p className="mb-6 text-sm font-semibold text-slate-600">To</p>
 
-        {isCampaignManager ? (
+        {showGroupTargeting ? (
           <div>
             <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-400">Target groups (owned)</span>
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
@@ -831,7 +830,7 @@ export default function NotificationBroadcastCenterPage() {
                 onChange={(e) => setAllWorkers(e.target.checked)}
                 className="h-4 w-4 rounded border-slate-300"
                 style={{ accentColor: ACCENT }}
-                disabled={isModerator}
+                disabled={showStatePartyTargeting}
               />
               <span className="text-sm font-bold text-slate-800">All workers (bypass filters)</span>
             </label>
@@ -1063,18 +1062,21 @@ export default function NotificationBroadcastCenterPage() {
       </section>
 
       {/* Section 3 — Send */}
+      {canSendBroadcast ? (
       <section className="mb-10 rounded-2xl border border-slate-100 bg-white p-6 shadow-md shadow-slate-200/50">
         <h2 className="mb-6 text-xs font-black uppercase tracking-[0.2em] text-slate-400">Section 3 · Action</h2>
         <button
           type="button"
           onClick={openConfirm}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-base font-black text-white shadow-lg transition hover:opacity-95 sm:w-auto sm:min-w-[220px] sm:px-10"
+          disabled={!accessReady}
+          className="flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-base font-black text-white shadow-lg transition hover:opacity-95 sm:w-auto sm:min-w-[220px] sm:px-10 disabled:opacity-50"
           style={{ backgroundColor: ACCENT }}
         >
           <Send className="h-5 w-5" />
           {broadcastMode === 'global' ? 'Send Broadcast' : 'Send Event Notification'}
         </button>
       </section>
+      ) : null}
 
       {/* Section 4 — History */}
       <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-md shadow-slate-200/50">

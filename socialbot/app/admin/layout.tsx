@@ -1,8 +1,9 @@
 'use client';
 
-import EditorRouteGuard from '@/components/admin/EditorRouteGuard';
+import DashboardRouteGuard from '@/components/admin/DashboardRouteGuard';
 import Navbar from '@/components/admin/Navbar';
 import Sidebar from '@/components/admin/Sidebar';
+import { DashboardAccessProvider } from '@/lib/context/DashboardAccessContext';
 import { usePathname } from 'next/navigation';
 
 const PAGE_TITLES: Record<string, string> = {
@@ -17,6 +18,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/admin/groups': 'Group Management',
   '/admin/notifications': 'Notification Broadcast Center',
   '/admin/twitter-campaign': 'Twitter Campaign',
+  '/admin/rbac-debug': 'RBAC Debug',
 };
 
 function getTitle(pathname: string): string {
@@ -44,14 +46,16 @@ export default function AdminLayout({
   }
 
   return (
-    <div className="flex min-h-screen bg-zinc-950">
-      <Sidebar />
-      <div className="ml-64 flex flex-1 flex-col">
-        <Navbar title={title} />
-        <main className="flex-1 p-6">
-          <EditorRouteGuard>{children}</EditorRouteGuard>
-        </main>
+    <DashboardAccessProvider>
+      <div className="flex min-h-screen bg-zinc-950">
+        <Sidebar />
+        <div className="ml-64 flex flex-1 flex-col">
+          <Navbar title={title} />
+          <main className="flex-1 p-6">
+            <DashboardRouteGuard>{children}</DashboardRouteGuard>
+          </main>
+        </div>
       </div>
-    </div>
+    </DashboardAccessProvider>
   );
 }

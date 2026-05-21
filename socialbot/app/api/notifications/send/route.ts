@@ -15,6 +15,7 @@ import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import type { UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import { RbacError, requireStandardRbacContext } from '@/lib/rbac/require';
+import { logPermissionDecision } from '@/lib/rbac/permission-audit';
 import { applyCanonicalNotificationTargeting, filterRecipientProfileIdsForAdmin, type NotificationAuth } from '@/lib/rbac/notification-targeting';
 import { normalizeBroadcastIncomingRequest } from '@/lib/broadcast-api-request';
 import { filterUsersAllowedForEventResend } from '@/lib/admin/notification-resend-cooldown';
@@ -168,6 +169,14 @@ export async function POST(request: Request) {
         { filters: payload.filters ?? undefined } as Record<string, unknown>,
         { resourceType: 'notifications', resourceName: String(payload.title ?? '') }
       );
+      logPermissionDecision({
+        user_id: auth.user.id,
+        role: auth.role,
+        action: 'broadcast_send',
+        resource_type: 'notifications',
+        allowed: decision.ok,
+        denied_reason: decision.ok ? null : decision.reason,
+      });
       if (!decision.ok) return json({ error: decision.reason }, 403);
     }
 

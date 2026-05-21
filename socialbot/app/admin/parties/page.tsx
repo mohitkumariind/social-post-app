@@ -1,7 +1,7 @@
 "use client";
 import { Flag, Info, Users } from 'lucide-react';
-import React, { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import React, { useEffect, useState } from 'react';
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
 
 /** Accent tiles for party cards (cycles); "Other" uses neutral icon tile instead */
 const CARD_ACCENT_CLASSES = [
@@ -27,7 +27,15 @@ function isOtherPartyId(id: string) {
   return String(id || '').trim().toLowerCase() === 'other';
 }
 
+async function parseApiError(res: Response, fallback: string): Promise<string> {
+  const d = (await res.json().catch(() => ({}))) as { error?: string };
+  return String(d.error ?? fallback).trim() || fallback;
+}
+
 export default function PartyManager() {
+  const { ready: accessReady, access } = useDashboardAccess();
+  const canManageParties = access?.permissions.canAccessModule('parties') ?? false;
+
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<Array<PartyRow & { accentClass: string }>>([]);
   const [error, setError] = useState<string | null>(null);
@@ -42,31 +50,30 @@ export default function PartyManager() {
   const load = async () => {
     setLoading(true);
     setError(null);
-    const { data, error: err } = await supabase
-      .from('parties')
-      .select('id,name,logo_url')
-      .order('name', { ascending: true });
-    if (err) {
-      setError(err.message || 'Could not load parties');
-      setRows([]);
-      setLoading(false);
-      return;
-    }
-    const normalized = (data || [])
-      .map((r: any) => ({
-        id: String(r.id ?? '').trim(),
-        name: String(r.name ?? '').trim(),
-        logo_url: r.logo_url == null ? null : String(r.logo_url).trim() || null,
-      }))
-      .filter((r) => r.id && r.name);
+    try {
+      const res = await fetch('/api/admin/parties', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error(await parseApiError(res, 'Could not load parties'));
+      const d = (await res.json()) as { parties?: PartyRow[] };
+      const normalized = (Array.isArray(d.parties) ? d.parties : [])
+        .map((r) => ({
+          id: String(r.id ?? '').trim(),
+          name: String(r.name ?? '').trim(),
+          logo_url: r.logo_url == null ? null : String(r.logo_url).trim() || null,
+        }))
+        .filter((r) => r.id && r.name);
 
-    setRows(
-      normalized.map((p, i) => ({
-        ...p,
-        accentClass: CARD_ACCENT_CLASSES[i % CARD_ACCENT_CLASSES.length],
-      }))
-    );
-    setLoading(false);
+      setRows(
+        normalized.map((p, i) => ({
+          ...p,
+          accentClass: CARD_ACCENT_CLASSES[i % CARD_ACCENT_CLASSES.length],
+        }))
+      );
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Could not load parties');
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -94,20 +101,25 @@ export default function PartyManager() {
       const safeName = String(file.name || '').trim();
       const ext = (safeName.split('.').pop() || 'png').toLowerCase();
       const safeExt = /^[a-z0-9]+$/i.test(ext) && ext.length <= 5 ? ext : 'png';
-      const path = `${baseId}_${Date.now()}.${safeExt}`;
+      const storagePath = `public/parties/${baseId}_${Date.now()}.${safeExt}`;
 
-      const { error: upErr } = await supabase.storage
-        .from('post-images')
-        .upload(path, file, { upsert: true, contentType: file.type || `image/${safeExt}` });
-      if (upErr) throw upErr;
+      const form = new FormData();
+      form.append('bucket', 'post-images');
+      form.append('path', storagePath);
+      form.append('file', file);
 
-      const { data } = supabase.storage.from('post-images').getPublicUrl(path);
-      const publicUrl = data?.publicUrl ? String(data.publicUrl) : '';
+      const res = await fetch('/api/admin/storage/upload', {
+        method: 'POST',
+        body: form,
+        credentials: 'same-origin',
+      });
+      if (!res.ok) throw new Error(await parseApiError(res, 'Logo upload failed'));
+      const d = (await res.json()) as { publicUrl?: string };
+      const publicUrl = String(d.publicUrl ?? '').trim();
       if (!publicUrl) throw new Error('Upload succeeded but public URL is missing.');
-
       setFormLogoPublicUrl(publicUrl);
-    } catch (e: any) {
-      setError(e?.message || 'Logo upload failed');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Logo upload failed');
     } finally {
       setUploading(false);
     }
@@ -122,22 +134,24 @@ export default function PartyManager() {
     setSaving(true);
     setError(null);
     try {
-      if (editingId) {
-        const { error: upErr } = await supabase
-          .from('parties')
-          .update({ name, logo_url })
-          .eq('id', editingId);
-        if (upErr) throw upErr;
-      } else {
-        const { error: insErr } = await supabase
-          .from('parties')
-          .insert({ id, name, logo_url });
-        if (insErr) throw insErr;
-      }
+      const res = editingId
+        ? await fetch('/api/admin/parties', {
+            method: 'PATCH',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: editingId, name, logo_url }),
+          })
+        : await fetch('/api/admin/parties', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, name, logo_url }),
+          });
+      if (!res.ok) throw new Error(await parseApiError(res, 'Save failed'));
       resetForm();
       await load();
-    } catch (e: any) {
-      setError(e?.message || 'Save failed');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Save failed');
     } finally {
       setSaving(false);
     }
@@ -157,12 +171,15 @@ export default function PartyManager() {
     setSaving(true);
     setError(null);
     try {
-      const { error: delErr } = await supabase.from('parties').delete().eq('id', id);
-      if (delErr) throw delErr;
+      const res = await fetch(`/api/admin/parties?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      if (!res.ok) throw new Error(await parseApiError(res, 'Delete failed'));
       if (editingId === id) resetForm();
       await load();
-    } catch (e: any) {
-      setError(e?.message || 'Delete failed');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Delete failed');
     } finally {
       setSaving(false);
     }
@@ -182,7 +199,16 @@ export default function PartyManager() {
         </div>
       </div>
 
+      {!accessReady ? (
+        <p className="text-sm font-bold text-slate-500">Loading access…</p>
+      ) : !canManageParties ? (
+        <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900">
+          You do not have permission to manage parties.
+        </p>
+      ) : null}
+
       {/* MANAGER FORM */}
+      {canManageParties ? (
       <div className="bg-slate-50 border border-slate-200 rounded-[28px] p-6 space-y-4">
         <div className="flex gap-4 items-start">
           <div className="w-11 h-11 rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-blue-600 shrink-0 shadow-sm">
@@ -281,6 +307,7 @@ export default function PartyManager() {
           </button>
         </div>
       </div>
+      ) : null}
 
       {/* PARTY GRID — mirrors mobile PARTIES_DATA */}
       <div className="space-y-6">
@@ -327,6 +354,7 @@ export default function PartyManager() {
                 id: {party.id}
               </p>
 
+              {canManageParties ? (
               <div className="mt-4 flex gap-2">
                 <button
                   onClick={() => startEdit(party)}
@@ -343,6 +371,7 @@ export default function PartyManager() {
                   Delete
                 </button>
               </div>
+              ) : null}
             </div>
           ))}
         </div>

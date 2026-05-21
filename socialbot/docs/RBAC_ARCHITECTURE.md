@@ -1,8 +1,99 @@
-# RBAC Architecture Standard
+# RBAC Architecture Standard (production hardened)
 
-This project uses a centralized, fail-closed RBAC model. Route-level authorization must align with the shared RBAC engines and helpers.
+This project uses a centralized, fail-closed RBAC model. **`permission-engine.ts` is the only authority** for allow/deny semantics. See `lib/rbac/authority.ts` for forbidden patterns.
+
+## Layer diagram (Phase 4)
+
+```mermaid
+flowchart TB
+  subgraph client [Client]
+    Pages[Admin pages]
+    Hook[useDashboardAccess]
+    UI[ui-capabilities]
+  end
+
+  subgraph routing [Routing only]
+    DA[dashboard-access]
+    DP[dashboard-permissions]
+  end
+
+  subgraph core [Single source of truth]
+    PE[permission-engine]
+    SC[scope-cache]
+    SQ[scoped-query-builder]
+  end
+
+  subgraph writes [Mutation gateway]
+    MG[mutation-gateway]
+    PM[permission-mutations]
+    AL[rbac_audit_logs allow+deny]
+  end
+
+  Pages --> Hook --> UI
+  UI --> PE
+  DA --> DP --> PE
+  PE --> SC
+  SQ --> PE
+  API[Admin API routes] --> require[requireRole / requireStandardRbacContext]
+  API --> SQ
+  API --> MG --> PM --> PE
+  PM --> AL
+  PE --> AL
+```
+
+| Layer | Module | Responsibility |
+|-------|--------|----------------|
+| Authority | `permission-engine.ts` | `canView/Edit/Delete/Upload`, `canAccessScope`, `canCreateGroup`, `canTargetAudience` |
+| Entitlements | `dashboard-permissions.ts` | Module matrix, filters, form profiles (delegates to engine) |
+| Routing | `dashboard-access.ts` | Paths, API map, sidebar, analytics scope **mapping only** |
+| UI | `ui-capabilities.ts` | Client capability bundle (no standalone rules) |
+| Reads DB | `scoped-query-builder.ts` | List predicates aligned with engine scope |
+| Writes | `mutation-gateway.ts` | `canPerformMutation` — all mutations; audits allow + deny |
+| SQL analytics | `lib/admin/rbac.ts` | Parameterized analytics scope (server-only) |
+
+## Production validation (stabilization)
+
+Run before release:
+
+```bash
+cd socialbot && npm test -- tests/rbac/ tests/security/dashboard-reader-rbac.contract.test.ts
+```
+
+| Suite | Covers |
+|-------|--------|
+| `production-regression.test.ts` | All panel roles: events, upload, broadcast, twitter, scope cache |
+| `mobile-admin-visibility-parity.test.ts` | `content-visibility` ↔ `eventVisibilityMatch` |
+| `scoped-query-builder.test.ts` | DB pre-filters (moderator state overlap, CM `target_groups`) |
+| `permission-audit.test.ts` | `rbac_audit_logs` payload shape |
+| `dashboard-reader-rbac.contract.test.ts` | Mobile/SQL `dashboard_visibility_match` mirror |
+
+Indexes: `supabase/migrations/20260521150000_rbac_visibility_query_indexes.sql`
+
+Legacy map: `docs/RBAC_LEGACY_CLEANUP.md`
 
 ## Core Engines
+
+- **Scope cache** (`lib/rbac/scope-cache.ts`) — `getCachedNormalizedScope()` memoizes assignment normalization (60s TTL).
+
+- **Permission audit** (`lib/rbac/permission-audit.ts` + `rbac_audit_logs` table) — `logPermissionDecision()` for API/mutation trails.
+
+- **UI capabilities** (`lib/rbac/ui-capabilities.ts` + `lib/hooks/useDashboardAccess.ts`) — client pages must use these instead of `role ===` checks.
+
+- **Mobile visibility** (`lib/rbac/content-visibility.ts` at repo root, used by `utils/visibility.ts`) — aligned with SQL `dashboard_visibility_match`.
+
+- **RBAC Debug** (`/admin/rbac-debug`, `lib/rbac/rbac-debug-eval.ts`) — admin-only permission inspector.
+
+- **Dashboard access** (`lib/rbac/dashboard-access.ts`)
+  - Single source for sidebar modules, route/API guards, filter visibility, analytics/leaderboard/broadcast/twitter scope.
+  - Functions: `getVisibleSidebarItems`, `canAccessDashboardModule`, `canUseGlobalFilters`, `getAnalyticsScope`, `getLeaderboardScope`, `getBroadcastScope`, `getTwitterCampaignScope`.
+  - Debug channel: `[dashboard-rbac]` logs (`role`, `allowed_modules`, `denied_module`, `active_scope`, `global_filter_access`).
+
+- **Permission engine** (`lib/rbac/permission-engine.ts`, barrel `lib/rbac/index.ts`)
+  - `canViewEvent`, `canEditEvent`, `canDeleteEvent`, `canUploadPost`, `canCreateGroup`, `canTargetAudience`
+  - `normalizeScope`, `canAccessScope` (`lib/rbac/normalize-scope.ts`)
+  - Cross-role published visibility: moderator / campaign_manager / editor see each other's **published** events when **state and party** overlap (visibility does not grant edit/upload).
+  - Global targeting (`0`, `ALL`, dashboard category): **admin only**.
+  - Empty filter arrays on a dimension = no extra restriction **inside** assigned scope (never all-India).
 
 - `requireRole` / `requireStandardRbacContext` (`lib/rbac/require.ts`)
   - Entry gate for authenticated admin APIs.
@@ -19,9 +110,10 @@ This project uses a centralized, fail-closed RBAC model. Route-level authorizati
   - Database-layer query scoping.
   - Prevents fetch-then-filter RBAC drift.
 
-- `canPerformMutation` (`lib/rbac/scoped-write-engine.ts`)
+- `canPerformMutation` (`lib/rbac/mutation-gateway.ts`)
   - Centralized write/mutation authorization.
-  - Emits consistent denied audit + RBAC observability events.
+  - `auditRbacMutation` logs **allowed + denied** when routes pass `audit` context.
+  - Denials also emit RBAC observability + `admin_actions`.
 
 - `RBAC_RESOURCE_REGISTRY` (`lib/rbac/resource-classification.ts`)
   - Canonical resource policy registry:

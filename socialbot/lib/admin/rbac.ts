@@ -2,6 +2,9 @@ import { parseGroupIds, parseStateIds } from '@/lib/rbac/require';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
 
 /**
+ * Analytics SQL scope (server-only). Semantics mirror `toAdminAnalyticsScopeFromDashboard`
+ * in `lib/rbac/dashboard-access.ts` — do not add parallel scope rules here.
+ *
  * Session-derived identity for admin analytics RBAC.
  * `effective_group_ids` should be filled server-side (e.g. resolveEffectiveGroupIdsForCampaignManager)
  * before calling getScopedFilters for campaign_manager — never trust the browser.

@@ -775,12 +775,30 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
   try {
-    requireRole(auth, ['admin', 'moderator', 'campaign_manager']);
+    requireRole(auth, ['admin', 'moderator']);
     requireModeratorHasAssignedStates(auth);
-    requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  {
+    const createDecision = canPerformMutation(
+      {
+        id: auth.user.id,
+        role: auth.role,
+        assigned_state_ids: auth.assigned_state_ids,
+        assigned_group_ids: auth.assigned_group_ids,
+        assigned_party_ids: auth.assigned_party_ids,
+      },
+      'groups.create',
+      null,
+      null,
+      { resourceType: 'groups' }
+    );
+    if (!createDecision.ok) {
+      return NextResponse.json({ error: createDecision.reason }, { status: 403 });
+    }
   }
 
   const admin = createServiceRoleClient();
@@ -809,17 +827,6 @@ export async function POST(request: NextRequest) {
   const grp = await resolveGroup(admin, tag, { createIfMissing: true, createdBy: auth.user.id });
   if (!grp) return NextResponse.json({ error: 'Missing/invalid group id' }, { status: 400 });
   const hasMemberships = await hasGroupMembershipsTable(admin);
-
-  // If campaign manager created/resolved a group, ensure they are assigned to it so they can read/manage it later.
-  if (isCampaignManager(auth)) {
-    const gidStr = String(grp.id);
-    const current = toStrArr(auth.assigned_group_ids);
-    if (!current.includes(gidStr)) {
-      const next = [...current, gidStr];
-      const { error: upErr } = await admin.from('profiles').update({ assigned_group_ids: next }).eq('id', auth.user.id);
-      if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
-    }
-  }
 
   {
     const decision = canPerformMutation(

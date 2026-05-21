@@ -2,6 +2,7 @@
 
 import { Search, Tags, Trash2, Users, X } from 'lucide-react';
 import React, { useCallback, useEffect, useState } from 'react';
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
 
 type GroupRow = { tag: string; name?: string; count: number }; // tag = group_id as string
 
@@ -38,35 +39,10 @@ export default function GroupManagementPage() {
   const [deleteConfirmTag, setDeleteConfirmTag] = useState<string | null>(null);
   const [busyTag, setBusyTag] = useState<string | null>(null);
 
-  const [viewerRole, setViewerRole] = useState<'admin' | 'moderator' | 'campaign_manager' | null>(null);
-  const isModerator = viewerRole === 'moderator';
-  const isCampaignManager = viewerRole === 'campaign_manager';
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/admin/viewer', { credentials: 'same-origin' });
-        if (!res.ok) return;
-        const d = (await res.json().catch(() => ({}))) as { role?: string };
-        if (cancelled) return;
-        setViewerRole(
-          d.role === 'moderator'
-            ? 'moderator'
-            : d.role === 'campaign_manager'
-              ? 'campaign_manager'
-              : d.role === 'admin'
-                ? 'admin'
-                : null
-        );
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { access } = useDashboardAccess();
+  const canCreateGroups = access?.permissions.canCreateGroup() ?? false;
+  /** Campaign managers: view groups only; no create/delete tag actions (matches canCreateGroup + API). */
+  const showCmGroupOnlyUi = access?.permissions.events.campaignManagerForm ?? false;
 
   useEffect(() => {
     if (!toast) return;
@@ -227,6 +203,7 @@ export default function GroupManagementPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {canCreateGroups ? (
           <button
             type="button"
             onClick={() => {
@@ -240,6 +217,7 @@ export default function GroupManagementPage() {
           >
             Create Group
           </button>
+          ) : null}
           <button
             type="button"
             onClick={() => void loadGroups()}
@@ -285,7 +263,7 @@ export default function GroupManagementPage() {
                 >
                   View
                 </button>
-                {!isCampaignManager ? (
+                {!showCmGroupOnlyUi ? (
                   <>
                     <button
                       type="button"

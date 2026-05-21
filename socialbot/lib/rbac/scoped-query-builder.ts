@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isAdminRole } from '@/lib/rbac/dashboard-permissions';
 import { parseGroupIds, parseStateIds } from '@/lib/rbac/require';
+import { PUBLISHED_EVENT_STATUSES } from '@/lib/rbac/scope-types';
 import type { UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import {
   auditUnsupportedResourceUsage,
@@ -51,15 +53,45 @@ function campaignManagerScopeGroupIds(canonical: CanonicalScope, ctx: ScopedQuer
   return canonical.groupIds;
 }
 
+function scopeEventsQuery(
+  user: UnifiedUser,
+  baseQuery: AnyQuery,
+  canonical: CanonicalScope,
+  ctx: ScopedQueryContext
+): AnyQuery {
+  const role = user.role;
+  const userId = String(user.id ?? '').trim();
+
+  if (role === 'editor') {
+    return baseQuery.eq('created_by', userId);
+  }
+
+  if (role === 'moderator') {
+    const sids = canonical.stateIds;
+    if (sids.length === 0) return baseQuery.eq('created_by', userId);
+    const published = PUBLISHED_EVENT_STATUSES.join(',');
+    const stateList = [...new Set([...sids, 0])].join(',');
+    return baseQuery.or(
+      `created_by.eq.${userId},and(status.in.(${published}),state_id.ov.{${stateList}})`
+    );
+  }
+
+  if (role === 'campaign_manager') {
+    const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
+    if (scopeGids.length === 0) return baseQuery.eq('id', '__none__');
+    return baseQuery
+      .not('target_groups', 'is', null)
+      .neq('target_groups', '{}')
+      .containedBy('target_groups', scopeGids);
+  }
+
+  return baseQuery.eq('created_by', userId);
+}
+
 /**
  * Applies RBAC scoping at the DB query layer.
- *
- * Canonical semantics (enterprise-safe):
- * - Non-admin access is subset-scoped, not overlap-scoped.
- * - Resource scope fields must be present (missing scope is denied/fail-closed).
- * - Unknown/unregistered resources are denied explicitly (no silent fallback behavior).
- *
- * This layer intentionally mirrors Unified Scope Engine semantics to avoid RBAC drift.
+ * List predicates mirror permission-engine semantics (canViewEvent / canAccessScope subset rules).
+ * Row-level UI mutations still require canEditEvent / canPerformMutation.
  */
 export function buildScopedQuery(
   user: UnifiedUser,
@@ -79,13 +111,19 @@ export function buildScopedQuery(
     return baseQuery.eq('id', '__none__');
   }
 
+  if (isAdminRole(user.role)) return baseQuery;
+
   const role = user.role;
-  if (role === 'admin' || role === 'super_admin') return baseQuery;
-  if (resourceType === 'events' || resourceType === 'posts') {
-    return baseQuery.eq('created_by', user.id);
-  }
   const canonical = canonicalScopeFromUser(user);
   if (canonical.malformed) return baseQuery.eq('id', '__none__');
+
+  if (resourceType === 'events') {
+    return scopeEventsQuery(user, baseQuery, canonical, ctx);
+  }
+
+  if (resourceType === 'posts') {
+    return baseQuery.eq('created_by', String(user.id ?? '').trim());
+  }
 
   if (resourceType === 'notification_templates') {
     // Ownership-only resources
@@ -156,15 +194,18 @@ export function buildScopedAnalyticsQuery(
     return baseQuery.eq('id', '__none__');
   }
 
-  const role = user.role;
-  if (role === 'admin' || role === 'super_admin') return baseQuery;
-
-  if (resourceType === 'events' || resourceType === 'posts') {
-    return baseQuery.eq('created_by', user.id);
-  }
+  if (isAdminRole(user.role)) return baseQuery;
 
   const canonical = canonicalScopeFromUser(user);
   if (canonical.malformed) return baseQuery.eq('id', '__none__');
+
+  if (resourceType === 'events') {
+    return scopeEventsQuery(user, baseQuery, canonical, ctx);
+  }
+
+  if (resourceType === 'posts') {
+    return baseQuery.eq('created_by', String(user.id ?? '').trim());
+  }
 
   if (resourceType === 'profiles') {
     if (role === 'moderator') return baseQuery.not('assigned_state_ids', 'is', null).neq('assigned_state_ids', '{}').containedBy('assigned_state_ids', canonical.stateIds);

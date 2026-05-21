@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
+import { createServiceRoleClient, isElevatedDashboardRole, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { resolveScope } from '@/lib/rbac/unified-scope-engine';
@@ -69,7 +69,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ logId: st
   if ((logRow as any).undone_at) return json({ error: 'Already undone' }, 409);
 
   // RBAC: must be able to *view* the log in Activity Center to undo it.
-  if (auth.role !== 'admin') {
+  if (!isElevatedDashboardRole(auth.role)) {
     const scope = resolveScope({
       role: auth.role,
       assigned_state_ids: auth.assigned_state_ids,

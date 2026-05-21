@@ -11,6 +11,8 @@ import type { AdminRole } from '@/lib/permissions';
 import { canAccessAdminPanel, normalizeProfileRole } from '@/lib/permissions';
 import type { RbacUser } from '@/lib/rbac/require';
 
+export { isElevatedDashboardRole } from '@/lib/rbac/dashboard-permissions';
+
 /**
  * Optional emergency local bypass for development only.
  * Fail-closed in production: even if env is set, bypass is ignored.
@@ -138,34 +140,54 @@ export function toVerifiedAdminAuth(
 
 /** Map validated admin session to unified RBAC user (all AdminRole values). */
 export function toRbacUser(
-  auth: Pick<VerifiedAdminAuth, 'user' | 'role' | 'assigned_state_ids' | 'assigned_group_ids'>
+  auth: Pick<
+    VerifiedAdminAuth,
+    | 'user'
+    | 'role'
+    | 'assigned_state_ids'
+    | 'assigned_group_ids'
+    | 'assigned_party_ids'
+  >
 ): RbacUser {
   return {
     id: auth.user.id,
     role: auth.role,
     assigned_state_ids: auth.assigned_state_ids,
     assigned_group_ids: auth.assigned_group_ids,
+    assigned_party_ids: auth.assigned_party_ids,
   };
 }
 
+/** Full actor for centralized permission engine. */
+export function toRbacActor(auth: VerifiedAdminAuth) {
+  return {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+    assigned_party_ids: auth.assigned_party_ids,
+  };
+}
+
+/** @deprecated Prefer {@link isAdminRole} from `@/lib/rbac`. */
 export function isAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
-  return auth.role === 'admin';
+  return isAdminRole(auth.role);
 }
 
 export function isSuperAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
-  return auth.role === 'super_admin';
+  return isSuperAdminRole(auth.role);
 }
 
 export function isEditor(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
-  return auth.role === 'editor';
+  return isEditorRole(auth.role);
 }
 
 export function isModerator(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
-  return auth.role === 'moderator';
+  return isModeratorRole(auth.role);
 }
 
 export function isCampaignManager(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
-  return auth.role === 'campaign_manager';
+  return isCampaignManagerRole(auth.role);
 }
 
 export function assertAdminRole(auth: Pick<VerifiedAdminAuth, 'role'>): void {

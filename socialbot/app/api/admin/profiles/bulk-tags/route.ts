@@ -3,7 +3,8 @@ import { createServiceRoleClient, isCampaignManager, validateAdminSession } from
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
-import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
+import { canPerformMutation } from '@/lib/rbac/mutation-gateway';
+import { isElevatedDashboardRole } from '@/lib/rbac/dashboard-permissions';
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireRole } from '@/lib/rbac/require';
 import { SECURITY_LIMITS } from '@/lib/security-limits';
 
@@ -71,7 +72,16 @@ export async function POST(request: NextRequest) {
   const allowed_profile_ids =
     isCampaignManager(auth) ? await resolveAllowedProfileIdsForCampaignManager(admin as any, auth.assigned_group_ids) : null;
 
-  if (isCampaignManager(auth)) {
+  if (isElevatedDashboardRole(auth.role)) {
+    const decision = canPerformMutation(
+      scopedUser,
+      'profiles.bulk_tags',
+      null,
+      { ids, group_tags },
+      { resourceType: 'profiles', resourceName: 'bulk-tags' }
+    );
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+  } else if (isCampaignManager(auth)) {
     // Strict: ALL requested ids must be within assigned groups (deny partial writes).
     const q = buildScopedQuery(
       scopedUser,

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
 
 type AdminLogRow = {
   id: string;
@@ -27,6 +28,9 @@ const TABS: { id: string; label: string; resource_type?: string; severity?: stri
 ];
 
 export default function ActivityCenterPage() {
+  const { access } = useDashboardAccess();
+  const canUndoActivity = access?.filter_visibility.canUseGlobalFilters ?? false;
+
   const [tab, setTab] = useState('all');
   const [logs, setLogs] = useState<AdminLogRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -150,11 +154,12 @@ export default function ActivityCenterPage() {
                 </div>
                 <div className="col-span-3 truncate">{r.resource_name ?? '-'}</div>
                 <div className="col-span-1 text-right text-xs">
-                  {r.undoable ? (
+                  {r.undoable && canUndoActivity ? (
                     r.undone_at ? (
                       <span className="text-zinc-500">Already Undone</span>
                     ) : (
                       <button
+                        type="button"
                         onClick={() => setUndoModal({ open: true, row: r, busy: false, err: null })}
                         className="rounded bg-zinc-800 px-2 py-1 text-xs text-white hover:bg-zinc-700"
                       >

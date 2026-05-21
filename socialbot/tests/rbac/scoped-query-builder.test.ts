@@ -61,7 +61,11 @@ describe('scoped query builder', () => {
       'profiles',
       { allowed_profile_ids: [p1, p2] }
     );
-    expect(q.calls[0]).toEqual({ method: 'or', args: [`id.in.(${p1},${p2}),group_id.in.(1)`] });
+    expect(q.calls[0]?.method).toBe('or');
+    const orFilter = String(q.calls[0]?.args[0] ?? '');
+    expect(orFilter).toContain(`id.in.(${p1},${p2})`);
+    expect(orFilter).toContain('group_id.in.(1)');
+    expect(orFilter).toContain('assigned_group_ids.ov.{1}');
   });
 
   it('prefers effective_group_ids over profile-only ids for campaign manager events', () => {
@@ -93,7 +97,7 @@ describe('scoped query builder', () => {
       'events'
     );
     const orCall = q.calls.find((c) => c.method === 'or');
-    expect(orCall?.args[0]).toContain('state_id.ov.{0}');
+    expect(orCall?.args[0]).toMatch(/state_id\.ov\.\{[^}]*\b0\b[^}]*\}/);
   });
 
   it('keeps analytics scoping aligned for campaign manager events', () => {

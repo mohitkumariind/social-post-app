@@ -1,5 +1,6 @@
 import { type NextRequest } from 'next/server';
-import { isEditorAllowedAdminApiPath } from '@/lib/editor-access';
+import { canAccessDashboardApi } from '@/lib/rbac/dashboard-access';
+import type { AdminPanelRole } from '@/lib/profile-roles';
 
 type SecurityEvent = {
   event: string;
@@ -72,28 +73,42 @@ export function requireAdminApiRequest(input: {
   isEditor?: boolean;
   pathname?: string;
   method?: string;
+  role?: string | null;
+  assigned_state_ids?: number[];
+  assigned_group_ids?: string[];
+  assigned_party_ids?: string[];
+  userId?: string;
 }): { ok: true } | { ok: false; status: number; error: string; reason: string } {
   if (!input.hasSessionUser) {
     return { ok: false, status: 401, error: 'Unauthorized', reason: 'missing-auth-session' };
   }
-  if (input.isEditor) {
-    const allowed = isEditorAllowedAdminApiPath(String(input.pathname ?? ''), String(input.method ?? 'GET'));
-    if (!allowed) {
-      return {
-        ok: false,
-        status: 403,
-        error: `Forbidden: editor cannot call ${input.method ?? 'GET'} ${input.pathname ?? ''}`,
-        reason: 'editor-api-not-allowed',
-      };
-    }
-    return { ok: true };
-  }
-  if (!input.isAdmin && !input.isSuperAdmin && !input.isModerator && !input.isCampaignManager) {
+  const roleRaw = input.role ?? (input.isAdmin || input.isSuperAdmin ? 'admin' : input.isEditor ? 'editor' : input.isModerator ? 'moderator' : input.isCampaignManager ? 'campaign_manager' : '');
+  const role = (roleRaw === 'super_admin' ? 'admin' : roleRaw) as AdminPanelRole;
+  if (!input.isAdmin && !input.isSuperAdmin && !input.isModerator && !input.isCampaignManager && !input.isEditor) {
     return {
       ok: false,
       status: 403,
       error: 'Forbidden: role not allowed for admin API',
       reason: 'role-not-allowed',
+    };
+  }
+  const allowed = canAccessDashboardApi(
+    {
+      id: input.userId ?? '',
+      role,
+      assigned_state_ids: input.assigned_state_ids ?? [],
+      assigned_group_ids: input.assigned_group_ids ?? [],
+      assigned_party_ids: input.assigned_party_ids ?? [],
+    },
+    String(input.pathname ?? ''),
+    String(input.method ?? 'GET')
+  );
+  if (!allowed) {
+    return {
+      ok: false,
+      status: 403,
+      error: `Forbidden: role cannot call ${input.method ?? 'GET'} ${input.pathname ?? ''}`,
+      reason: 'dashboard-api-not-allowed',
     };
   }
   return { ok: true };

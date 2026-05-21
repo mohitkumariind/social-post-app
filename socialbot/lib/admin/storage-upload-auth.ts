@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
-import { isCampaignManager, isEditor, isModerator } from '@/lib/admin-gate';
-import { assertPostEventOwnedByActor } from '@/lib/event-access';
+import { isCampaignManager, isEditor, isModerator, toRbacActor } from '@/lib/admin-gate';
+import { canUploadPost } from '@/lib/rbac';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 
 export const STORAGE_UPLOAD_ROLES = [
@@ -93,22 +93,42 @@ export async function assertStorageUploadAllowed(args: {
         },
       };
     }
-    const own = await assertPostEventOwnedByActor(admin, eventId, auth.user.id);
-    logStorageAuth('editor_event_ownership', {
-      ok: own.ok,
+    const { data: ev, error: evErr } = await admin
+      .from('events')
+      .select('id, created_by, created_role, state_id, party_id, party, target_groups, status')
+      .eq('id', eventId)
+      .maybeSingle();
+    if (evErr) {
+      return {
+        ok: false,
+        status: 500,
+        body: { ...base, step: 'editor_event_lookup', reason: 'supabase_error', error: evErr.message },
+      };
+    }
+    if (!ev) {
+      return {
+        ok: false,
+        status: 404,
+        body: { ...base, step: 'editor_event_lookup', reason: 'event_not_found', error: 'Event not found' },
+      };
+    }
+    const upload = canUploadPost(toRbacActor(auth), ev as Record<string, unknown>);
+    logStorageAuth('editor_upload', {
+      ok: upload.allowed,
       ...base,
       event_id: eventId,
-      ownership_error: own.ok ? undefined : own.error,
+      ...upload.debug,
+      denied_reason: upload.denied_reason,
     });
-    if (!own.ok) {
+    if (!upload.allowed) {
       return {
         ok: false,
         status: 403,
         body: {
           ...base,
-          step: 'editor_event_ownership',
-          reason: 'event_not_owned',
-          error: own.error,
+          step: 'editor_event_upload',
+          reason: upload.denied_reason ?? 'upload_denied',
+          error: upload.denied_reason ?? 'Forbidden: cannot upload to this event',
         },
       };
     }
@@ -143,7 +163,7 @@ export async function assertStorageUploadAllowed(args: {
     }
     const { data: ev, error: evErr } = await admin
       .from('events')
-      .select('id, created_by, target_groups')
+      .select('id, created_by, created_role, state_id, party_id, party, target_groups, status')
       .eq('id', eventId)
       .maybeSingle();
     if (evErr) {
@@ -165,35 +185,23 @@ export async function assertStorageUploadAllowed(args: {
         body: { ...base, step: 'campaign_manager_event_lookup', reason: 'event_not_found', error: 'Event not found' },
       };
     }
-    const owner = String((ev as { created_by?: string | null }).created_by ?? '').trim();
-    const owns = owner.length > 0 && owner === auth.user.id;
-    const scopeOk = canAccessResource(
-      {
-        id: auth.user.id,
-        role: auth.role,
-        assigned_state_ids: auth.assigned_state_ids,
-        assigned_group_ids: auth.assigned_group_ids,
-      },
-      { group_ids: (ev as { target_groups?: unknown }).target_groups, created_by: owner || undefined },
-      { resourceType: 'events', audit: { resourceType: 'events', action: 'storage.upload.event.scope.validate' } }
-    );
-    logStorageAuth('campaign_manager_event_scope', {
-      ok: owns || scopeOk,
+    const upload = canUploadPost(toRbacActor(auth), ev as Record<string, unknown>);
+    logStorageAuth('campaign_manager_upload', {
+      ok: upload.allowed,
       ...base,
       event_id: eventId,
-      event_created_by: owner || null,
-      ownership_match: owns,
-      scope_match: scopeOk,
+      ...upload.debug,
+      denied_reason: upload.denied_reason,
     });
-    if (!owns && !scopeOk) {
+    if (!upload.allowed) {
       return {
         ok: false,
         status: 403,
         body: {
           ...base,
-          step: 'campaign_manager_event_scope',
-          reason: 'event_outside_assigned_groups',
-          error: 'Forbidden: event outside campaign_manager assigned groups',
+          step: 'campaign_manager_event_upload',
+          reason: upload.denied_reason ?? 'upload_denied',
+          error: upload.denied_reason ?? 'Forbidden: cannot upload to this event',
         },
       };
     }
@@ -282,7 +290,7 @@ export async function assertStorageUploadAllowed(args: {
       }
       const { data: ev, error: evErr } = await admin
         .from('events')
-        .select('id, state_id, created_by')
+        .select('id, created_by, created_role, state_id, party_id, party, target_groups, status')
         .eq('id', eventId)
         .maybeSingle();
       if (evErr) {
@@ -299,37 +307,23 @@ export async function assertStorageUploadAllowed(args: {
           body: { ...base, step: 'moderator_event_lookup', reason: 'event_not_found', error: 'Event not found' },
         };
       }
-      const scopeOk = canAccessResource(
-        {
-          id: auth.user.id,
-          role: auth.role,
-          assigned_state_ids: auth.assigned_state_ids,
-          assigned_group_ids: auth.assigned_group_ids,
-        },
-        { state_ids: (ev as { state_id?: unknown }).state_id },
-        { resourceType: 'events', audit: { resourceType: 'events', action: 'storage.upload.event.scope.validate' } }
-      );
-      const owner = String((ev as { created_by?: string | null }).created_by ?? '').trim();
-      const owns = owner.length > 0 && owner === auth.user.id;
-      logStorageAuth('moderator_event_scope', {
-        ok: scopeOk || owns,
+      const upload = canUploadPost(toRbacActor(auth), ev as Record<string, unknown>);
+      logStorageAuth('moderator_upload', {
+        ok: upload.allowed,
         ...base,
         event_id: eventId,
-        event_created_by: owner || null,
-        ownership_match: owns,
-        scope_match: scopeOk,
-        event_state_id: (ev as { state_id?: unknown }).state_id,
+        ...upload.debug,
+        denied_reason: upload.denied_reason,
       });
-      if (owns) return { ok: true };
-      if (!scopeOk) {
+      if (!upload.allowed) {
         return {
           ok: false,
           status: 403,
           body: {
             ...base,
-            step: 'moderator_event_scope',
-            reason: 'event_outside_assigned_states',
-            error: 'Forbidden: event outside moderator assigned states',
+            step: 'moderator_event_upload',
+            reason: upload.denied_reason ?? 'upload_denied',
+            error: upload.denied_reason ?? 'Forbidden: cannot upload to this event',
           },
         };
       }

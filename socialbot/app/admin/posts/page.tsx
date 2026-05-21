@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { useDashboardAccess } from '@/lib/hooks/useDashboardAccess';
 
 type AdminPostRow = {
   id: string | number;
@@ -15,6 +16,9 @@ type AdminPostRow = {
 };
 
 export default function AdminPostsPage() {
+  const { access } = useDashboardAccess();
+  const canManagePosts = access?.permissions.canAccessModule('events') ?? false;
+
   const [rows, setRows] = useState<AdminPostRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +92,9 @@ export default function AdminPostsPage() {
                   <div className="col-span-2">{r.scheduled_at ? new Date(r.scheduled_at).toLocaleString() : '-'}</div>
                   <div className="col-span-2 text-zinc-400">{r.created_at ? new Date(r.created_at).toLocaleDateString() : '-'}</div>
                   <div className="col-span-1 flex justify-end">
+                    {canManagePosts ? (
                     <button
+                      type="button"
                       onClick={() => {
                         setScheduleModal({ open: true, row: r });
                         setScheduleValue('');
@@ -97,6 +103,7 @@ export default function AdminPostsPage() {
                     >
                       Schedule
                     </button>
+                    ) : null}
                   </div>
                 </div>
               ))

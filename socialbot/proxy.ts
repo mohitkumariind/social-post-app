@@ -11,7 +11,8 @@ import {
   isSuperAdminRole,
   redirectPreservingAuthCookies,
 } from '@/lib/supabase/session-helpers';
-import { isEditorAllowedAdminPath } from '@/lib/editor-access';
+import { canAccessDashboardPath, toDashboardActor } from '@/lib/rbac/dashboard-access';
+import type { AdminPanelRole } from '@/lib/profile-roles';
 import {
   logEdgeSecurityEvent,
   requireAdminApiRequest,
@@ -176,10 +177,14 @@ export async function proxy(request: NextRequest) {
      * - On role/session parsing failures we fail closed.
      */
     proxyLog('[proxy] Step 2 (gate): fetch role/access for profile id === auth id', user.id);
-    const { role, usedServiceRole, errorMessage } = await fetchProfileAccessForMiddleware(
-      user.id,
-      supabase
-    );
+    const {
+      role,
+      assigned_state_ids,
+      assigned_group_ids,
+      assigned_party_ids,
+      usedServiceRole,
+      errorMessage,
+    } = await fetchProfileAccessForMiddleware(user.id, supabase);
     proxyLog('[proxy] Step 3 (gate): Role fetched', {
       role,
       usedServiceRole,
@@ -202,6 +207,11 @@ export async function proxy(request: NextRequest) {
       isEditor,
       pathname,
       method,
+      role: role ?? undefined,
+      assigned_state_ids,
+      assigned_group_ids,
+      assigned_party_ids,
+      userId: user.id,
     });
     if (!adminApiGate.ok && isAdminApi) {
       proxyLog('[proxy] Step 4: FORBIDDEN /api/admin/*', { errorMessage, reason: adminApiGate.reason });
@@ -227,44 +237,24 @@ export async function proxy(request: NextRequest) {
       return redirectPreservingAuthCookies(request, sessionResponse, '/admin/login?error=forbidden');
     }
 
-    if (!isAdminApi && isEditor) {
+    if (!isAdminApi && role) {
+      const dashboardActor = toDashboardActor({
+        role: (role === 'super_admin' ? 'admin' : role) as AdminPanelRole,
+        assigned_state_ids,
+        assigned_group_ids,
+        assigned_party_ids,
+        user: { id: user.id },
+      });
       if (pathname === '/admin/events/create' || pathname.startsWith('/admin/events/create/')) {
-        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/events');
+        if (isEditor) {
+          return redirectPreservingAuthCookies(request, sessionResponse, '/admin/events');
+        }
       }
-      if (!isEditorAllowedAdminPath(pathname)) {
-        proxyLog('[proxy] Step 4: editor blocked route', { pathname });
-        return redirectPreservingAuthCookies(request, sessionResponse, '/admin/events');
-      }
-    }
-
-    // API routes are role-gated here; fine-grained RBAC remains in route handlers.
-    if (!isAdminApi && isModerator) {
-      const allowed =
-        pathname === '/admin' ||
-        pathname.startsWith('/admin/users') ||
-        pathname.startsWith('/admin/leaderboard') ||
-        pathname.startsWith('/admin/analytics') ||
-        pathname.startsWith('/admin/events') ||
-        pathname.startsWith('/admin/notifications') ||
-        pathname.startsWith('/admin/groups');
-      if (!allowed) {
-        proxyLog('[proxy] Step 4: moderator blocked route', { pathname });
-        return redirectPreservingAuthCookies(request, sessionResponse, '/admin');
-      }
-    }
-
-    if (!isAdminApi && isCampaignManager) {
-      const allowed =
-        pathname === '/admin' ||
-        pathname.startsWith('/admin/users') ||
-        pathname.startsWith('/admin/leaderboard') ||
-        pathname.startsWith('/admin/analytics') ||
-        pathname.startsWith('/admin/events') ||
-        pathname.startsWith('/admin/notifications') ||
-        pathname.startsWith('/admin/groups');
-      if (!allowed) {
-        proxyLog('[proxy] Step 4: campaign_manager blocked route', { pathname });
-        return redirectPreservingAuthCookies(request, sessionResponse, '/admin');
+      if (!canAccessDashboardPath(dashboardActor, pathname)) {
+        proxyLog('[proxy] Step 4: dashboard module blocked', { pathname, role });
+        const fallback =
+          dashboardActor.role === 'campaign_manager' ? '/admin/events' : '/admin/events';
+        return redirectPreservingAuthCookies(request, sessionResponse, fallback);
       }
     }
 
