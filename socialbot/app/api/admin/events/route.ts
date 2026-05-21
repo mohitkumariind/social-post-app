@@ -24,11 +24,12 @@ import { logEditorTargetingDebug } from '@/lib/admin/editor-event-targeting';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
-import { buildScopedQuery, resolveEffectiveGroupIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
-import { applyEventsListQueryScope, postFilterEventsList } from '@/lib/rbac/event-list-scope';
+import { getEventVisibilityQuery } from '@/lib/rbac/event-visibility-engine';
+import { resolveEffectiveGroupIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import {
   RbacError,
+  requireCampaignManagerHasAssignedGroups,
   requireModeratorHasAssignedStates,
   requireOwnership,
   requireRole,
@@ -174,7 +175,10 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) return json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, auth.status);
   try {
     requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager', 'editor']);
-    if (!isEditor(auth)) requireModeratorHasAssignedStates(auth);
+    if (!isEditor(auth)) {
+      requireModeratorHasAssignedStates(auth);
+      requireCampaignManagerHasAssignedGroups(auth);
+    }
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
@@ -187,6 +191,13 @@ export async function GET(request: NextRequest) {
   const db = admin;
   const fullAdmin = isEventsFullAdmin(auth);
   if (isAdmin(auth)) assertAdminRole(auth);
+
+  const visibilityUser = {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_party_ids: auth.assigned_party_ids,
+  };
 
   const id = (request.nextUrl.searchParams.get('id') ?? '').trim();
   const name = (request.nextUrl.searchParams.get('name') ?? '').trim();
@@ -230,7 +241,8 @@ export async function GET(request: NextRequest) {
     return json({ event: data, usedServiceRole: !!admin });
   }
 
-  const applyScope = (qIn: any) => applyEventsListQueryScope(auth, qIn);
+  const applyScope = (qIn: any) =>
+    fullAdmin ? qIn : getEventVisibilityQuery(visibilityUser, qIn);
 
   const nowIso = new Date().toISOString();
   let activeFilterMode: ActiveEventsFilterMode = activeOnly ? 'status' : 'none';
@@ -310,7 +322,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (error) return json({ error: error.message }, 500);
-  const rows = postFilterEventsList(auth, (data ?? []) as Record<string, unknown>[]) as any[];
+  const rows = (data ?? []) as any[];
   const next_cursor_created_at = rows.length > 0 ? String((rows[rows.length - 1] as any)?.created_at ?? '') : '';
 
   const categoryNames = Array.from(

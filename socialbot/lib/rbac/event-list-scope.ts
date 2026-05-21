@@ -6,6 +6,7 @@ import { PUBLISHED_EVENT_STATUSES } from '@/lib/rbac/scope-types';
 type AnyQuery = { or: (filter: string) => AnyQuery; eq: (col: string, val: string) => AnyQuery };
 
 /**
+ * @deprecated Event listings use {@link buildScopedQuery} from `scoped-query-builder.ts` only.
  * DB pre-filter for event listings: own rows + published rows with state overlap.
  * Party / creator-role visibility is enforced in-memory via {@link filterVisibleEvents}.
  */
@@ -29,6 +30,7 @@ export function applyEventsListQueryScope(
   );
 }
 
+/** @deprecated Use DB-only {@link buildScopedQuery} for event listings; do not post-filter. */
 export function postFilterEventsList<T extends Record<string, unknown>>(
   auth: VerifiedAdminAuth,
   rows: T[]

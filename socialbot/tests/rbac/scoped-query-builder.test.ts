@@ -68,20 +68,25 @@ describe('scoped query builder', () => {
     expect(orFilter).toContain('assigned_group_ids.ov.{1}');
   });
 
-  it('prefers effective_group_ids over profile-only ids for campaign manager events', () => {
+  it('uses unified visibility for campaign manager events (not target_groups list scope)', () => {
     const q = new FakeQuery();
     buildScopedQuery(
       {
         id: 'u4',
         role: 'campaign_manager',
-        assigned_state_ids: [],
+        assigned_state_ids: [5],
         assigned_group_ids: ['1'],
+        assigned_party_ids: [],
       },
       q,
       'events',
       { effective_group_ids: ['1', '2', '3'] }
     );
-    expect(q.calls[2]).toEqual({ method: 'containedBy', args: ['target_groups', ['1', '2', '3']] });
+    const orCall = q.calls.find((c) => c.method === 'or');
+    expect(orCall).toBeDefined();
+    expect(String(orCall?.args[0] ?? '')).toContain('created_by.eq.u4');
+    expect(String(orCall?.args[0] ?? '')).toContain('dashboard_category.in.');
+    expect(String(orCall?.args[0] ?? '')).toContain('state_id.ov.{5}');
   });
 
   it('includes all-states events for moderators with assignments', () => {
@@ -97,22 +102,22 @@ describe('scoped query builder', () => {
       'events'
     );
     const orCall = q.calls.find((c) => c.method === 'or');
-    expect(orCall?.args[0]).toMatch(/state_id\.ov\.\{[^}]*\b0\b[^}]*\}/);
+    expect(orCall?.args[0]).toMatch(/state_id\.ov\.\{5,10\}/);
   });
 
-  it('keeps analytics scoping aligned for campaign manager events', () => {
+  it('keeps analytics scoping aligned with unified event visibility', () => {
     const q = new FakeQuery();
     buildScopedAnalyticsQuery(
       {
         id: 'u3',
         role: 'campaign_manager',
-        assigned_state_ids: [],
+        assigned_state_ids: [10],
         assigned_group_ids: ['10'],
+        assigned_party_ids: [],
       },
       q,
       'events'
     );
-    expect(q.calls.map((c) => c.method)).toEqual(['not', 'neq', 'containedBy']);
-    expect(q.calls[2]).toEqual({ method: 'containedBy', args: ['target_groups', ['10']] });
+    expect(q.calls.find((c) => c.method === 'or')).toBeDefined();
   });
 });

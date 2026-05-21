@@ -1,3 +1,4 @@
+import { eventVisibilityMatch, isEventVisibleToActor, partyOverlap } from '@/lib/rbac/event-visibility-engine';
 import {
   isGlobalTargeting,
   isPublishedEvent,
@@ -76,54 +77,7 @@ function ownsResource(actorId: string, createdBy: unknown): boolean {
   return !!owner && owner === normalizeActorId(actorId);
 }
 
-function idsOverlap(resourceIds: number[], assignedIds: number[]): boolean {
-  if (resourceIds.length === 0) return true;
-  if (assignedIds.length === 0) return false;
-  const set = new Set(assignedIds);
-  return resourceIds.some((id) => set.has(id));
-}
-
-function slugsOverlap(resourceSlugs: string[], assignedSlugs: string[]): boolean {
-  if (resourceSlugs.length === 0) return true;
-  if (assignedSlugs.length === 0) return true;
-  const set = new Set(assignedSlugs.map((s) => s.toLowerCase()));
-  return resourceSlugs.some((s) => set.has(s.toLowerCase()));
-}
-
-function partyOverlap(
-  resource: Pick<CanonicalScope, 'party_ids' | 'party_slugs'>,
-  actor: Pick<CanonicalScope, 'party_ids' | 'party_slugs'>
-): boolean {
-  const rIds = resource.party_ids;
-  const aIds = actor.party_ids;
-  const rSlugs = resource.party_slugs;
-  const aSlugs = actor.party_slugs;
-
-  if (rIds.length === 0 && rSlugs.length === 0) return true;
-  if (aIds.length === 0 && aSlugs.length === 0) return true;
-
-  if (rIds.length > 0 && aIds.length > 0 && idsOverlap(rIds, aIds)) return true;
-  if (rSlugs.length > 0 && aSlugs.length > 0 && slugsOverlap(rSlugs, aSlugs)) return true;
-
-  if (rIds.length > 0 && aSlugs.length === 0 && aIds.length === 0) return true;
-  if (rSlugs.length > 0 && aSlugs.length === 0 && aIds.length === 0) return true;
-
-  return false;
-}
-
-function stateVisibilityMatch(resource: CanonicalScope, actor: CanonicalScope): boolean {
-  if (resource.state_ids.length === 0) return false;
-  if (actor.state_ids.length === 0) return false;
-  return idsOverlap(resource.state_ids, actor.state_ids);
-}
-
-/**
- * Cross-role published visibility: same state AND same party (empty party = all within scope).
- */
-export function eventVisibilityMatch(resource: NormalizedEventResource, actorScope: CanonicalScope): boolean {
-  if (!stateVisibilityMatch(resource, actorScope)) return false;
-  return partyOverlap(resource, actorScope);
-}
+export { eventVisibilityMatch } from '@/lib/rbac/event-visibility-engine';
 
 /**
  * Subset scope check: resource targeting must fit inside actor assignments.
@@ -252,31 +206,9 @@ export function canViewEvent(actor: RbacActor, rawEvent: Record<string, unknown>
   const event = normalizeEventResource(rawEvent);
   const debug = baseEventDebug(actor, event, 'canViewEvent');
 
-  if (isFullAdmin(actor.role)) {
+  if (isEventVisibleToActor(actor, rawEvent)) {
     debug.visibility_match = true;
-    debug.mutation_permission = true;
-    return { allowed: true, debug };
-  }
-
-  if (ownsResource(actor.id, event.created_by)) {
-    debug.visibility_match = true;
-    debug.mutation_permission = true;
-    logRbacDebug('canViewEvent', debug);
-    return { allowed: true, debug };
-  }
-
-  const creatorRole = String(event.created_role ?? '').toLowerCase();
-  const crossRoleCreator =
-    creatorRole.length > 0 &&
-    (PANEL_EVENT_CREATOR_ROLES as readonly string[]).includes(creatorRole as (typeof PANEL_EVENT_CREATOR_ROLES)[number]);
-
-  if (
-    (actor.role === 'moderator' || actor.role === 'campaign_manager' || actor.role === 'editor') &&
-    isPublishedEvent(event) &&
-    crossRoleCreator &&
-    eventVisibilityMatch(event, debug.normalized_scope)
-  ) {
-    debug.visibility_match = true;
+    debug.mutation_permission = ownsResource(actor.id, event.created_by) || isFullAdmin(actor.role);
     logRbacDebug('canViewEvent', debug);
     return { allowed: true, debug };
   }
@@ -452,10 +384,10 @@ export function canTargetAudience(
   return { allowed: true, debug };
 }
 
-/** Filter in-memory event rows using centralized visibility. */
+/** Filter in-memory event rows using unified visibility (prefer DB {@link getEventVisibilityQuery}). */
 export function filterVisibleEvents<T extends Record<string, unknown>>(
   actor: RbacActor,
   rows: T[]
 ): T[] {
-  return rows.filter((row) => canViewEvent(actor, row).allowed);
+  return rows.filter((row) => isEventVisibleToActor(actor, row));
 }

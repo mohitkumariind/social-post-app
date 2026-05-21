@@ -20,7 +20,7 @@ export function isEventsFullAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolea
   return isAdminRole(auth.role) || isSuperAdmin(auth.role);
 }
 
-/** @deprecated Use applyEventsListQueryScope from event-list-scope for listings. */
+/** @deprecated Use buildScopedQuery from scoped-query-builder for event listings. */
 export function applyEventsOwnershipScope<T extends { eq: (col: string, val: string) => T }>(
   auth: Pick<VerifiedAdminAuth, 'role' | 'user'>,
   query: T

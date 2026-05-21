@@ -21,6 +21,14 @@ export {
 } from '@/lib/rbac/permission-engine';
 
 export {
+  getEventVisibilityQuery,
+  isEventVisibleToActor,
+  publishedGlobalFeedOrClause,
+  publishedStatePartyOrClause,
+  type EventVisibilityUser,
+} from '@/lib/rbac/event-visibility-engine';
+
+export {
   canPerformMutation,
   type MutationAction,
   type MutationDecision,

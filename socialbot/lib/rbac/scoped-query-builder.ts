@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isAdminRole } from '@/lib/rbac/dashboard-permissions';
+import { getEventVisibilityQuery } from '@/lib/rbac/event-visibility-engine';
 import { parseGroupIds, parseStateIds } from '@/lib/rbac/require';
-import { PUBLISHED_EVENT_STATUSES } from '@/lib/rbac/scope-types';
 import type { UnifiedUser } from '@/lib/rbac/unified-scope-engine';
 import {
   auditUnsupportedResourceUsage,
@@ -53,39 +53,8 @@ function campaignManagerScopeGroupIds(canonical: CanonicalScope, ctx: ScopedQuer
   return canonical.groupIds;
 }
 
-function scopeEventsQuery(
-  user: UnifiedUser,
-  baseQuery: AnyQuery,
-  canonical: CanonicalScope,
-  ctx: ScopedQueryContext
-): AnyQuery {
-  const role = user.role;
-  const userId = String(user.id ?? '').trim();
-
-  if (role === 'editor') {
-    return baseQuery.eq('created_by', userId);
-  }
-
-  if (role === 'moderator') {
-    const sids = canonical.stateIds;
-    if (sids.length === 0) return baseQuery.eq('created_by', userId);
-    const published = PUBLISHED_EVENT_STATUSES.join(',');
-    const stateList = [...new Set([...sids, 0])].join(',');
-    return baseQuery.or(
-      `created_by.eq.${userId},and(status.in.(${published}),state_id.ov.{${stateList}})`
-    );
-  }
-
-  if (role === 'campaign_manager') {
-    const scopeGids = campaignManagerScopeGroupIds(canonical, ctx);
-    if (scopeGids.length === 0) return baseQuery.eq('id', '__none__');
-    return baseQuery
-      .not('target_groups', 'is', null)
-      .neq('target_groups', '{}')
-      .containedBy('target_groups', scopeGids);
-  }
-
-  return baseQuery.eq('created_by', userId);
+function scopeEventsQuery(user: UnifiedUser, baseQuery: AnyQuery): AnyQuery {
+  return getEventVisibilityQuery(user, baseQuery);
 }
 
 /**
@@ -118,7 +87,7 @@ export function buildScopedQuery(
   if (canonical.malformed) return baseQuery.eq('id', '__none__');
 
   if (resourceType === 'events') {
-    return scopeEventsQuery(user, baseQuery, canonical, ctx);
+    return scopeEventsQuery(user, baseQuery);
   }
 
   if (resourceType === 'posts') {
@@ -200,7 +169,7 @@ export function buildScopedAnalyticsQuery(
   if (canonical.malformed) return baseQuery.eq('id', '__none__');
 
   if (resourceType === 'events') {
-    return scopeEventsQuery(user, baseQuery, canonical, ctx);
+    return scopeEventsQuery(user, baseQuery);
   }
 
   if (resourceType === 'posts') {
