@@ -419,6 +419,8 @@ export function canPerformMutation(
     return allow();
   }
 
+  const effective = effectiveResourceScope(resource, payload);
+
   if (user.role === 'editor') {
     if (
       (action === 'events.create' || action === 'events.update') &&
@@ -437,8 +439,6 @@ export function canPerformMutation(
     }
     return deny('Forbidden: editor may only manage own events and posts');
   }
-
-  const effective = effectiveResourceScope(resource, payload);
 
   if (
     action === 'events.create' &&

@@ -209,7 +209,7 @@ export async function fetchProfileAccessForMiddleware(
       };
     }
 
-    return parseProfileAccessRow(data, true);
+    return parseProfileAccessRow(data as unknown as Record<string, unknown>, true);
   }
 
   const fetchAnon = async (cols: string) =>
@@ -251,7 +251,7 @@ export async function fetchProfileAccessForMiddleware(
   }
 
   return {
-    ...parseProfileAccessRow(data, false),
+    ...parseProfileAccessRow(data as unknown as Record<string, unknown>, false),
     errorMessage: 'SUPABASE_SERVICE_ROLE_KEY not set; used anon (RLS may block)',
   };
 }

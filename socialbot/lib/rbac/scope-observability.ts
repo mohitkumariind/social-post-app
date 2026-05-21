@@ -27,8 +27,6 @@ export function rbacScopeMetadata(
 
 export function rbacScopeMetadataFromUser(user: UnifiedUser): Record<string, unknown> {
   return rbacScopeMetadata({
-    id: user.id,
-    role: user.role,
     assigned_state_ids: user.assigned_state_ids,
     assigned_group_ids: user.assigned_group_ids ?? [],
     assigned_party_ids: user.assigned_party_ids ?? [],

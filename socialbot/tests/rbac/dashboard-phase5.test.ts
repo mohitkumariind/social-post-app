@@ -39,8 +39,6 @@ describe('dashboard phase 5', () => {
 
   it('scope metadata includes lok sabha and assembly ids', () => {
     const meta = rbacScopeMetadata({
-      id: 'cm-1',
-      role: 'campaign_manager',
       assigned_state_ids: [],
       assigned_group_ids: ['1'],
       assigned_party_ids: ['bjp'],

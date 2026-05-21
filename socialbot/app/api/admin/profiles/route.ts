@@ -410,7 +410,7 @@ export async function PATCH(request: NextRequest) {
         assigned_group_ids: auth.assigned_group_ids,
       },
       'profiles.role_update',
-      existingProfile as Record<string, unknown>,
+      existingProfile as unknown as Record<string, unknown>,
       updateBody,
       { resourceType: 'profiles', resourceId: id, resourceName: id }
     );

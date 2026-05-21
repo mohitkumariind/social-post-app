@@ -20,6 +20,7 @@ import {
   stripNonAdminPublishFields,
   validateCampaignManagerEventPayload,
   validateEditorEventPayload,
+  type EditorEventScope,
 } from '@/lib/event-access';
 import { validateModeratorEventPayload } from '@/lib/rbac/moderator-scope';
 import {
@@ -387,7 +388,10 @@ export async function POST(request: NextRequest) {
   const admin = createServiceRoleClient();
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
-  let editorAssignmentScope = { assignedStateIds: auth.assigned_state_ids, assignedPartyIds: auth.assigned_party_ids };
+  let editorAssignmentScope: EditorEventScope = {
+    assignedStateIds: auth.assigned_state_ids,
+    assignedPartyIds: auth.assigned_party_ids,
+  };
   if (isEditor(auth)) {
     editorAssignmentScope = await resolveEditorAssignmentScope(admin, auth.user.id, auth);
     const editorErr = validateEditorEventPayload(payload, 'create', editorAssignmentScope);
