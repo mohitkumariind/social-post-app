@@ -1,4 +1,4 @@
-﻿import { Ionicons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -709,7 +709,7 @@ export default function PostDetailScreen() {
           <TouchableOpacity onPress={goBackToExpandedCategory} style={styles.backBtn}>
             <Ionicons name="chevron-back" size={24} color="#333" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>{t('ready_to_post')} ðŸš€</Text>
+          <Text style={styles.headerTitle}>{t('ready_to_post')}</Text>
           <View style={{ width: 40 }} />
         </View>
         <View style={{ flex: 1 }} />
@@ -723,7 +723,7 @@ export default function PostDetailScreen() {
         <TouchableOpacity onPress={goBackToExpandedCategory} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color="#333" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{t('ready_to_post')} ðŸš€</Text>
+        <Text style={styles.headerTitle}>{t('ready_to_post')}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -845,11 +845,11 @@ export default function PostDetailScreen() {
         <View style={styles.buttonContainer}>
           <TouchableOpacity style={[styles.shareBtn, (isSharing || isDownloading) && { opacity: 0.7 }]} onPress={handleShare} disabled={isSharing || isDownloading}>
             <Ionicons name="logo-whatsapp" size={22} color={Colors.textOnPrimary} />
-            <Text style={styles.shareBtnText}>{isSharing ? 'Sharing...' : t('share_whatsapp')}</Text>
+            <Text style={styles.shareBtnText}>{isSharing ? t('sharing_label') : t('share_whatsapp')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.downloadBtn, (isSharing || isDownloading) && { opacity: 0.7 }]} onPress={handleDownload} disabled={isSharing || isDownloading}>
             <Ionicons name="download-outline" size={22} color="#FFF" />
-            <Text style={styles.downloadBtnText}>{isDownloading ? 'Saving...' : `${t('save_to_gallery')} âœ¨`}</Text>
+            <Text style={styles.downloadBtnText}>{isDownloading ? t('saving_label') : t('save_to_gallery')}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -875,10 +875,10 @@ export default function PostDetailScreen() {
           />
           <Text style={styles.toastText}>
             {saveFeedback === 'saving'
-              ? 'Savingâ€¦'
+              ? t('saving_label')
               : saveFeedback === 'saved'
-                ? t('save_success_message') || 'Saved to gallery.'
-                : t('save_error_message') || 'Save failed.'}
+                ? t('save_success_title')
+                : t('save_error_title')}
           </Text>
         </View>
       ) : null}
