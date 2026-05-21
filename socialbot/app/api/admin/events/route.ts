@@ -21,6 +21,7 @@ import {
   validateCampaignManagerEventPayload,
   validateEditorEventPayload,
 } from '@/lib/event-access';
+import { validateModeratorEventPayload } from '@/lib/rbac/moderator-scope';
 import { logEditorTargetingDebug } from '@/lib/admin/editor-event-targeting';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
@@ -432,21 +433,8 @@ export async function POST(request: NextRequest) {
   }
 
   if (isModerator(auth) && !isEditor(auth)) {
-    if (!isActiveEventDashboardCategory(payload.dashboard_category)) {
-      const stateIds = toNumArray(payload.state_id);
-      if (stateIds.length === 0) {
-        return json({ error: 'Forbidden: moderator event must target at least one state' }, 403);
-      }
-      try {
-        requireScopeState(stateIds, auth.assigned_state_ids, 'subset');
-      } catch {
-        return json({ error: 'Forbidden: event includes states outside assignment' }, 403);
-      }
-    }
-    const tg = Array.isArray(payload.target_groups) ? payload.target_groups : [];
-    if (tg.length > 0) {
-      return json({ error: 'Forbidden: moderators cannot create target_groups events' }, 403);
-    }
+    const modErr = validateModeratorEventPayload(auth, payload);
+    if (modErr) return json({ error: modErr }, 403);
   }
 
   if (isCampaignManager(auth) && !isEditor(auth)) {
@@ -635,23 +623,9 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (isModerator(auth)) {
-    const existingStateIds = toNumArray((evForGuard as any)?.state_id);
-    const nextStateIds = patch.state_id != null ? toNumArray(patch.state_id) : existingStateIds;
-    const dashEff = pickEventDashboardCategory(patch, (evForGuard as any)?.dashboard_category);
-    if (!isActiveEventDashboardCategory(dashEff)) {
-      try {
-        requireScopeState(nextStateIds, auth.assigned_state_ids, 'subset');
-      } catch {
-        return json({ error: 'Forbidden: cannot set states outside assignment' }, 403);
-      }
-      if (nextStateIds.length === 0) {
-        return json({ error: 'Forbidden: moderator event must target at least one state' }, 403);
-      }
-    }
-    const nextTargetGroups = patch.target_groups != null ? (Array.isArray(patch.target_groups) ? patch.target_groups : []) : ((evForGuard as any)?.target_groups ?? []);
-    if (Array.isArray(nextTargetGroups) && nextTargetGroups.length > 0) return json({ error: 'Forbidden: moderators cannot use target_groups events' }, 403);
-
-    // Never allow moderators to change ownership.
+    const mergedMod = { ...(evForGuard as object), ...patch };
+    const modErr = validateModeratorEventPayload(auth, mergedMod as Record<string, unknown>);
+    if (modErr) return json({ error: modErr }, 403);
     if (patch.created_by != null) return json({ error: 'Forbidden' }, 403);
   }
 

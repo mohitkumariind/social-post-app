@@ -281,6 +281,31 @@ export function canPerformMutation(
     return allow();
   }
 
+  if (action === 'profiles.bulk_tags') {
+    if (isElevatedDashboardRole(user.role) || isAdminRole(user.role)) return allow();
+    if (user.role === 'moderator' || user.role === 'campaign_manager') return allow();
+    return deny('Forbidden: cannot bulk-update profile tags');
+  }
+
+  if (action === 'profiles.delete') {
+    if (isElevatedDashboardRole(user.role) || isAdminRole(user.role)) return allow();
+    if (user.role === 'campaign_manager') return allow();
+    return deny('Forbidden: profiles.delete requires admin or campaign manager scope');
+  }
+
+  if (action === 'groups.members.add' || action === 'groups.members.remove') {
+    if (isAdminRole(user.role) || user.role === 'super_admin') return allow();
+    if (user.role === 'moderator') {
+      const owner = (resource as { created_by?: unknown })?.created_by;
+      if (!ownsResource(user.id, owner)) {
+        return deny('Forbidden: moderator may only manage members of own groups');
+      }
+      return allow();
+    }
+    if (user.role === 'campaign_manager') return allow();
+    return deny('Forbidden: cannot modify group members');
+  }
+
   if (
     resourceType === 'storage' &&
     (action === 'storage.upload' || action === 'storage.delete')
@@ -403,15 +428,23 @@ export function canPerformMutation(
   if (
     action === 'events.create' &&
     isActiveEventDashboardCategory(effective.dashboard_category) &&
-    (user.role === 'moderator' || user.role === 'campaign_manager')
+    user.role === 'moderator'
   ) {
-    return allow();
+    return deny('Forbidden: moderator cannot create global dashboard events');
   }
 
   if (
     action === 'events.update' &&
     isActiveEventDashboardCategory(effective.dashboard_category) &&
-    (user.role === 'moderator' || user.role === 'campaign_manager')
+    user.role === 'moderator'
+  ) {
+    return deny('Forbidden: moderator cannot set global dashboard category');
+  }
+
+  if (
+    (action === 'events.create' || action === 'events.update') &&
+    isActiveEventDashboardCategory(effective.dashboard_category) &&
+    user.role === 'campaign_manager'
   ) {
     return allow();
   }

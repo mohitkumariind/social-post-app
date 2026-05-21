@@ -323,6 +323,11 @@ export async function PATCH(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
+  try {
+    assertAdminRole(auth);
+  } catch {
+    return NextResponse.json({ error: 'Forbidden: only admins can update profile roles and assignments' }, { status: 403 });
+  }
 
   let body: PatchBody = {};
   try {

@@ -1,11 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceRoleClient, isCampaignManager, validateAdminSession } from '@/lib/admin-gate';
+import {
+  createServiceRoleClient,
+  isCampaignManager,
+  isModerator,
+  validateAdminSession,
+} from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
 import { logAdminAction } from '@/lib/audit/logAdminAction';
 import { canPerformMutation } from '@/lib/rbac/mutation-gateway';
 import { isElevatedDashboardRole } from '@/lib/rbac/dashboard-permissions';
-import { RbacError, requireCampaignManagerHasAssignedGroups, requireRole } from '@/lib/rbac/require';
+import {
+  RbacError,
+  requireCampaignManagerHasAssignedGroups,
+  requireModeratorHasAssignedStates,
+  requireRole,
+} from '@/lib/rbac/require';
 import { SECURITY_LIMITS } from '@/lib/security-limits';
 
 type Body = { ids?: string[]; group_tags?: string[]; /** Only if you intentionally want to clear tags for all selected users. */ allowClear?: boolean };
@@ -20,7 +30,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
   try {
-    requireRole(auth, ['admin', 'campaign_manager']);
+    requireRole(auth, ['admin', 'super_admin', 'moderator', 'campaign_manager']);
+    requireModeratorHasAssignedStates(auth);
     requireCampaignManagerHasAssignedGroups(auth);
   } catch (e) {
     if (e instanceof RbacError) return NextResponse.json({ error: e.message }, { status: e.status });
@@ -115,6 +126,36 @@ export async function POST(request: NextRequest) {
       );
       if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
     }
+  } else if (isModerator(auth)) {
+    const q = buildScopedQuery(
+      scopedUser,
+      admin.from('profiles').select('id').in('id', ids) as any,
+      'profiles'
+    );
+    const { data: allowedRows, error: allowErr } = await q;
+    if (allowErr) return NextResponse.json({ error: allowErr.message }, { status: 500 });
+    const allowed = new Set((allowedRows ?? []).map((r: any) => String(r.id ?? '').trim()).filter(Boolean));
+    const outside = ids.filter((id) => !allowed.has(id));
+    if (outside.length > 0) {
+      canPerformMutation(
+        scopedUser,
+        'profiles.bulk_tags',
+        { assigned_state_ids: auth.assigned_state_ids } as any,
+        { ids, group_tags } as any,
+        { resourceType: 'profiles', resourceName: 'bulk-tags' }
+      );
+      return NextResponse.json({ error: 'Forbidden: includes users outside assigned states' }, { status: 403 });
+    }
+    const decision = canPerformMutation(
+      scopedUser,
+      'profiles.bulk_tags',
+      { assigned_state_ids: auth.assigned_state_ids } as any,
+      { ids, group_tags } as any,
+      { resourceType: 'profiles', resourceName: 'bulk-tags' }
+    );
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+  } else {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   /** Column name must match Supabase `profiles.group_tags` (TEXT[]). */
@@ -136,6 +177,7 @@ export async function POST(request: NextRequest) {
     severity: 'info',
     undoable: false,
     scope_group_ids: isCampaignManager(auth) ? (auth.assigned_group_ids ?? []) : [],
+    scope_state_ids: isModerator(auth) ? (auth.assigned_state_ids ?? []) : [],
     scope_user_ids: ids,
   });
 
