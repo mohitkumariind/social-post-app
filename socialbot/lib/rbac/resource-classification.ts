@@ -103,6 +103,22 @@ export const RBAC_RESOURCE_REGISTRY: Record<string, RbacResourcePolicy> = {
     analytics_behavior: 'not applicable',
     supported_layers: ['mutation'],
   },
+  user_frames: {
+    category: 'scoped',
+    scope_model: 'target profile must fall within moderator/CM scope (group_id / state)',
+    ownership_behavior: 'no ownership fallback',
+    allow_ownership_fallback: false,
+    analytics_behavior: 'not applicable',
+    supported_layers: ['mutation'],
+  },
+  storage: {
+    category: 'scoped',
+    scope_model: 'post-images tied to event upload scope; user-frames tied to profile state scope',
+    ownership_behavior: 'editor ownership via canUploadPost on target event',
+    allow_ownership_fallback: false,
+    analytics_behavior: 'not applicable',
+    supported_layers: ['mutation'],
+  },
 };
 
 export const RBAC_SCOPED_RESOURCES = new Set<string>(

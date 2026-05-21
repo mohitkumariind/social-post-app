@@ -9,6 +9,7 @@ import {
   canDeleteEvent,
   canEditEvent,
   canTargetAudience,
+  canUploadPost,
   normalizeResourceScope,
   type RbacActor,
 } from '@/lib/rbac/permission-engine';
@@ -59,7 +60,12 @@ export type MutationAction =
   | 'parties.delete'
   | 'banners.create'
   | 'banners.update'
-  | 'banners.delete';
+  | 'banners.delete'
+  | 'user_frames.create'
+  | 'user_frames.delete'
+  | 'storage.upload'
+  | 'storage.delete'
+  | 'profiles.role_update';
 
 export type MutationDecision =
   | { ok: true }
@@ -251,6 +257,84 @@ export function canPerformMutation(
   ) {
     if (!isElevatedDashboardRole(user.role)) return deny('Forbidden: banners require elevated admin');
     return allow();
+  }
+
+  if (
+    resourceType === 'user_frames' &&
+    (action === 'user_frames.create' || action === 'user_frames.delete')
+  ) {
+    if (isElevatedDashboardRole(user.role) || isAdminRole(user.role)) return allow();
+    const actor = toActor(user);
+    const scopeNorm = normalizeResourceScope((resource ?? {}) as Record<string, unknown>);
+    if (scopeNorm.state_ids.length > 0 || scopeNorm.group_ids.length > 0) {
+      const scopeDecision = canAccessScope(actor, scopeNorm);
+      if (scopeDecision.allowed) return allow();
+      return deny(scopeDecision.denied_reason ?? 'Forbidden: target user outside scope');
+    }
+    return deny('Forbidden: missing profile scope for user frames');
+  }
+
+  if (resourceType === 'profiles' && action === 'profiles.role_update') {
+    if (!isElevatedDashboardRole(user.role)) {
+      return deny('Forbidden: only elevated admins can update roles');
+    }
+    return allow();
+  }
+
+  if (
+    resourceType === 'storage' &&
+    (action === 'storage.upload' || action === 'storage.delete')
+  ) {
+    if (isAdminRole(user.role) || user.role === 'super_admin') return allow();
+    const actor = toActor(user);
+    const bucket = String((payload as { bucket?: unknown })?.bucket ?? '').trim();
+    const targetKind = String((resource as { target_kind?: unknown })?.target_kind ?? '').trim();
+
+    if (user.role === 'editor') {
+      if (bucket !== 'post-images') {
+        return deny('Forbidden: editor may only use post-images bucket');
+      }
+      if (targetKind !== 'event') return deny('Forbidden: editor storage target must be an event');
+      const upload = canUploadPost(actor, (resource ?? {}) as Record<string, unknown>);
+      if (!upload.allowed) return deny(upload.denied_reason ?? 'Forbidden: cannot upload to this event');
+      return allow();
+    }
+
+    if (user.role === 'campaign_manager') {
+      if (bucket !== 'post-images') {
+        return deny('Forbidden: campaign_manager can only use post-images bucket');
+      }
+      if (targetKind !== 'event') return deny('Forbidden: campaign_manager storage target must be an event');
+      const upload = canUploadPost(actor, (resource ?? {}) as Record<string, unknown>);
+      if (!upload.allowed) return deny(upload.denied_reason ?? 'Forbidden: cannot upload to this event');
+      return allow();
+    }
+
+    if (user.role === 'moderator') {
+      if (user.assigned_state_ids.length === 0) {
+        return deny('Forbidden: moderator is missing assigned_state_ids');
+      }
+      if (bucket === 'user-frames') {
+        if (targetKind !== 'profile') return deny('Forbidden: moderator user-frames target must be a profile');
+        const scopeNorm = normalizeResourceScope({
+          state_ids: (resource as { assigned_state_ids?: unknown })?.assigned_state_ids,
+        });
+        const scopeDecision = canAccessScope(actor, scopeNorm);
+        if (!scopeDecision.allowed) {
+          return deny(scopeDecision.denied_reason ?? 'Forbidden: user outside moderator assigned states');
+        }
+        return allow();
+      }
+      if (bucket === 'post-images') {
+        if (targetKind !== 'event') return deny('Forbidden: moderator event storage target must be an event');
+        const upload = canUploadPost(actor, (resource ?? {}) as Record<string, unknown>);
+        if (!upload.allowed) return deny(upload.denied_reason ?? 'Forbidden: cannot upload to this event');
+        return allow();
+      }
+      return deny('Forbidden: moderator may only use post-images or user-frames buckets');
+    }
+
+    return deny('Forbidden: role cannot perform storage mutation');
   }
 
   if (isAdminRole(user.role)) return allow();

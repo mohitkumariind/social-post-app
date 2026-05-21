@@ -17,6 +17,7 @@ import { canPerformMutation } from '@/lib/rbac/scoped-write-engine';
 import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { normalizeProfileRole } from '@/lib/profile-roles';
 import { isElevatedDashboardRole } from '@/lib/rbac/dashboard-permissions';
+import { canPerformMutation } from '@/lib/rbac/mutation-gateway';
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireRole } from '@/lib/rbac/require';
 import { API_DEFAULT_LIMIT, API_MAX_LIMIT, clampLimit } from '@/lib/perf-defaults';
 
@@ -321,9 +322,6 @@ export async function PATCH(request: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json({ error: auth.status === 401 ? 'Unauthorized' : 'Forbidden' }, { status: auth.status });
   }
-  if (!isElevatedDashboardRole(auth.role)) {
-    return NextResponse.json({ error: 'Only admins can update roles' }, { status: 403 });
-  }
 
   let body: PatchBody = {};
   try {
@@ -366,7 +364,31 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, { status: 503 });
   }
 
+  const { data: existingProfile, error: existingErr } = await admin
+    .from('profiles')
+    .select('id, role, assigned_state_ids, assigned_group_ids, assigned_party_ids')
+    .eq('id', id)
+    .maybeSingle();
+  if (existingErr) return NextResponse.json({ error: existingErr.message }, { status: 500 });
+  if (!existingProfile) return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
+
   let updateBody: Record<string, unknown> = { role, assigned_state_ids, assigned_group_ids, assigned_party_ids };
+  {
+    const decision = canPerformMutation(
+      {
+        id: auth.user.id,
+        role: auth.role,
+        assigned_state_ids: auth.assigned_state_ids,
+        assigned_group_ids: auth.assigned_group_ids,
+      },
+      'profiles.role_update',
+      existingProfile as Record<string, unknown>,
+      updateBody,
+      { resourceType: 'profiles', resourceId: id, resourceName: id }
+    );
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+  }
+
   let selectCols = 'id, role, assigned_state_ids, assigned_group_ids, assigned_party_ids';
   let { data, error } = await admin.from('profiles').update(updateBody).eq('id', id).select(selectCols).single();
 

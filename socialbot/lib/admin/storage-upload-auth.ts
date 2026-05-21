@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
-import { isCampaignManager, isEditor, isModerator, toRbacActor } from '@/lib/admin-gate';
-import { canUploadPost } from '@/lib/rbac';
-import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
+import { isCampaignManager, isEditor, isModerator } from '@/lib/admin-gate';
+import { canPerformMutation } from '@/lib/rbac/mutation-gateway';
 
 export const STORAGE_UPLOAD_ROLES = [
   'admin',
@@ -12,6 +11,8 @@ export const STORAGE_UPLOAD_ROLES = [
   'campaign_manager',
   'editor',
 ] as const;
+
+export type StorageMutationAction = 'storage.upload' | 'storage.delete';
 
 export type StorageAuthRejectBody = {
   error: string;
@@ -53,18 +54,33 @@ export function parseUserIdFromUserFramesPath(path: string): string | null {
   return null;
 }
 
-export async function assertStorageUploadAllowed(args: {
+type ResolveOk = {
+  ok: true;
+  resource: Record<string, unknown>;
+  payload: Record<string, unknown>;
+  resourceId: string;
+  resourceName: string;
+};
+
+type ResolveFail = { ok: false; body: StorageAuthRejectBody; status: number };
+
+async function resolveStorageMutationContext(args: {
   auth: VerifiedAdminAuth;
   admin: SupabaseClient;
   bucket: string;
   path: string;
-}): Promise<{ ok: true } | { ok: false; body: StorageAuthRejectBody; status: number }> {
+}): Promise<ResolveOk | ResolveFail> {
   const { auth, admin, bucket, path } = args;
   const base = { role: auth.role, user_id: auth.user.id };
 
   if (auth.role === 'admin' || auth.role === 'super_admin') {
-    logStorageAuth('role_gate', { ok: true, ...base, note: 'admin unrestricted' });
-    return { ok: true };
+    return {
+      ok: true,
+      resource: { target_kind: 'admin' },
+      payload: { bucket, path },
+      resourceId: path,
+      resourceName: `${bucket}:${path}`,
+    };
   }
 
   if (isEditor(auth)) {
@@ -112,27 +128,13 @@ export async function assertStorageUploadAllowed(args: {
         body: { ...base, step: 'editor_event_lookup', reason: 'event_not_found', error: 'Event not found' },
       };
     }
-    const upload = canUploadPost(toRbacActor(auth), ev as Record<string, unknown>);
-    logStorageAuth('editor_upload', {
-      ok: upload.allowed,
-      ...base,
-      event_id: eventId,
-      ...upload.debug,
-      denied_reason: upload.denied_reason,
-    });
-    if (!upload.allowed) {
-      return {
-        ok: false,
-        status: 403,
-        body: {
-          ...base,
-          step: 'editor_event_upload',
-          reason: upload.denied_reason ?? 'upload_denied',
-          error: upload.denied_reason ?? 'Forbidden: cannot upload to this event',
-        },
-      };
-    }
-    return { ok: true };
+    return {
+      ok: true,
+      resource: { target_kind: 'event', ...(ev as Record<string, unknown>) },
+      payload: { bucket, path },
+      resourceId: eventId,
+      resourceName: eventId,
+    };
   }
 
   if (isCampaignManager(auth)) {
@@ -185,27 +187,13 @@ export async function assertStorageUploadAllowed(args: {
         body: { ...base, step: 'campaign_manager_event_lookup', reason: 'event_not_found', error: 'Event not found' },
       };
     }
-    const upload = canUploadPost(toRbacActor(auth), ev as Record<string, unknown>);
-    logStorageAuth('campaign_manager_upload', {
-      ok: upload.allowed,
-      ...base,
-      event_id: eventId,
-      ...upload.debug,
-      denied_reason: upload.denied_reason,
-    });
-    if (!upload.allowed) {
-      return {
-        ok: false,
-        status: 403,
-        body: {
-          ...base,
-          step: 'campaign_manager_event_upload',
-          reason: upload.denied_reason ?? 'upload_denied',
-          error: upload.denied_reason ?? 'Forbidden: cannot upload to this event',
-        },
-      };
-    }
-    return { ok: true };
+    return {
+      ok: true,
+      resource: { target_kind: 'event', ...(ev as Record<string, unknown>) },
+      payload: { bucket, path },
+      resourceId: eventId,
+      resourceName: eventId,
+    };
   }
 
   if (isModerator(auth)) {
@@ -248,30 +236,24 @@ export async function assertStorageUploadAllowed(args: {
           body: { ...base, step: 'moderator_profile_lookup', reason: 'supabase_error', error: profErr.message },
         };
       }
-      const ok = canAccessResource(
-        {
-          id: auth.user.id,
-          role: auth.role,
-          assigned_state_ids: auth.assigned_state_ids,
-          assigned_group_ids: auth.assigned_group_ids,
-        },
-        { state_ids: (prof as { assigned_state_ids?: unknown })?.assigned_state_ids },
-        { resourceType: 'profiles', audit: { resourceType: 'profiles', action: 'storage.upload.scope.validate' } }
-      );
-      logStorageAuth('moderator_user_frames_scope', { ok, ...base, target_user_id: userId });
-      if (!ok) {
+      if (!prof) {
         return {
           ok: false,
-          status: 403,
-          body: {
-            ...base,
-            step: 'moderator_user_frames_scope',
-            reason: 'profile_outside_assigned_states',
-            error: 'Forbidden: user outside moderator assigned states',
-          },
+          status: 404,
+          body: { ...base, step: 'moderator_profile_lookup', reason: 'profile_not_found', error: 'Profile not found' },
         };
       }
-      return { ok: true };
+      return {
+        ok: true,
+        resource: {
+          target_kind: 'profile',
+          id: userId,
+          assigned_state_ids: (prof as { assigned_state_ids?: unknown }).assigned_state_ids,
+        },
+        payload: { bucket, path },
+        resourceId: userId,
+        resourceName: userId,
+      };
     }
 
     if (bucket === 'post-images') {
@@ -307,27 +289,13 @@ export async function assertStorageUploadAllowed(args: {
           body: { ...base, step: 'moderator_event_lookup', reason: 'event_not_found', error: 'Event not found' },
         };
       }
-      const upload = canUploadPost(toRbacActor(auth), ev as Record<string, unknown>);
-      logStorageAuth('moderator_upload', {
-        ok: upload.allowed,
-        ...base,
-        event_id: eventId,
-        ...upload.debug,
-        denied_reason: upload.denied_reason,
-      });
-      if (!upload.allowed) {
-        return {
-          ok: false,
-          status: 403,
-          body: {
-            ...base,
-            step: 'moderator_event_upload',
-            reason: upload.denied_reason ?? 'upload_denied',
-            error: upload.denied_reason ?? 'Forbidden: cannot upload to this event',
-          },
-        };
-      }
-      return { ok: true };
+      return {
+        ok: true,
+        resource: { target_kind: 'event', ...(ev as Record<string, unknown>) },
+        payload: { bucket, path },
+        resourceId: eventId,
+        resourceName: eventId,
+      };
     }
 
     return {
@@ -352,4 +320,70 @@ export async function assertStorageUploadAllowed(args: {
       error: 'Forbidden: role cannot upload storage',
     },
   };
+}
+
+/** Authoritative storage RBAC — must pass mutation-gateway before any storage API write. */
+export async function assertStorageMutationAllowed(args: {
+  auth: VerifiedAdminAuth;
+  admin: SupabaseClient;
+  bucket: string;
+  path: string;
+  action: StorageMutationAction;
+}): Promise<{ ok: true } | { ok: false; body: StorageAuthRejectBody; status: number }> {
+  const { auth, action } = args;
+  const base = { role: auth.role, user_id: auth.user.id };
+
+  const resolved = await resolveStorageMutationContext(args);
+  if (!resolved.ok) return resolved;
+
+  const decision = canPerformMutation(
+    {
+      id: auth.user.id,
+      role: auth.role,
+      assigned_state_ids: auth.assigned_state_ids,
+      assigned_group_ids: auth.assigned_group_ids,
+    },
+    action,
+    resolved.resource,
+    resolved.payload,
+    {
+      resourceType: 'storage',
+      resourceId: resolved.resourceId,
+      resourceName: resolved.resourceName,
+    }
+  );
+
+  logStorageAuth('mutation_gateway', {
+    ok: decision.ok,
+    ...base,
+    action,
+    bucket: args.bucket,
+    path: args.path,
+    denied_reason: decision.ok ? undefined : decision.reason,
+  });
+
+  if (!decision.ok) {
+    return {
+      ok: false,
+      status: 403,
+      body: {
+        ...base,
+        step: 'mutation_gateway',
+        reason: decision.reason ?? 'storage_mutation_denied',
+        error: decision.reason ?? 'Forbidden: storage mutation denied',
+      },
+    };
+  }
+
+  return { ok: true };
+}
+
+/** @deprecated Use assertStorageMutationAllowed — kept for existing import sites (upload). */
+export async function assertStorageUploadAllowed(args: {
+  auth: VerifiedAdminAuth;
+  admin: SupabaseClient;
+  bucket: string;
+  path: string;
+}): Promise<{ ok: true } | { ok: false; body: StorageAuthRejectBody; status: number }> {
+  return assertStorageMutationAllowed({ ...args, action: 'storage.upload' });
 }

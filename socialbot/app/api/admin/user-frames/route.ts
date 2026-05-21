@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { assertAdminRole, createServiceRoleClient, isAdmin, isCampaignManager, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { buildScopedQuery, resolveAllowedProfileIdsForCampaignManager } from '@/lib/rbac/scoped-query-builder';
+import { canPerformMutation } from '@/lib/rbac/mutation-gateway';
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireModeratorHasAssignedStates, requireRole } from '@/lib/rbac/require';
 import { API_DEFAULT_FRAMES_LIMIT, API_MAX_FRAMES_LIMIT, clampLimit } from '@/lib/perf-defaults';
 
@@ -68,6 +69,34 @@ async function ensureTargetProfileInScope(
     if (!prof) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
   return null;
+}
+
+async function profileScopeResourceForFrames(
+  db: NonNullable<ReturnType<typeof createServiceRoleClient>>,
+  userId: string
+): Promise<Record<string, unknown> | null> {
+  const { data, error } = await db
+    .from('profiles')
+    .select('id,group_id,state_id,assigned_state_ids')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const row = data as { group_id?: unknown; state_id?: unknown; assigned_state_ids?: unknown };
+  return {
+    user_id: userId,
+    group_id: row.group_id,
+    state_id: row.state_id,
+    assigned_state_ids: row.assigned_state_ids,
+  };
+}
+
+function mutationUserFromGate(auth: AdminAuth) {
+  return {
+    id: auth.user.id,
+    role: auth.role,
+    assigned_state_ids: auth.assigned_state_ids,
+    assigned_group_ids: auth.assigned_group_ids,
+  };
 }
 
 function serviceDbOr503() {
@@ -203,6 +232,11 @@ export async function POST(request: NextRequest) {
   const scopeErr = await ensureTargetProfileInScope(db, gate.auth as AdminAuth, adminRole, userId, allowed_profile_ids, scopedUser);
   if (scopeErr) return scopeErr;
 
+  const scopeResource = await profileScopeResourceForFrames(db, userId);
+  if (!scopeResource) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
   const overlayIn = String(body.overlay_url ?? '').trim();
   const fileName = String(body.file_name ?? '').trim();
 
@@ -212,6 +246,17 @@ export async function POST(request: NextRequest) {
     overlay_url: overlayIn || url,
   };
   if (fileName) insertPayload.file_name = fileName;
+
+  {
+    const decision = canPerformMutation(
+      mutationUserFromGate(gate.auth as AdminAuth),
+      'user_frames.create',
+      scopeResource,
+      insertPayload,
+      { resourceType: 'user_frames', resourceId: userId, resourceName: fileName || userId }
+    );
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+  }
 
   let ins = await db.from('user_frames').insert(insertPayload).select('*').maybeSingle();
   for (let attempts = 0; attempts < 6 && ins.error; attempts++) {
@@ -272,6 +317,22 @@ export async function DELETE(request: NextRequest) {
 
   const scopeErr = await ensureTargetProfileInScope(db, gate.auth as AdminAuth, adminRole, ownerId, allowed_profile_ids, scopedUser);
   if (scopeErr) return scopeErr;
+
+  const scopeResource = await profileScopeResourceForFrames(db, ownerId);
+  if (!scopeResource) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  {
+    const decision = canPerformMutation(
+      mutationUserFromGate(gate.auth as AdminAuth),
+      'user_frames.delete',
+      scopeResource,
+      null,
+      { resourceType: 'user_frames', resourceId: frameId, resourceName: ownerId }
+    );
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
+  }
 
   const { error: delErr } = await db.from('user_frames').delete().eq('id', frameId);
   if (delErr) return NextResponse.json({ error: delErr.message }, { status: 500 });

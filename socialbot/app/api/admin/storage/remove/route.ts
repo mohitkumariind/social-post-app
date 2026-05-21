@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient, validateAdminSession } from '@/lib/admin-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
-  assertStorageUploadAllowed,
+  assertStorageMutationAllowed,
   logStorageAuth,
   STORAGE_UPLOAD_ROLES,
   storageAuthJson,
@@ -137,7 +137,7 @@ export async function POST(request: NextRequest) {
   }
 
   for (const path of paths) {
-    const perm = await assertStorageUploadAllowed({ auth, admin, bucket, path });
+    const perm = await assertStorageMutationAllowed({ auth, admin, bucket, path, action: 'storage.delete' });
     if (!perm.ok) {
       return storageAuthJson(perm.body, perm.status);
     }
