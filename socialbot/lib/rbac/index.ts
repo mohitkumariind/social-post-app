@@ -56,10 +56,12 @@ export {
 } from '@/lib/rbac/dashboard-permissions';
 
 export {
+  hasConstituencyAnchor,
   isGlobalTargeting,
   isPublishedEvent,
   normalizeEventResource,
   normalizeResourceScope,
+  scopeDimensionWildcard,
 } from '@/lib/rbac/normalize-scope';
 
 export { logRbacDebug } from '@/lib/rbac/debug';

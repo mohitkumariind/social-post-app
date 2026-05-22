@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { validateCampaignManagerEventPayload } from '@/lib/event-access';
-import { canUploadPost } from '@/lib/rbac/permission-engine';
+import { canTargetAudience, canUploadPost } from '@/lib/rbac/permission-engine';
+import { canPerformMutation } from '@/lib/rbac/mutation-gateway';
 import type { VerifiedAdminAuth } from '@/lib/admin-gate';
 
 const cmAuth: VerifiedAdminAuth = {
@@ -78,5 +79,39 @@ describe('campaign manager mutation scope', () => {
     const d = canUploadPost(cmActor, event);
     expect(d.allowed).toBe(false);
     expect(d.denied_reason).toBe('loksabha_outside_assignment');
+  });
+
+  it('allows create with all-loksabha wildcard anchor', () => {
+    expect(
+      validateCampaignManagerEventPayload(cmAuth, {
+        name: 'E',
+        loksabha_id: [0],
+      })
+    ).toBeNull();
+  });
+
+  it('allows publish update for owned lok-only event without groups', () => {
+    const user = {
+      id: 'cm-1',
+      role: 'campaign_manager' as const,
+      assigned_state_ids: [] as number[],
+      assigned_group_ids: [] as string[],
+      assigned_party_ids: [] as string[],
+      assigned_loksabha_ids: [501],
+      assigned_assembly_ids: [] as number[],
+    };
+    const event = { created_by: 'cm-1', loksabha_id: [501], target_groups: [], name: 'E' };
+    const d = canPerformMutation(
+      user,
+      'events.update',
+      event,
+      { status: 'published' },
+      { resourceType: 'events', resourceId: 'e1', resourceName: 'E' }
+    );
+    expect(d.ok).toBe(true);
+  });
+
+  it('allows constituency wildcard targeting without global deny', () => {
+    expect(canTargetAudience(cmActor, { loksabha_id: [0] }).allowed).toBe(true);
   });
 });

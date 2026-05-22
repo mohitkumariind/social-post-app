@@ -555,7 +555,7 @@ export async function PATCH(request: NextRequest) {
   const { data: evForGuard, error: evForGuardErr } = await selectEventByIdMaybe(
     admin,
     id,
-    'id, created_by, state_id, target_groups, name, dashboard_category'
+    'id, created_by, state_id, target_groups, loksabha_id, assembly_id, name, dashboard_category'
   );
   if (evForGuardErr) return json({ error: evForGuardErr.message }, 500);
   if (!evForGuard) return json({ error: 'Not found' }, 404);

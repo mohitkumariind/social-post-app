@@ -118,6 +118,19 @@ describe('permission-engine', () => {
     expect(canUploadPost(modActor, event).allowed).toBe(true);
   });
 
+  it('allows editor to target loksabha without profile constituency assignment', () => {
+    const scope = canAccessScope(editorActor, {
+      state_ids: [10],
+      party_ids: [],
+      party_slugs: [],
+      loksabha_ids: [501],
+      assembly_ids: [],
+      group_ids: [],
+    });
+    expect(scope.allowed).toBe(true);
+    expect(canTargetAudience(editorActor, { state_id: [10], loksabha_id: [501] }).allowed).toBe(true);
+  });
+
   it('allows moderator to create groups; denies campaign_manager', () => {
     expect(canCreateGroup(modActor).allowed).toBe(true);
     expect(

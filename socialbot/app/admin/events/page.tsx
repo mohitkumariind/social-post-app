@@ -23,6 +23,7 @@ import {
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { adminStorageRemove, adminStorageUploadWithProgress } from '@/lib/admin-storage-client';
 import UploadQueuePanel from '@/components/admin/UploadQueuePanel';
+import { MultiSelectDropdown } from '@/components/admin/MultiSelectDropdown';
 import { useAdminUploadQueue } from '@/hooks/useAdminUploadQueue';
 import { supabase } from '@/lib/supabase';
 import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
@@ -135,141 +136,6 @@ const toNumArr = (val: any): number[] => {
   const arr = Array.isArray(val) ? val : [val];
   return arr.map((id) => Number(id)).filter((n) => Number.isFinite(n));
 };
-
-/** Multi-select dropdown with checkboxes, ALL option, and tag display */
-function MultiSelectDropdown<T extends { id: string | number }>({
-  label,
-  options,
-  selected,
-  onSelect,
-  getValue,
-  getLabel,
-  allLabel = 'ALL',
-  loading = false,
-  optionLeading,
-  showAllOption = true,
-  searchable = false,
-  searchPlaceholder = 'Search…',
-}: {
-  label: string;
-  options: T[];
-  selected: string[];
-  onSelect: (vals: string[]) => void;
-  getValue: (o: T) => string;
-  getLabel: (o: T) => string;
-  allLabel?: string;
-  loading?: boolean;
-  /** e.g. neutral icon for special parties like "Other" */
-  optionLeading?: (o: T) => React.ReactNode;
-  showAllOption?: boolean;
-  searchable?: boolean;
-  searchPlaceholder?: string;
-}) {
-  const [open, setOpen] = React.useState(false);
-  const [query, setQuery] = React.useState('');
-  const ref = React.useRef<HTMLDivElement>(null);
-  const isAll = selected.includes('ALL');
-  const displayItems = isAll ? [{ val: 'ALL', lbl: allLabel }] : selected.map((v) => {
-    const vStr = String(v);
-    const opt = options.find((o) => String(getValue(o)) === vStr);
-    return { val: vStr, lbl: opt ? getLabel(opt) : vStr };
-  });
-
-  React.useEffect(() => {
-    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener('click', h);
-    return () => document.removeEventListener('click', h);
-  }, []);
-
-  React.useEffect(() => {
-    if (!open) setQuery('');
-  }, [open]);
-
-  const filteredOptions =
-    !searchable || !query.trim()
-      ? options
-      : options.filter((o) => getLabel(o).toLowerCase().includes(query.trim().toLowerCase()));
-
-  const toggle = (val: string) => {
-    if (val === 'ALL') {
-      onSelect(isAll ? [] : ['ALL']);
-      return;
-    }
-    const valStr = String(val);
-    const next = selected.some((x) => String(x) === valStr) ? selected.filter((x) => String(x) !== valStr) : [...selected, valStr];
-    onSelect(next.length ? next : []);
-  };
-
-  const removeTag = (val: string) => {
-    if (val === 'ALL') onSelect([]);
-    else onSelect(selected.filter((x) => String(x) !== val));
-  };
-
-  return (
-    <div className="flex flex-col w-full" ref={ref}>
-      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{label}</span>
-      <div className="relative">
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => !loading && setOpen((o) => !o)}
-          onKeyDown={(e) => { if (!loading && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpen((o) => !o); } }}
-          className={`w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm text-left flex items-center justify-between min-h-[40px] ${loading ? 'cursor-wait opacity-70' : 'cursor-pointer'}`}
-        >
-          <div className="flex flex-wrap gap-1 flex-1">
-            {loading ? (
-              <span className="text-slate-400">Loading…</span>
-            ) : displayItems.length === 0 ? (
-              <span className="text-slate-400">Select…</span>
-            ) : (
-              displayItems.map(({ val, lbl }) => (
-                <span key={val} className="inline-flex items-center gap-0.5 bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded-md">
-                  {lbl}
-                  <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); removeTag(val); }} className="hover:bg-blue-200 rounded p-0.5">
-                    <X size={10} />
-                  </button>
-                </span>
-              ))
-            )}
-          </div>
-          <ChevronDown size={14} className="text-slate-400 shrink-0 ml-1" />
-        </div>
-        {open && (
-          <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-48 overflow-y-auto py-2">
-            {searchable && (
-              <div className="px-3 pb-2">
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={searchPlaceholder}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
-              </div>
-            )}
-            {showAllOption && (
-              <label className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer">
-                <input type="checkbox" checked={isAll} onChange={() => toggle('ALL')} className="rounded" />
-                <span className="text-sm font-bold">{allLabel}</span>
-              </label>
-            )}
-            {filteredOptions.map((o) => {
-              const v = String(getValue(o));
-              const checked = isAll || selected.some((s) => String(s) === v);
-              const disabled = isAll && showAllOption;
-              return (
-                <label key={String(o.id)} className={`flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                  <input type="checkbox" checked={checked} disabled={disabled} onChange={() => !disabled && toggle(v)} className="rounded" />
-                  {optionLeading?.(o)}
-                  <span className="text-sm font-bold">{getLabel(o)}</span>
-                </label>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 export default function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -969,6 +835,8 @@ export default function App() {
       targetGroupsArr.length === 0 &&
       loksabhaIdArr.length === 0 &&
       assemblyIdArr.length === 0 &&
+      !newLoksabha.includes('ALL') &&
+      !newAssembly.includes('ALL') &&
       dashDb == null
     ) {
       alert('Please select at least one Target Group, Lok Sabha, or Assembly.');
@@ -1017,15 +885,9 @@ export default function App() {
       payload.state_id = [];
       payload.loksabha = [];
       payload.assembly = [];
-      if (targetGroupsArr.length > 0) {
-        payload.target_groups = targetGroupsArr;
-        payload.loksabha_id = [];
-        payload.assembly_id = [];
-      } else {
-        payload.target_groups = [];
-        payload.loksabha_id = loksabhaIdArr;
-        payload.assembly_id = assemblyIdArr;
-      }
+      payload.target_groups = targetGroupsArr;
+      payload.loksabha_id = loksabhaIdArr;
+      payload.assembly_id = assemblyIdArr;
     } else if (targetGroupsArr.length > 0) {
       // Priority rule: if target_groups is set, it overrides geo filters (store geo arrays empty).
       payload.party = [];
@@ -1580,8 +1442,16 @@ export default function App() {
     const loksabhaArr = isEditCat ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
     const assemblyArr = isEditCat ? [] : newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
     const targetGroupsArr = isEditCat ? [] : newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
-    if (eventCaps.campaignManagerForm && targetGroupsArr.length === 0 && !isEditCat) {
-      alert('Please select at least one Target Group.');
+    if (
+      eventCaps.campaignManagerForm &&
+      targetGroupsArr.length === 0 &&
+      loksabhaIdArr.length === 0 &&
+      assemblyIdArr.length === 0 &&
+      !newLoksabha.includes('ALL') &&
+      !newAssembly.includes('ALL') &&
+      !isEditCat
+    ) {
+      alert('Please select at least one Target Group, Lok Sabha, or Assembly.');
       return;
     }
     const partyIdArr =
@@ -1614,7 +1484,6 @@ export default function App() {
       });
     }
     updatePayload.target_groups = targetGroupsArr;
-    // Campaign Manager: groups-only targeting (always ignore geo/party arrays).
     if (eventCaps.campaignManagerForm) {
       updatePayload.party = [];
       updatePayload.state = [];
@@ -1622,8 +1491,8 @@ export default function App() {
       updatePayload.assembly = [];
       updatePayload.party_id = [];
       updatePayload.state_id = [];
-      updatePayload.loksabha_id = [];
-      updatePayload.assembly_id = [];
+      updatePayload.loksabha_id = loksabhaIdArr;
+      updatePayload.assembly_id = assemblyIdArr;
     } else if (targetGroupsArr.length > 0) {
       // Priority rule: if target_groups is set, it overrides geo filters (clear geo arrays).
       updatePayload.party = [];
@@ -1935,7 +1804,7 @@ export default function App() {
                             onSelect={setNewLoksabha}
                             getValue={(l) => l.id}
                             getLabel={(l) => l.name}
-                            allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Lok Sabha' : 'All LS Seats'}
+                            allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Lok Sabha' : 'All Lok Sabha'}
                             showAllOption={eventCaps.showAllAssignedGeoOption || eventCaps.showAllStateOption}
                             loading={loksabhasLoading}
                             searchable
@@ -1949,7 +1818,7 @@ export default function App() {
                             onSelect={setNewAssembly}
                             getValue={(a) => a.id}
                             getLabel={(a) => a.name}
-                            allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Assembly' : 'All Assembly Seats'}
+                            allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Assembly' : 'All Assembly'}
                             showAllOption={eventCaps.showAllAssignedGeoOption || eventCaps.showAllStateOption}
                             loading={assembliesLoading}
                             searchable
@@ -2160,7 +2029,7 @@ export default function App() {
                     onSelect={setNewLoksabha}
                     getValue={(l) => l.id}
                     getLabel={(l) => l.name}
-                    allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Lok Sabha' : 'All LS Seats'}
+                    allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Lok Sabha' : 'All Lok Sabha'}
                     showAllOption={eventCaps.showAllAssignedGeoOption || eventCaps.showAllStateOption}
                     loading={loksabhasLoading}
                     searchable
@@ -2174,7 +2043,7 @@ export default function App() {
                     onSelect={setNewAssembly}
                     getValue={(a) => a.id}
                     getLabel={(a) => a.name}
-                    allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Assembly' : 'All Assembly Seats'}
+                    allLabel={eventCaps.showAllAssignedGeoOption ? 'All Assigned Assembly' : 'All Assembly'}
                     showAllOption={eventCaps.showAllAssignedGeoOption || eventCaps.showAllStateOption}
                     loading={assembliesLoading}
                     searchable
@@ -2192,7 +2061,8 @@ export default function App() {
                     onSelect={setNewLoksabha}
                     getValue={(l) => l.id}
                     getLabel={(l) => l.name}
-                    showAllOption={false}
+                    allLabel="All Lok Sabha"
+                    showAllOption
                     loading={loksabhasLoading}
                     searchable
                   />
@@ -2205,7 +2075,8 @@ export default function App() {
                     onSelect={setNewAssembly}
                     getValue={(a) => a.id}
                     getLabel={(a) => a.name}
-                    showAllOption={false}
+                    allLabel="All Assembly"
+                    showAllOption
                     loading={assembliesLoading}
                     searchable
                   />

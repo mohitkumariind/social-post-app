@@ -11,6 +11,7 @@ import {
   canUploadPost,
   canViewEvent,
   isGlobalTargeting,
+  hasConstituencyAnchor,
   normalizeResourceScope,
 } from '@/lib/rbac';
 import { RbacError } from '@/lib/rbac/require';
@@ -86,9 +87,7 @@ export function validateCampaignManagerEventPayload(
   });
 
   const scope = normalizeResourceScope(payload);
-  const hasAnchor =
-    scope.group_ids.length > 0 || scope.loksabha_ids.length > 0 || scope.assembly_ids.length > 0;
-  if (!hasAnchor) {
+  if (!hasConstituencyAnchor(scope)) {
     return 'Forbidden: campaign_manager must target assigned Lok Sabha, Assembly, or groups';
   }
 

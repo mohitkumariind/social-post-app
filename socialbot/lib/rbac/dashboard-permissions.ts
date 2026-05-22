@@ -211,7 +211,7 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
       showGroupTargeting: false,
       showGeoTargeting: false,
       requireStateSelection: false,
-      showAllAssignedGeoOption: false,
+      showAllAssignedGeoOption: true,
     });
   }
 
@@ -241,7 +241,7 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
       showGroupTargeting: true,
       showGeoTargeting: true,
       requireStateSelection: false,
-      showAllAssignedGeoOption: false,
+      showAllAssignedGeoOption: true,
     });
   }
 
@@ -255,7 +255,7 @@ export function getEventFormUiCapabilities(actor: RbacActor): EventFormUiCapabil
       showGroupTargeting: false,
       showGeoTargeting: true,
       requireStateSelection: true,
-      showAllAssignedGeoOption: false,
+      showAllAssignedGeoOption: true,
     });
   }
 

@@ -4,6 +4,7 @@ import {
   isPublishedEvent,
   normalizeEventResource,
   normalizeResourceScope,
+  scopeDimensionWildcard,
 } from '@/lib/rbac/normalize-scope';
 import { logRbacDebug } from '@/lib/rbac/debug';
 import { logPermissionDecisionFromDebug } from '@/lib/rbac/permission-audit';
@@ -79,6 +80,18 @@ function ownsResource(actorId: string, createdBy: unknown): boolean {
 
 export { eventVisibilityMatch } from '@/lib/rbac/event-visibility-engine';
 
+function actorCoversGeoDimension(
+  actor: Pick<RbacActor, 'role'>,
+  normalized_scope: CanonicalScope,
+  dimension: 'loksabha' | 'assembly'
+): boolean {
+  if (scopeDimensionWildcard(normalized_scope, dimension)) return true;
+  const ids = dimension === 'loksabha' ? normalized_scope.loksabha_ids : normalized_scope.assembly_ids;
+  if (ids.length > 0) return true;
+  const r = String(actor.role ?? '').toLowerCase();
+  return r === 'editor' || r === 'moderator';
+}
+
 /**
  * Subset scope check: resource targeting must fit inside actor assignments.
  * Empty resource dimension = no extra restriction inside actor scope (not global).
@@ -145,28 +158,34 @@ export function canAccessScope(
     }
   }
 
-  if (resource.loksabha_ids.length > 0) {
-    if (normalized_scope.loksabha_ids.length === 0) {
+  if (resource.loksabha_ids.length > 0 && !scopeDimensionWildcard(resource, 'loksabha')) {
+    if (!actorCoversGeoDimension(actor, normalized_scope, 'loksabha')) {
       debug.denied_reason = 'actor_missing_loksabha_scope';
       logRbacDebug('canAccessScope', debug);
       return { allowed: false, denied_reason: debug.denied_reason, debug };
     }
     const set = new Set(normalized_scope.loksabha_ids);
-    if (!resource.loksabha_ids.every((id) => set.has(id))) {
+    if (
+      normalized_scope.loksabha_ids.length > 0 &&
+      !resource.loksabha_ids.every((id) => set.has(id))
+    ) {
       debug.denied_reason = 'loksabha_outside_assignment';
       logRbacDebug('canAccessScope', debug);
       return { allowed: false, denied_reason: debug.denied_reason, debug };
     }
   }
 
-  if (resource.assembly_ids.length > 0) {
-    if (normalized_scope.assembly_ids.length === 0) {
+  if (resource.assembly_ids.length > 0 && !scopeDimensionWildcard(resource, 'assembly')) {
+    if (!actorCoversGeoDimension(actor, normalized_scope, 'assembly')) {
       debug.denied_reason = 'actor_missing_assembly_scope';
       logRbacDebug('canAccessScope', debug);
       return { allowed: false, denied_reason: debug.denied_reason, debug };
     }
     const set = new Set(normalized_scope.assembly_ids);
-    if (!resource.assembly_ids.every((id) => set.has(id))) {
+    if (
+      normalized_scope.assembly_ids.length > 0 &&
+      !resource.assembly_ids.every((id) => set.has(id))
+    ) {
       debug.denied_reason = 'assembly_outside_assignment';
       logRbacDebug('canAccessScope', debug);
       return { allowed: false, denied_reason: debug.denied_reason, debug };
@@ -301,7 +320,11 @@ export function canUploadPost(actor: RbacActor, rawEvent: Record<string, unknown
       return { allowed: true, debug };
     }
     const hasConstituencyAnchor =
-      event.group_ids.length > 0 || event.loksabha_ids.length > 0 || event.assembly_ids.length > 0;
+      event.group_ids.length > 0 ||
+      event.loksabha_ids.length > 0 ||
+      event.assembly_ids.length > 0 ||
+      scopeDimensionWildcard(event, 'loksabha') ||
+      scopeDimensionWildcard(event, 'assembly');
     if (!hasConstituencyAnchor) {
       debug.denied_reason = 'campaign_manager_event_missing_constituency_anchor';
       logRbacDebug('canUploadPost', debug);

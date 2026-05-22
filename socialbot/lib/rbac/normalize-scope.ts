@@ -1,7 +1,12 @@
 import { PARTIES_DATA } from '@/lib/constants';
 import { normalizeAssignedPartyIds } from '@/lib/admin/editor-party-scope';
 import { parseGroupIds, parseStateIds } from '@/lib/rbac/require';
-import type { CanonicalScope, RbacActor, NormalizedEventResource } from '@/lib/rbac/scope-types';
+import type {
+  CanonicalScope,
+  RbacActor,
+  NormalizedEventResource,
+  ScopeDimensionWildcards,
+} from '@/lib/rbac/scope-types';
 import { PUBLISHED_EVENT_STATUSES } from '@/lib/rbac/scope-types';
 import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
 
@@ -97,6 +102,12 @@ export function normalizeResourceScope(raw: Record<string, unknown> | null | und
   const partyIdsFromSlugs = expandPartySlugsToNumeric(partySlugs);
   const party_ids = Array.from(new Set([...parties.ids, ...partyIdsFromSlugs]));
 
+  const wildcards: ScopeDimensionWildcards = {};
+  if (states.hasWildcard) wildcards.state = true;
+  if (parties.hasWildcard) wildcards.party = true;
+  if (lok.hasWildcard) wildcards.loksabha = true;
+  if (asm.hasWildcard) wildcards.assembly = true;
+
   const scope: CanonicalScope & { _wildcard?: boolean } = {
     state_ids: states.ids,
     party_ids,
@@ -105,14 +116,30 @@ export function normalizeResourceScope(raw: Record<string, unknown> | null | und
     assembly_ids: asm.ids,
     group_ids: groups.ids,
   };
+  if (Object.keys(wildcards).length > 0) scope.wildcards = wildcards;
   if (states.hasWildcard || parties.hasWildcard || lok.hasWildcard || asm.hasWildcard) {
     scope._wildcard = true;
   }
   return scope;
 }
 
+export function scopeDimensionWildcard(
+  scope: CanonicalScope,
+  dimension: keyof ScopeDimensionWildcards
+): boolean {
+  return scope.wildcards?.[dimension] === true;
+}
+
 export function scopeHasGlobalWildcard(scope: CanonicalScope): boolean {
   return (scope as CanonicalScope & { _wildcard?: boolean })._wildcard === true;
+}
+
+/** True when event/CM payload anchors on groups and/or constituency (incl. ALL seats). */
+export function hasConstituencyAnchor(scope: CanonicalScope): boolean {
+  if (scope.group_ids.length > 0) return true;
+  if (scope.loksabha_ids.length > 0 || scopeDimensionWildcard(scope, 'loksabha')) return true;
+  if (scope.assembly_ids.length > 0 || scopeDimensionWildcard(scope, 'assembly')) return true;
+  return false;
 }
 
 /**
@@ -132,7 +159,11 @@ export function normalizeScope(actor: Pick<
   const lok = parseNumericIds(actor.assigned_loksabha_ids ?? []);
   const asm = parseNumericIds(actor.assigned_assembly_ids ?? []);
 
-  return {
+  const wildcards: ScopeDimensionWildcards = {};
+  if (lok.hasWildcard) wildcards.loksabha = true;
+  if (asm.hasWildcard) wildcards.assembly = true;
+
+  const scope: CanonicalScope = {
     state_ids: states.ids,
     party_ids: expandPartySlugsToNumeric(partySlugs),
     party_slugs: partySlugs,
@@ -140,6 +171,8 @@ export function normalizeScope(actor: Pick<
     assembly_ids: asm.ids,
     group_ids: groups.ids,
   };
+  if (Object.keys(wildcards).length > 0) scope.wildcards = wildcards;
+  return scope;
 }
 
 export function normalizeEventResource(row: Record<string, unknown>): NormalizedEventResource {
@@ -159,16 +192,9 @@ export function isGlobalTargeting(scope: CanonicalScope, extra?: { dashboard_cat
   if (extra?.dashboard_category != null && isActiveEventDashboardCategory(extra.dashboard_category)) {
     return true;
   }
-  if (scopeHasGlobalWildcard(scope)) return true;
   const check = (ids: number[]) => ids.includes(GLOBAL_WILDCARD);
-  if (
-    check(scope.state_ids) ||
-    check(scope.party_ids) ||
-    check(scope.loksabha_ids) ||
-    check(scope.assembly_ids)
-  ) {
-    return true;
-  }
+  if (scopeDimensionWildcard(scope, 'state') || check(scope.state_ids)) return true;
+  if (scopeDimensionWildcard(scope, 'party') || check(scope.party_ids)) return true;
   const groupNums = scope.group_ids.map((g) => Number(g)).filter((n) => Number.isFinite(n));
   if (groupNums.includes(GLOBAL_WILDCARD)) return true;
   return false;

@@ -12,7 +12,11 @@ import {
   canUploadPost,
   type RbacActor,
 } from '@/lib/rbac/permission-engine';
-import { normalizeResourceScope } from '@/lib/rbac/normalize-scope';
+import {
+  hasConstituencyAnchor,
+  normalizeResourceScope,
+  scopeDimensionWildcard,
+} from '@/lib/rbac/normalize-scope';
 import { isAdminRole, isElevatedDashboardRole } from '@/lib/rbac/dashboard-permissions';
 import { normalizeActorId } from '@/lib/rbac/require';
 import { auditRbacMutation } from '@/lib/rbac/permission-audit';
@@ -199,7 +203,26 @@ function effectiveResourceScope(
     dashboard_category:
       (resource as { dashboard_category?: unknown })?.dashboard_category ??
       (payload as { dashboard_category?: unknown })?.dashboard_category,
+    loksabha_id:
+      (resource as { loksabha_id?: unknown })?.loksabha_id ??
+      (resource as { loksabha_ids?: unknown })?.loksabha_ids ??
+      (payload as { loksabha_id?: unknown })?.loksabha_id ??
+      (payload as { loksabha?: unknown })?.loksabha,
+    assembly_id:
+      (resource as { assembly_id?: unknown })?.assembly_id ??
+      (resource as { assembly_ids?: unknown })?.assembly_ids ??
+      (payload as { assembly_id?: unknown })?.assembly_id ??
+      (payload as { assembly?: unknown })?.assembly,
   };
+}
+
+function resourceHasMutationScope(scopeNorm: ReturnType<typeof normalizeResourceScope>): boolean {
+  if (scopeNorm.state_ids.length > 0 || scopeNorm.group_ids.length > 0) return true;
+  if (scopeNorm.loksabha_ids.length > 0 || scopeNorm.assembly_ids.length > 0) return true;
+  if (scopeDimensionWildcard(scopeNorm, 'loksabha') || scopeDimensionWildcard(scopeNorm, 'assembly')) {
+    return true;
+  }
+  return hasConstituencyAnchor(scopeNorm);
 }
 
 /**
@@ -465,7 +488,7 @@ export function canPerformMutation(
   }
 
   const scopeNorm = normalizeResourceScope(effective);
-  if (scopeNorm.state_ids.length > 0 || scopeNorm.group_ids.length > 0) {
+  if (resourceHasMutationScope(scopeNorm)) {
     const scopeDecision = canAccessScope(actor, scopeNorm);
     if (scopeDecision.allowed) return allow();
     return deny(

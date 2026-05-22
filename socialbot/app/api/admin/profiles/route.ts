@@ -17,6 +17,7 @@ import { canAccessResource } from '@/lib/rbac/unified-scope-engine';
 import { normalizeProfileRole } from '@/lib/profile-roles';
 import { isElevatedDashboardRole } from '@/lib/rbac/dashboard-permissions';
 import { canPerformMutation } from '@/lib/rbac/mutation-gateway';
+import { hasConstituencyAnchor, normalizeResourceScope } from '@/lib/rbac/normalize-scope';
 import { RbacError, requireCampaignManagerHasAssignedGroups, requireRole } from '@/lib/rbac/require';
 import { API_DEFAULT_LIMIT, API_MAX_LIMIT, clampLimit } from '@/lib/perf-defaults';
 
@@ -355,15 +356,29 @@ export async function PATCH(request: NextRequest) {
 
   let assigned_group_ids = toStrArr(body.assigned_group_ids);
   if (role !== 'campaign_manager') assigned_group_ids = [];
-  if (role === 'campaign_manager' && assigned_group_ids.length === 0) {
-    return NextResponse.json({ error: 'assigned_group_ids is required for campaign managers' }, { status: 400 });
-  }
 
   let assigned_loksabha_ids = toNumArr(body.assigned_loksabha_ids);
   let assigned_assembly_ids = toNumArr(body.assigned_assembly_ids);
   if (role !== 'campaign_manager') {
     assigned_loksabha_ids = [];
     assigned_assembly_ids = [];
+  }
+
+  if (role === 'campaign_manager') {
+    const cmScope = normalizeResourceScope({
+      target_groups: body.assigned_group_ids,
+      loksabha_id: body.assigned_loksabha_ids,
+      assembly_id: body.assigned_assembly_ids,
+    });
+    if (!hasConstituencyAnchor(cmScope)) {
+      return NextResponse.json(
+        {
+          error:
+            'Campaign manager requires at least one assigned group, Lok Sabha, or Assembly scope',
+        },
+        { status: 400 }
+      );
+    }
   }
 
   let assigned_party_ids = toPartySlugArr(body.assigned_party_ids);

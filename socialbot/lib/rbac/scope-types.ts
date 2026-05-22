@@ -1,5 +1,13 @@
 import type { AdminPanelRole } from '@/lib/profile-roles';
 
+/** Per-dimension ALL / [0] wildcard flags from normalized payloads. */
+export type ScopeDimensionWildcards = {
+  state?: boolean;
+  party?: boolean;
+  loksabha?: boolean;
+  assembly?: boolean;
+};
+
 /** Canonical scope dimensions (arrays only; empty = no extra restriction inside assigned scope). */
 export type CanonicalScope = {
   state_ids: number[];
@@ -8,6 +16,8 @@ export type CanonicalScope = {
   loksabha_ids: number[];
   assembly_ids: number[];
   group_ids: string[];
+  /** Set when parse sees ALL / 0 for a dimension (constituency wildcards are not global India). */
+  wildcards?: ScopeDimensionWildcards;
 };
 
 export type RbacActor = {
