@@ -1442,6 +1442,8 @@ export default function App() {
     const loksabhaArr = isEditCat ? [] : newLoksabha.includes('ALL') ? ['ALL'] : newLoksabha.filter(Boolean);
     const assemblyArr = isEditCat ? [] : newAssembly.includes('ALL') ? ['ALL'] : newAssembly.filter(Boolean);
     const targetGroupsArr = isEditCat ? [] : newTargetGroups.map((x) => String(x).trim()).filter(Boolean);
+    const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
+    const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
     if (
       eventCaps.campaignManagerForm &&
       targetGroupsArr.length === 0 &&
@@ -1459,8 +1461,6 @@ export default function App() {
         ? editorPartyTargetingEdit.party_id
         : toNumArrFromStrIds(partyArr);
     const stateIdArr = toNumArrFromStrIds(stateArr);
-    const loksabhaIdArr = toNumArrFromStrIds(loksabhaArr);
-    const assemblyIdArr = toNumArrFromStrIds(assemblyArr);
     if (eventCaps.editorForm && editorPartyTargetingEdit) {
       const editorStateScope = newState.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
       logEditorTargetingDebug('edit_saved_party_targeting', {
