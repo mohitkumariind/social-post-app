@@ -29,7 +29,10 @@ import {
   assertPostEventAccessibleForPostUpload,
   inheritEventScopeForPostPayload,
   isEventsFullAdmin,
+  sanitizeCampaignManagerPostScope,
 } from '@/lib/event-access';
+import { canAccessScope } from '@/lib/rbac/permission-engine';
+import { hasConstituencyAnchor, normalizeResourceScope } from '@/lib/rbac/normalize-scope';
 import { isEditor } from '@/lib/admin-gate';
 import { withAudit } from '@/lib/audit/withAudit';
 import {
@@ -106,8 +109,10 @@ function validateScopePayloadShape(auth: Pick<VerifiedAdminAuth, 'role'>, input:
       throw new RbacError('Forbidden: moderator payload cannot contain group scope fields', 403);
     }
   }
-  if (isCampaignManager(auth as any)) {
-    if (hasStateField) {
+  if (isCampaignManager(auth as any) && hasStateField) {
+    const raw = (input as any).state_id ?? (input as any).assigned_state_ids;
+    const parsed = parseStateIds(raw);
+    if (parsed.ids.length > 0) {
       throw new RbacError('Forbidden: campaign_manager payload cannot contain state scope fields', 403);
     }
   }
@@ -134,8 +139,18 @@ function validateScopePayloadShape(auth: Pick<VerifiedAdminAuth, 'role'>, input:
 }
 
 function requireNonEmptyScopeForPosts(
-  auth: Pick<VerifiedAdminAuth, 'role' | 'assigned_state_ids' | 'assigned_group_ids'>,
-  scope: ScopeParse
+  auth: Pick<
+    VerifiedAdminAuth,
+    | 'role'
+    | 'user'
+    | 'assigned_state_ids'
+    | 'assigned_group_ids'
+    | 'assigned_party_ids'
+    | 'assigned_loksabha_ids'
+    | 'assigned_assembly_ids'
+  >,
+  scope: ScopeParse,
+  payload: Record<string, unknown>
 ) {
   if (isAdmin(auth as any)) return;
   if (scope.malformed) throw new RbacError('Forbidden: malformed scope identifiers', 403);
@@ -144,14 +159,31 @@ function requireNonEmptyScopeForPosts(
     requireScopeState(scope.state_ids, auth.assigned_state_ids, 'subset');
     return;
   }
-  // campaign_manager
-  if (!scope.group_id && scope.group_ids.length === 0) throw new RbacError('Forbidden: missing group scope', 403);
-  const assigned = parseGroupIds(auth.assigned_group_ids);
-  if (assigned.malformed) throw new RbacError('Forbidden: malformed assigned_group_ids', 403);
-  const gids = new Set(assigned.ids);
-  if (gids.size === 0) throw new RbacError('Forbidden: missing assigned_group_ids', 403);
+  // campaign_manager: groups and/or constituency (aligned with event targeting)
+  const full = normalizeResourceScope(payload);
+  if (!hasConstituencyAnchor(full)) {
+    throw new RbacError('Forbidden: missing constituency scope (groups, Lok Sabha, or Assembly)', 403);
+  }
+  const access = canAccessScope(
+    {
+      id: auth.user.id,
+      role: auth.role,
+      assigned_state_ids: auth.assigned_state_ids ?? [],
+      assigned_group_ids: auth.assigned_group_ids ?? [],
+      assigned_party_ids: auth.assigned_party_ids ?? [],
+      assigned_loksabha_ids: auth.assigned_loksabha_ids,
+      assigned_assembly_ids: auth.assigned_assembly_ids,
+    },
+    full
+  );
+  if (!access.allowed) {
+    throw new RbacError(access.denied_reason ?? 'Forbidden: outside campaign manager scope', 403);
+  }
   if (scope.group_id) requireGroupAssignment(auth as any, scope.group_id);
   if (scope.group_ids.length > 0) {
+    const assigned = parseGroupIds(auth.assigned_group_ids);
+    if (assigned.malformed) throw new RbacError('Forbidden: malformed assigned_group_ids', 403);
+    const gids = new Set(assigned.ids);
     const ok = scope.group_ids.every((g) => gids.has(g));
     if (!ok) throw new RbacError('Forbidden: outside assigned_group_ids', 403);
   }
@@ -511,6 +543,7 @@ export const POST = withAudit(
     }
     if (eventScopeRow && typeof eventScopeRow === 'object') {
       inheritEventScopeForPostPayload(eventScopeRow as Record<string, unknown>, payload, auth.role);
+      if (isCampaignManager(auth)) sanitizeCampaignManagerPostScope(payload);
       trace.push({
         step: 'inheritEventScopeForPostPayload',
         ok: true,
@@ -541,11 +574,12 @@ export const POST = withAudit(
       payload.status = 'published';
     }
 
+    if (isCampaignManager(auth)) sanitizeCampaignManagerPostScope(payload);
     const scope = parseScopeFromInput(payload);
     try {
       if (!isEditor(auth)) {
         validateScopePayloadShape(auth as any, payload as any);
-        requireNonEmptyScopeForPosts(auth as any, scope);
+        requireNonEmptyScopeForPosts(auth as any, scope, payload);
       }
     } catch (e) {
       const msg = e instanceof RbacError ? e.message : 'Forbidden';
@@ -780,13 +814,20 @@ export const PATCH = withAudit(
       scheduled_at: (patch as any).scheduled_at,
     } as Record<string, unknown>;
     const nextScope = parseScopeFromInput(patchInput);
+    const beforeRow = { ...(before as Record<string, unknown>) };
+    const patchInputScoped = { ...patchInput };
+    if (isCampaignManager(auth)) {
+      sanitizeCampaignManagerPostScope(beforeRow);
+      sanitizeCampaignManagerPostScope(patchInputScoped);
+      sanitizeCampaignManagerPostScope(patch as Record<string, unknown>);
+    }
 
     // Enforce BOTH previous row scope and incoming payload scope (deny if scope missing/malformed).
     try {
       if (!isEditor(auth)) {
         validateScopePayloadShape(auth as any, patch as any);
-        requireNonEmptyScopeForPosts(auth as any, beforeScope);
-        requireNonEmptyScopeForPosts(auth as any, nextScope);
+        requireNonEmptyScopeForPosts(auth as any, beforeScope, beforeRow);
+        requireNonEmptyScopeForPosts(auth as any, nextScope, patchInputScoped);
       }
     } catch (e) {
       if (e instanceof RbacError) {

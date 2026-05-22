@@ -38,6 +38,14 @@ describe('rbac require helpers', () => {
       requireCampaignManagerHasAssignedGroups({
         role: 'campaign_manager',
         assigned_group_ids: [],
+        assigned_loksabha_ids: [501],
+      })
+    ).not.toThrow();
+
+    expect(() =>
+      requireCampaignManagerHasAssignedGroups({
+        role: 'campaign_manager',
+        assigned_group_ids: [],
       })
     ).toThrow(RbacError);
   });

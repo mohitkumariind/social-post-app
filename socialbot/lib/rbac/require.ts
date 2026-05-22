@@ -1,4 +1,5 @@
 import type { AdminPanelRole } from '@/lib/profile-roles';
+import { hasConstituencyAnchor, normalizeResourceScope } from '@/lib/rbac/normalize-scope';
 
 export type RbacRole = AdminPanelRole;
 
@@ -126,13 +127,25 @@ export function requireModeratorHasAssignedStates(user: Pick<RbacUser, 'role' | 
  * Symmetric assignment guard for campaign managers.
  * Keep role preconditions deterministic across RBAC layers:
  * moderator => assigned states required
- * campaign_manager => assigned groups required
+ * campaign_manager => at least one of groups, Lok Sabha, or Assembly
  */
-export function requireCampaignManagerHasAssignedGroups(user: Pick<RbacUser, 'role' | 'assigned_group_ids'>): void {
+export function requireCampaignManagerHasAssignedGroups(
+  user: Pick<
+    RbacUser,
+    'role' | 'assigned_group_ids' | 'assigned_loksabha_ids' | 'assigned_assembly_ids'
+  >
+): void {
   if (user.role !== 'campaign_manager') return;
-  const parsed = parseGroupIds(user.assigned_group_ids);
-  if (parsed.malformed || parsed.ids.length === 0) {
-    throw new RbacError('Campaign manager is missing assigned_group_ids', 403);
+  const scope = normalizeResourceScope({
+    target_groups: user.assigned_group_ids,
+    loksabha_id: user.assigned_loksabha_ids,
+    assembly_id: user.assigned_assembly_ids,
+  });
+  if (!hasConstituencyAnchor(scope)) {
+    throw new RbacError(
+      'Campaign manager is missing assigned scope (groups, Lok Sabha, or Assembly)',
+      403
+    );
   }
 }
 

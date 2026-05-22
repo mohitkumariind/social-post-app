@@ -425,9 +425,22 @@ export function inheritEventScopeForPostPayload(
   if (r === 'campaign_manager' || r === 'admin' || r === 'super_admin') {
     if (!has('target_groups') && eventRow.target_groups != null) postPayload.target_groups = eventRow.target_groups;
   }
+  if (r === 'campaign_manager') {
+    if (!has('loksabha_id') && eventRow.loksabha_id != null) postPayload.loksabha_id = eventRow.loksabha_id;
+    if (!has('assembly_id') && eventRow.assembly_id != null) postPayload.assembly_id = eventRow.assembly_id;
+  }
   if (r === 'admin' || r === 'super_admin' || r === 'moderator' || r === 'editor') {
     if (!has('party_id') && eventRow.party_id != null) postPayload.party_id = eventRow.party_id;
     if (!has('loksabha_id') && eventRow.loksabha_id != null) postPayload.loksabha_id = eventRow.loksabha_id;
     if (!has('assembly_id') && eventRow.assembly_id != null) postPayload.assembly_id = eventRow.assembly_id;
+  }
+}
+
+const CM_POST_FORBIDDEN_SCOPE_KEYS = ['state_id', 'assigned_state_ids', 'state'] as const;
+
+/** Posts for campaign managers use groups / constituency only — never state-wide scope. */
+export function sanitizeCampaignManagerPostScope(payload: Record<string, unknown>): void {
+  for (const k of CM_POST_FORBIDDEN_SCOPE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(payload, k)) delete payload[k];
   }
 }

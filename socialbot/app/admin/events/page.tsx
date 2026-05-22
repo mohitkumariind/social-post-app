@@ -1101,20 +1101,26 @@ export default function App() {
         dashboard_category: dashFromEvent,
         is_video: false,
         captions: batchCaptions.length > 0 ? captionsJsonForPostColumn(batchCaptions) : batchCaptions,
-        party_id: isGlobalDashPost ? [] : postScopeIds('party_id'),
-        state_id: isGlobalDashPost ? [] : postScopeIds('state_id'),
-        loksabha_id: isGlobalDashPost ? [] : postScopeIds('loksabha_id'),
-        assembly_id: isGlobalDashPost ? [] : postScopeIds('assembly_id'),
       };
       const targetGroupsRaw =
         (scopeRow as { target_groups?: string | string[] | null }).target_groups ?? eventSnapshot.target_groups;
       const targetGroupsArr = isGlobalDashPost ? [] : toStrArr(targetGroupsRaw);
-      postPayload.target_groups = targetGroupsArr;
-      if (targetGroupsArr.length > 0) {
-        postPayload.party_id = [];
-        postPayload.state_id = [];
-        postPayload.loksabha_id = [];
-        postPayload.assembly_id = [];
+      if (eventCaps.campaignManagerForm) {
+        postPayload.target_groups = targetGroupsArr;
+        postPayload.loksabha_id = isGlobalDashPost ? [] : postScopeIds('loksabha_id');
+        postPayload.assembly_id = isGlobalDashPost ? [] : postScopeIds('assembly_id');
+      } else {
+        postPayload.party_id = isGlobalDashPost ? [] : postScopeIds('party_id');
+        postPayload.state_id = isGlobalDashPost ? [] : postScopeIds('state_id');
+        postPayload.loksabha_id = isGlobalDashPost ? [] : postScopeIds('loksabha_id');
+        postPayload.assembly_id = isGlobalDashPost ? [] : postScopeIds('assembly_id');
+        postPayload.target_groups = targetGroupsArr;
+        if (targetGroupsArr.length > 0) {
+          postPayload.party_id = [];
+          postPayload.state_id = [];
+          postPayload.loksabha_id = [];
+          postPayload.assembly_id = [];
+        }
       }
 
       devConsole.log('[handleUpload] POST /api/admin/posts', {
