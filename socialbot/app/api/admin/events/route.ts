@@ -16,6 +16,8 @@ import {
   assertEventRowEditable,
   assertEventRowReadable,
   assertEventTargetingAllowed,
+  assertNonAdminCategoryEventRowImmutable,
+  enforceDashboardCategoryAdminOnly,
   isEventsFullAdmin,
   stripNonAdminPublishFields,
   validateCampaignManagerEventPayload,
@@ -410,13 +412,18 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category') && !isEditor(auth)) {
+  try {
+    enforceDashboardCategoryAdminOnly(auth, payload);
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message }, e.status);
+    return json({ error: 'Forbidden' }, 403);
+  }
+
+  if (fullAdmin && Object.prototype.hasOwnProperty.call(payload, 'dashboard_category')) {
     const n = normalizeIncomingEventDashboardCategory(payload.dashboard_category);
     if (n === '__invalid__') return json({ error: 'Invalid dashboard_category' }, 400);
     if (n == null) (payload as any).dashboard_category = null;
     else (payload as any).dashboard_category = n;
-  }
-  if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category') && !isEditor(auth)) {
     applyDashboardCategoryGlobalEventFields(payload);
   }
 
@@ -538,12 +545,13 @@ export async function PATCH(request: NextRequest) {
   const id = body.id != null ? String(body.id).trim() : '';
   const patch = body.patch && typeof body.patch === 'object' ? body.patch : null;
   if (!id || !patch) return json({ error: 'Missing id or patch' }, 400);
+  const fullAdmin = isEventsFullAdmin(auth);
 
-  if (Object.prototype.hasOwnProperty.call(patch, 'dashboard_category')) {
-    const n = normalizeIncomingEventDashboardCategory(patch.dashboard_category);
-    if (n === '__invalid__') return json({ error: 'Invalid dashboard_category' }, 400);
-    if (n == null) (patch as any).dashboard_category = null;
-    else (patch as any).dashboard_category = n;
+  try {
+    enforceDashboardCategoryAdminOnly(auth, patch);
+  } catch (e) {
+    if (e instanceof RbacError) return json({ error: e.message }, e.status);
+    return json({ error: 'Forbidden' }, 403);
   }
 
   const admin = createServiceRoleClient();
@@ -563,9 +571,20 @@ export async function PATCH(request: NextRequest) {
   try {
     assertEventRowReadable(auth, evForGuard as unknown as Record<string, unknown>);
     assertEventRowEditable(auth, evForGuard as unknown as Record<string, unknown>);
+    assertNonAdminCategoryEventRowImmutable(auth, evForGuard as unknown as Record<string, unknown>);
   } catch (e) {
     if (e instanceof RbacError) return json({ error: e.message }, e.status);
     return json({ error: 'Forbidden' }, 403);
+  }
+
+  if (fullAdmin && Object.prototype.hasOwnProperty.call(patch, 'dashboard_category')) {
+    const n = normalizeIncomingEventDashboardCategory(patch.dashboard_category);
+    if (n === '__invalid__') return json({ error: 'Invalid dashboard_category' }, 400);
+    if (n == null) (patch as any).dashboard_category = null;
+    else (patch as any).dashboard_category = n;
+    if (isActiveEventDashboardCategory((patch as any).dashboard_category)) {
+      applyDashboardCategoryGlobalEventFields(patch);
+    }
   }
 
   try {
@@ -599,14 +618,6 @@ export async function PATCH(request: NextRequest) {
   }
 
   stripNonAdminPublishFields(auth, patch);
-
-  if (
-    !isEditor(auth) &&
-    Object.prototype.hasOwnProperty.call(patch, 'dashboard_category') &&
-    isActiveEventDashboardCategory((patch as any).dashboard_category)
-  ) {
-    applyDashboardCategoryGlobalEventFields(patch);
-  }
 
   const mergedForRbac: Record<string, unknown> = {
     ...patch,

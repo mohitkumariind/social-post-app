@@ -53,6 +53,8 @@ export type EventFormUiCapabilities = {
   requireStateSelection: boolean;
   /** Editor: "Select all" for lok sabha / assembly within assigned profile scope only. */
   showAllAssignedGeoOption: boolean;
+  /** Admin-only: Good Morning / Motivation etc. on create & edit event forms. */
+  showDashboardCategoryField: boolean;
 };
 
 const ROLE_MODULES: Record<AdminPanelRole, readonly DashboardModuleId[]> = {
@@ -174,6 +176,7 @@ function withFormFlags(
     | 'editorForm'
     | 'partyScopeRestricted'
     | 'lockCreateStateToScope'
+    | 'showDashboardCategoryField'
   >
 ): EventFormUiCapabilities {
   return {
@@ -184,6 +187,7 @@ function withFormFlags(
     editorForm: mode === 'editor',
     partyScopeRestricted: mode === 'editor',
     lockCreateStateToScope: mode === 'moderator',
+    showDashboardCategoryField: mode === 'admin',
     ...caps,
   };
 }

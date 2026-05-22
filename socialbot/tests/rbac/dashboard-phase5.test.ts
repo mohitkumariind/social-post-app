@@ -24,6 +24,7 @@ describe('dashboard phase 5', () => {
     expect(caps.showGeoTargeting).toBe(true);
     expect(caps.showGroupTargeting).toBe(true);
     expect(caps.canUseGlobalTargeting).toBe(false);
+    expect(caps.showDashboardCategoryField).toBe(false);
   });
 
   it('editor form hides global targeting', () => {

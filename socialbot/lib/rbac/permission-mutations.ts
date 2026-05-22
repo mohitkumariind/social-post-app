@@ -480,11 +480,13 @@ export function canPerformMutation(
   }
 
   if (
+    resourceType === 'events' &&
     (action === 'events.create' || action === 'events.update') &&
     isActiveEventDashboardCategory(effective.dashboard_category) &&
-    user.role === 'campaign_manager'
+    user.role !== 'admin' &&
+    user.role !== 'super_admin'
   ) {
-    return allow();
+    return deny('Forbidden: dashboard category events are admin-only');
   }
 
   const scopeNorm = normalizeResourceScope(effective);

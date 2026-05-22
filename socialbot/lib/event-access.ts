@@ -15,12 +15,41 @@ import {
   normalizeResourceScope,
 } from '@/lib/rbac';
 import { RbacError } from '@/lib/rbac/require';
-import { isActiveEventDashboardCategory } from '@/lib/dashboard-event-category';
+import {
+  isActiveEventDashboardCategory,
+  isDashboardCategoryAdminRole,
+  payloadSetsActiveDashboardCategory,
+} from '@/lib/dashboard-event-category';
 import { validateEditorPartyScope } from '@/lib/admin/editor-party-scope';
 import { finalizeEditorEventTargetingPayload } from '@/lib/admin/editor-event-targeting';
 
 export function isEventsFullAdmin(auth: Pick<VerifiedAdminAuth, 'role'>): boolean {
   return isAdminRole(auth.role) || isSuperAdmin(auth.role);
+}
+
+/** Reject non-admin attempts to set dashboard_category; force null otherwise. */
+export function enforceDashboardCategoryAdminOnly(
+  auth: Pick<VerifiedAdminAuth, 'role'>,
+  payload: Record<string, unknown>
+): void {
+  if (isDashboardCategoryAdminRole(auth.role)) return;
+  if (payloadSetsActiveDashboardCategory(payload)) {
+    throw new RbacError('Forbidden: dashboard category is admin-only', 403);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'dashboard_category')) {
+    (payload as { dashboard_category: null }).dashboard_category = null;
+  }
+}
+
+/** Non-admins cannot mutate rows that are already dashboard category feed events. */
+export function assertNonAdminCategoryEventRowImmutable(
+  auth: Pick<VerifiedAdminAuth, 'role'>,
+  row: Record<string, unknown>
+): void {
+  if (isDashboardCategoryAdminRole(auth.role)) return;
+  if (isActiveEventDashboardCategory(row.dashboard_category)) {
+    throw new RbacError('Forbidden: dashboard category events are admin-only', 403);
+  }
 }
 
 /** @deprecated Use buildScopedQuery from scoped-query-builder for event listings. */
@@ -76,7 +105,9 @@ export function validateCampaignManagerEventPayload(
     }
   }
 
-  if (isActiveEventDashboardCategory(payload.dashboard_category)) return null;
+  if (isActiveEventDashboardCategory(payload.dashboard_category)) {
+    return 'Forbidden: campaign_manager cannot set dashboard category';
+  }
 
   const actor = toRbacActor({
     ...auth,
@@ -233,9 +264,10 @@ export function stripNonAdminPublishFields(
   delete (patch as { published_at?: unknown }).published_at;
   delete (patch as { published_by?: unknown }).published_by;
   if (Object.prototype.hasOwnProperty.call(patch, 'dashboard_category')) {
-    const dc = patch.dashboard_category;
-    if (dc != null && isActiveEventDashboardCategory(dc)) {
+    if (payloadSetsActiveDashboardCategory(patch)) {
       delete (patch as { dashboard_category?: unknown }).dashboard_category;
+    } else {
+      (patch as { dashboard_category: null }).dashboard_category = null;
     }
   }
 }

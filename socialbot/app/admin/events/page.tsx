@@ -166,7 +166,6 @@ export default function App() {
   const [newLoksabha, setNewLoksabha] = useState<string[]>([]);
   const [newAssembly, setNewAssembly] = useState<string[]>([]);
   const [newTargetGroups, setNewTargetGroups] = useState<string[]>([]);
-  const isCreateCategoryMode = newEventDashboardCategory !== 'none';
   const [groupOptions, setGroupOptions] = useState<{ tag: string; name?: string; count: number }[]>([]);
   const [filterParty, setFilterParty] = useState<string>('ALL');
   const [filterState, setFilterState] = useState<string>('ALL');
@@ -192,6 +191,8 @@ export default function App() {
     assigned_group_ids: [],
     assigned_party_ids: [],
   });
+  const showDashboardCategoryField = eventCaps.showDashboardCategoryField;
+  const isCreateCategoryMode = showDashboardCategoryField && newEventDashboardCategory !== 'none';
 
   const { visibleStates, hasSingleAssignedState, singleAssignedStateId } = useMemo(
     () =>
@@ -806,7 +807,8 @@ export default function App() {
       }
       payload.scheduled_at = iso;
     }
-    const dashDb = eventCaps.editorForm ? null : dashboardCategoryToDb(newEventDashboardCategory);
+    const dashDb =
+      showDashboardCategoryField && !eventCaps.editorForm ? dashboardCategoryToDb(newEventDashboardCategory) : null;
     if (dashDb != null) (payload as any).dashboard_category = dashDb;
 
     const editorPartyTargeting = eventCaps.editorForm ? buildEditorPartyTargetingFromForm(newParty) : null;
@@ -1425,8 +1427,10 @@ export default function App() {
       start: `${startDate}T00:00:00Z`,
       end: `${endDate}T23:59:59Z`,
       captions: editingEvent.captions,
-      dashboard_category: dashboardCategoryToDb(editEventDashboardCategory),
     };
+    if (showDashboardCategoryField) {
+      updatePayload.dashboard_category = dashboardCategoryToDb(editEventDashboardCategory);
+    }
     if (scheduledAt) {
       const iso = new Date(scheduledAt).toISOString();
       if (iso <= new Date().toISOString()) {
@@ -1435,7 +1439,7 @@ export default function App() {
       }
       updatePayload.scheduled_at = iso;
     }
-    const isEditCat = editEventDashboardCategory !== 'none';
+    const isEditCat = showDashboardCategoryField && editEventDashboardCategory !== 'none';
     const editorPartyTargetingEdit = eventCaps.editorForm ? buildEditorPartyTargetingFromForm(newParty) : null;
     const partyArr = isEditCat
       ? []
@@ -1591,7 +1595,7 @@ export default function App() {
       });
     }
 
-    {
+    if (showDashboardCategoryField) {
       const nextDash = dashboardCategoryToDb(editEventDashboardCategory);
       await fetch('/api/admin/posts', {
         method: 'PUT',
@@ -1621,11 +1625,15 @@ export default function App() {
       loksabha: targetGroupsArr.length > 0 ? undefined : loksabhaArr.length ? loksabhaArr : undefined,
       assembly: targetGroupsArr.length > 0 ? undefined : assemblyArr.length ? assemblyArr : undefined,
       target_groups: targetGroupsArr.length ? targetGroupsArr : undefined,
-      dashboard_category: dashboardCategoryToDb(editEventDashboardCategory),
+      dashboard_category: showDashboardCategoryField
+        ? dashboardCategoryToDb(editEventDashboardCategory)
+        : editingEvent.dashboard_category ?? null,
     };
     setEvents((prev) => prev.map((ev) => (ev.id === editingEvent.id ? updated : ev)));
     if (selectedEvent?.id === editingEvent.id) {
-      const nextDash = dashboardCategoryToDb(editEventDashboardCategory);
+      const nextDash = showDashboardCategoryField
+        ? dashboardCategoryToDb(editEventDashboardCategory)
+        : selectedEvent.dashboard_category ?? null;
       setSelectedEvent({
         ...updated,
         posts: (selectedEvent.posts ?? []).map((p) => ({ ...p, dashboard_category: nextDash })),
@@ -1722,7 +1730,7 @@ export default function App() {
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</label>
                     <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30" />
                   </div>
-                  {!eventCaps.editorForm ? (
+                  {showDashboardCategoryField ? (
                   <div className="flex flex-col">
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Dashboard Category</label>
                     <select
@@ -1746,7 +1754,9 @@ export default function App() {
                     {!eventCaps.campaignManagerForm ? (
                       <div
                         className={`col-span-2 lg:col-span-3 grid grid-cols-2 lg:grid-cols-2 gap-4 ${
-                          editEventDashboardCategory !== 'none' ? 'pointer-events-none opacity-50' : ''
+                          showDashboardCategoryField && editEventDashboardCategory !== 'none'
+                            ? 'pointer-events-none opacity-50'
+                            : ''
                         }`}
                       >
                         <div className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -1833,7 +1843,13 @@ export default function App() {
                       </div>
                     ) : null}
                     {!eventCaps.editorForm ? (
-                    <div className={`rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3 ${editEventDashboardCategory !== 'none' ? 'pointer-events-none opacity-50' : ''}`}>
+                    <div
+                      className={`rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3 ${
+                        showDashboardCategoryField && editEventDashboardCategory !== 'none'
+                          ? 'pointer-events-none opacity-50'
+                          : ''
+                      }`}
+                    >
                       <MultiSelectDropdown
                         label="Target Groups"
                         options={groupOptions.map((g) => ({ id: g.tag, tag: g.tag, name: g.name || g.tag, count: g.count }))}
@@ -1949,7 +1965,7 @@ export default function App() {
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Event Name</span>
               <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Independence Day" className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 outline-none font-bold text-slate-800 text-sm" />
             </div>
-            {!eventCaps.editorForm ? (
+            {showDashboardCategoryField ? (
               <div className="rounded-2xl border border-slate-200 bg-white p-3 col-span-2 lg:col-span-3">
                 <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Dashboard Category</span>
                 <select
