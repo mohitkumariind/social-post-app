@@ -21,7 +21,7 @@ import {
   X
 } from 'lucide-react';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { adminStorageRemove, adminStorageUploadWithProgress } from '@/lib/admin-storage-client';
+import { adminStorageUploadWithProgress } from '@/lib/admin-storage-client';
 import UploadQueuePanel from '@/components/admin/UploadQueuePanel';
 import { MultiSelectDropdown } from '@/components/admin/MultiSelectDropdown';
 import { useAdminUploadQueue } from '@/hooks/useAdminUploadQueue';
@@ -1233,50 +1233,13 @@ export default function App() {
     setCaptionToDelete(null);
   };
 
-  const getStoragePathFromUrl = (url: string): string | null => {
-    const match = url.match(/\/post-images\/(.+)$/);
-    return match ? decodeURIComponent(match[1]) : null;
-  };
-
   const deleteEvent = async (ev: CampaignEvent) => {
     try {
-      // Mark event deleted on the server first. If this fails, do not remove posts or local list
-      // (otherwise the event comes back on refresh).
+      // Server cascades: related posts → storage assets → event soft-delete.
       const delEv = await deleteEventRowByIdOrName(ev);
       if (!delEv.ok) {
         alert(delEv.error);
         return;
-      }
-
-      const postsQuery = supabase.from('posts').select('id, image_url').eq('category', ev.name);
-      const { data: postsData } = await postsQuery;
-      const postsToClean = postsData || [];
-
-      const filePaths: string[] = [];
-      for (const p of postsToClean) {
-        const path = getStoragePathFromUrl(p.image_url);
-        if (path) filePaths.push(path);
-      }
-
-      if (filePaths.length > 0) {
-        try {
-          await adminStorageRemove('post-images', filePaths);
-        } catch (storageEx) {
-          devConsole.error('Storage delete exception:', storageEx);
-        }
-      }
-
-      try {
-        const delRes = await fetch(
-          `/api/admin/posts?category=${encodeURIComponent(ev.name)}`,
-          { method: 'DELETE', credentials: 'same-origin' }
-        );
-        if (!delRes.ok) {
-          const d = (await delRes.json().catch(() => ({}))) as { error?: string };
-          devConsole.error('Posts delete error:', d.error ?? delRes.status);
-        }
-      } catch (postsEx) {
-        devConsole.error('Posts delete exception:', postsEx);
       }
 
       setEvents((prev) => prev.filter((e) => e.id !== ev.id));
@@ -1295,7 +1258,6 @@ export default function App() {
     if (!selectedEvent || !postToDelete) return;
 
     const postId = postToDelete.id;
-    const postUrl = postToDelete.url;
     const ev = selectedEvent;
 
     if (!postId || typeof postId !== 'string') {
@@ -1310,19 +1272,12 @@ export default function App() {
       });
       if (!delRes.ok) {
         const d = (await delRes.json().catch(() => ({}))) as { error?: string };
-        devConsole.error('posts table delete error:', d.error ?? delRes.status);
+        devConsole.error('posts delete error:', d.error ?? delRes.status);
+        return;
       }
     } catch (dbError) {
-      devConsole.error('posts table delete error:', dbError);
-    }
-
-    const filePath = getStoragePathFromUrl(postUrl);
-    if (filePath) {
-      try {
-        await adminStorageRemove('post-images', [filePath]);
-      } catch (e) {
-        devConsole.error('removePost storage:', e);
-      }
+      devConsole.error('posts delete error:', dbError);
+      return;
     }
 
     const filtered = ev.posts.filter((p) => p.id !== postId);

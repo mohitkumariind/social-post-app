@@ -50,6 +50,7 @@ import {
   EVENT_DASHBOARD_CATEGORY_VALUES,
   isActiveEventDashboardCategory,
 } from '@/lib/dashboard-event-category';
+import { cascadeDeletePostsForEvent } from '@/lib/admin/cascade-event-delete';
 
 function pickEventDashboardCategory(patch: Record<string, unknown>, prior: unknown): unknown {
   return Object.prototype.hasOwnProperty.call(patch, 'dashboard_category')
@@ -813,6 +814,25 @@ export async function DELETE(request: NextRequest) {
   if (!before) return json({ error: 'Not found' }, 404);
   if ((before as any).deleted_at != null) return json({ ok: true, alreadyDeleted: true });
 
+  const eventName = String((before as any)?.name ?? (evForGuard as any)?.name ?? '').trim();
+  const cascade = await cascadeDeletePostsForEvent(admin, id, eventName, {
+    logStorageFailure: ({ eventId, batch, message }) => {
+      console.warn('[events.delete] post-images storage remove failed', {
+        eventId,
+        pathCount: batch.length,
+        message,
+      });
+    },
+  });
+  if (!cascade.ok) return json({ error: cascade.error }, 500);
+  if (cascade.storageFailed.length > 0) {
+    console.warn('[events.delete] partial storage cleanup', {
+      eventId: id,
+      failedCount: cascade.storageFailed.length,
+      postsDeleted: cascade.postsDeleted,
+    });
+  }
+
   /** Soft-delete row; retry with smaller patch when columns or status CHECK differ across deployments. */
   let deletePatch: Record<string, unknown> = {
     deleted_at: new Date().toISOString(),
@@ -864,6 +884,11 @@ export async function DELETE(request: NextRequest) {
     scope_state_ids: toNumArray((data as any)?.state_id ?? (before as any)?.state_id),
   });
 
-  return json({ ok: true });
+  return json({
+    ok: true,
+    postsDeleted: cascade.postsDeleted,
+    storageRemoved: cascade.storageRemoved,
+    storageFailedCount: cascade.storageFailed.length,
+  });
 }
 

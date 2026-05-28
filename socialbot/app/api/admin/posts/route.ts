@@ -42,6 +42,10 @@ import {
   sanitizePayloadForDebug,
   type PostUploadTraceStep,
 } from '@/lib/admin/post-upload-trace';
+import {
+  collectStoragePathsFromPosts,
+  removePostImagesFromStorage,
+} from '@/lib/admin/post-storage-cleanup';
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -320,6 +324,28 @@ async function guardPostsByCategory(
   return null;
 }
 
+async function deletePostsWithStorageCleanup(
+  admin: NonNullable<ReturnType<typeof createServiceRoleClient>>,
+  rows: { id?: string; image_url?: string | null }[]
+): Promise<{ error: string | null; deleted: number; storageRemoved: number }> {
+  const ids = rows.map((r) => String(r.id ?? '').trim()).filter(Boolean);
+  if (ids.length === 0) return { error: null, deleted: 0, storageRemoved: 0 };
+
+  const paths = collectStoragePathsFromPosts(rows);
+  const storage = await removePostImagesFromStorage(admin, paths, {
+    onBatchError: ({ batch, message }) => {
+      console.warn('[posts.delete] post-images storage remove failed', {
+        pathCount: batch.length,
+        message,
+      });
+    },
+  });
+
+  const { error: delErr } = await admin.from('posts').delete().in('id', ids);
+  if (delErr) return { error: delErr.message, deleted: 0, storageRemoved: storage.removed };
+  return { error: null, deleted: ids.length, storageRemoved: storage.removed };
+}
+
 /** Bulk patch posts for an event category (events admin UI — replaces client Supabase writes). */
 export async function PUT(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -386,7 +412,11 @@ export async function DELETE(request: NextRequest) {
   if (!admin) return json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }, 503);
 
   if (id) {
-    const { data: row, error: readErr } = await admin.from('posts').select('id,category,created_by,event_id,state_id,group_id,target_groups').eq('id', id).maybeSingle();
+    const { data: row, error: readErr } = await admin
+      .from('posts')
+      .select('id,category,created_by,event_id,state_id,group_id,target_groups,image_url')
+      .eq('id', id)
+      .maybeSingle();
     if (readErr) return json({ error: readErr.message }, 500);
     if (!row) return json({ error: 'Not found' }, 404);
     const cat = String((row as any).category ?? '').trim();
@@ -403,21 +433,26 @@ export async function DELETE(request: NextRequest) {
       );
       if (!decision.ok) return json({ error: decision.reason }, 403);
     }
-    const { error: delErr } = await admin.from('posts').delete().eq('id', id);
-    if (delErr) return json({ error: delErr.message }, 500);
-    return json({ ok: true, deleted: 1 });
+    const result = await deletePostsWithStorageCleanup(admin, [row as { id?: string; image_url?: string | null }]);
+    if (result.error) return json({ error: result.error }, 500);
+    return json({ ok: true, deleted: result.deleted, storageRemoved: result.storageRemoved });
   }
 
   const denied = await guardPostsByCategory(admin, auth, category, 'posts.delete');
   if (denied) return denied;
 
-  const { error, ids } = await scopedPostIdsByCategory(admin, auth, category);
-  if (error) return json({ error }, 500);
-  if (ids.length === 0) return json({ ok: true, deleted: 0 });
+  const adminRole = isEventsFullAdmin(auth);
+  const scopedUser = mutationUser(auth);
+  let q = admin.from('posts').select('id, image_url').eq('category', category) as any;
+  if (!adminRole) q = buildScopedQuery(scopedUser as any, q, 'posts');
+  const { data: rows, error: listErr } = await q;
+  if (listErr) return json({ error: listErr.message }, 500);
+  const postRows = (rows ?? []) as { id?: string; image_url?: string | null }[];
+  if (postRows.length === 0) return json({ ok: true, deleted: 0, storageRemoved: 0 });
 
-  const { error: delErr } = await admin.from('posts').delete().in('id', ids);
-  if (delErr) return json({ error: delErr.message }, 500);
-  return json({ ok: true, deleted: ids.length });
+  const result = await deletePostsWithStorageCleanup(admin, postRows);
+  if (result.error) return json({ error: result.error }, 500);
+  return json({ ok: true, deleted: result.deleted, storageRemoved: result.storageRemoved });
 }
 
 export const POST = withAudit(
