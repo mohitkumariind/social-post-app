@@ -348,42 +348,53 @@ export async function PATCH(request: NextRequest) {
     );
   }
 
-  let assigned_state_ids = toNumArr(body.assigned_state_ids);
-  if (role !== 'moderator' && role !== 'editor') assigned_state_ids = [];
-  if (role === 'moderator' && assigned_state_ids.length === 0) {
-    return NextResponse.json({ error: 'assigned_state_ids is required for moderators' }, { status: 400 });
-  }
+  let assigned_state_ids: number[] = [];
+  let assigned_group_ids: string[] = [];
+  let assigned_party_ids: string[] = [];
+  let assigned_loksabha_ids: number[] = [];
+  let assigned_assembly_ids: number[] = [];
 
-  let assigned_group_ids = toStrArr(body.assigned_group_ids);
-  if (role !== 'campaign_manager') assigned_group_ids = [];
-
-  let assigned_loksabha_ids = toNumArr(body.assigned_loksabha_ids);
-  let assigned_assembly_ids = toNumArr(body.assigned_assembly_ids);
-  if (role !== 'campaign_manager') {
-    assigned_loksabha_ids = [];
-    assigned_assembly_ids = [];
-  }
-
-  if (role === 'campaign_manager') {
-    const cmScope = normalizeResourceScope({
-      target_groups: body.assigned_group_ids,
-      loksabha_id: body.assigned_loksabha_ids,
-      assembly_id: body.assigned_assembly_ids,
-    });
-    if (!hasConstituencyAnchor(cmScope)) {
-      return NextResponse.json(
-        {
-          error:
-            'Campaign manager requires at least one assigned group, Lok Sabha, or Assembly scope',
-        },
-        { status: 400 }
-      );
+  /** Normal app users must not retain RBAC scope assignments. */
+  if (role === 'user' || role === 'worker') {
+    // keep all scope arrays empty
+  } else {
+    assigned_state_ids = toNumArr(body.assigned_state_ids);
+    if (role !== 'moderator' && role !== 'editor') assigned_state_ids = [];
+    if (role === 'moderator' && assigned_state_ids.length === 0) {
+      return NextResponse.json({ error: 'assigned_state_ids is required for moderators' }, { status: 400 });
     }
-  }
 
-  let assigned_party_ids = toPartySlugArr(body.assigned_party_ids);
-  if (role === 'editor') assigned_party_ids = [];
-  if (role !== 'moderator' && role !== 'editor' && role !== 'campaign_manager') assigned_party_ids = [];
+    assigned_group_ids = toStrArr(body.assigned_group_ids);
+    if (role !== 'campaign_manager') assigned_group_ids = [];
+
+    assigned_loksabha_ids = toNumArr(body.assigned_loksabha_ids);
+    assigned_assembly_ids = toNumArr(body.assigned_assembly_ids);
+    if (role !== 'campaign_manager') {
+      assigned_loksabha_ids = [];
+      assigned_assembly_ids = [];
+    }
+
+    if (role === 'campaign_manager') {
+      const cmScope = normalizeResourceScope({
+        target_groups: body.assigned_group_ids,
+        loksabha_id: body.assigned_loksabha_ids,
+        assembly_id: body.assigned_assembly_ids,
+      });
+      if (!hasConstituencyAnchor(cmScope)) {
+        return NextResponse.json(
+          {
+            error:
+              'Campaign manager requires at least one assigned group, Lok Sabha, or Assembly scope',
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    assigned_party_ids = toPartySlugArr(body.assigned_party_ids);
+    if (role === 'editor') assigned_party_ids = [];
+    if (role !== 'moderator' && role !== 'editor' && role !== 'campaign_manager') assigned_party_ids = [];
+  }
 
   const admin = createServiceRoleClient();
   if (!admin) {

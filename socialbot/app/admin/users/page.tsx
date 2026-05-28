@@ -1005,7 +1005,19 @@ export default function UserManagement() {
 
                   const prevRole = String(roleUser.role ?? 'user').trim().toLowerCase();
                   const nextRole = roleValue;
-                  const needsConfirm = nextRole === 'admin' || nextRole === 'moderator' || prevRole === 'admin' || prevRole === 'moderator';
+                  const elevatedRoles = new Set([
+                    'admin',
+                    'super_admin',
+                    'moderator',
+                    'campaign_manager',
+                    'editor',
+                  ]);
+                  const needsConfirm =
+                    nextRole === 'admin' ||
+                    nextRole === 'moderator' ||
+                    prevRole === 'admin' ||
+                    prevRole === 'moderator' ||
+                    (nextRole === 'user' && elevatedRoles.has(prevRole));
                   if (needsConfirm) {
                     const ok = window.confirm(`Confirm role change: ${prevRole || 'user'} → ${nextRole}?`);
                     if (!ok) return;

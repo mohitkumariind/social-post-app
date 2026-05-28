@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ADMIN_PANEL_ROLES,
+  ADMIN_ROLE_UI_OPTIONS,
   isAdminPanelRole,
   normalizeProfileRole,
   PROFILE_ROLES,
@@ -31,5 +32,15 @@ describe('profile-roles', () => {
   it('ROLE_OPTIONS includes editor for UI', () => {
     expect(ROLE_OPTIONS.some((o) => o.value === 'editor' && o.label === 'Editor')).toBe(true);
     expect(ROLE_OPTIONS.some((o) => o.value === 'worker')).toBe(true);
+  });
+
+  it('ADMIN_ROLE_UI_OPTIONS includes user for safe downgrade', () => {
+    expect(ADMIN_ROLE_UI_OPTIONS.map((o) => o.value)).toEqual([
+      'user',
+      'editor',
+      'campaign_manager',
+      'moderator',
+      'admin',
+    ]);
   });
 });

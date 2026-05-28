@@ -30,12 +30,13 @@ export type AdminPanelRole = (typeof ADMIN_PANEL_ROLES)[number];
 /** Mobile / non-admin roles — must not pass validateAdminSession. */
 export const NON_ADMIN_PROFILE_ROLES = ['worker', 'user'] as const;
 
-/** User Management dropdown only (production admin-assignable roles). */
+/** User Management dropdown (admin-assignable roles + safe downgrade to user). */
 export const ADMIN_ROLE_UI_OPTIONS: { value: ProfileRole; label: string }[] = [
-  { value: 'moderator', label: 'Moderator' },
-  { value: 'admin', label: 'Admin' },
+  { value: 'user', label: 'User' },
   { value: 'editor', label: 'Editor' },
   { value: 'campaign_manager', label: 'Campaign Manager' },
+  { value: 'moderator', label: 'Moderator' },
+  { value: 'admin', label: 'Admin' },
 ];
 
 /** Full DB role list (assign via API / migrations). */
