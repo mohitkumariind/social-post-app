@@ -185,7 +185,7 @@ function withFormFlags(
     moderatorForm: mode === 'moderator',
     campaignManagerForm: mode === 'campaign_manager',
     editorForm: mode === 'editor',
-    partyScopeRestricted: mode === 'editor',
+    partyScopeRestricted: mode === 'editor' || mode === 'moderator' || mode === 'campaign_manager',
     lockCreateStateToScope: mode === 'moderator',
     showDashboardCategoryField: mode === 'admin',
     ...caps,

@@ -9,7 +9,10 @@ export function normalizeAssignedPartyIds(raw: unknown): string[] {
     .filter((s) => s.length > 0 && s !== 'all');
 }
 
-/** Empty assigned list = all parties (future-safe optional restriction). */
+/**
+ * Scope party options for non-admin event forms (editor, moderator, campaign_manager).
+ * Empty assigned_party_ids → all parties; populated → only assigned slugs.
+ */
 export function partiesVisibleToEditor(allParties: PartyItem[], assignedPartyIds: string[]): PartyItem[] {
   const allowed = normalizeAssignedPartyIds(assignedPartyIds);
   if (allowed.length === 0) return allParties;

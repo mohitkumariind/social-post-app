@@ -240,18 +240,18 @@ export default function App() {
     return availableStates.filter((s) => allowed.has(String(s.id)));
   }, [eventCaps.editorForm, viewer?.assigned_state_ids, availableStates]);
 
-  const editorAssignableParties = useMemo(() => {
-    if (!eventCaps.editorForm) return PARTIES_DATA;
+  /** Admin: all parties; scoped roles: filter by assigned_party_ids (empty = all). */
+  const formAssignableParties = useMemo(() => {
+    if (canUseGlobalEventFilter) return PARTIES_DATA;
     return partiesVisibleToEditor(PARTIES_DATA, viewer?.assigned_party_ids ?? []);
-  }, [eventCaps.editorForm, viewer?.assigned_party_ids]);
+  }, [canUseGlobalEventFilter, viewer?.assigned_party_ids]);
 
   const isEditMode = editingEvent != null;
 
   const editFormPartyOptions = useMemo(() => {
-    if (!isEditMode) return eventCaps.editorForm ? editorAssignableParties : PARTIES_DATA;
-    const visible = eventCaps.editorForm ? editorAssignableParties : PARTIES_DATA;
-    return mergePartiesForEdit(visible, PARTIES_DATA, newParty);
-  }, [isEditMode, eventCaps.editorForm, editorAssignableParties, newParty]);
+    if (!isEditMode) return formAssignableParties;
+    return mergePartiesForEdit(formAssignableParties, PARTIES_DATA, newParty);
+  }, [isEditMode, formAssignableParties, newParty]);
 
   const editFormStateOptions = useMemo(() => {
     if (!isEditMode) return viewerReady ? visibleStates : [];
@@ -276,7 +276,7 @@ export default function App() {
     });
     if (eventCaps.editorForm) {
       logEditorPartyDebug('edit_form_render_party', {
-        editor_allowed_parties: editorAssignableParties.map((p) => p.id),
+        editor_allowed_parties: formAssignableParties.map((p) => p.id),
         selected_party: newParty,
         editFormPartyOptionIds: editFormPartyOptions.map((p) => p.id),
       });
@@ -291,7 +291,7 @@ export default function App() {
     editStateReadonlyLabel,
     editFormStateOptions,
     eventCaps.editorForm,
-    editorAssignableParties,
+    formAssignableParties,
     editFormPartyOptions,
   ]);
 
@@ -876,7 +876,7 @@ export default function App() {
         saved_party_payload: { party: payload.party, party_id: payload.party_id },
       });
       logEditorPartyDebug('create_saved_party_payload', {
-        editor_allowed_parties: editorAssignableParties.map((p) => p.id),
+        editor_allowed_parties: formAssignableParties.map((p) => p.id),
         selected_party: newParty,
         saved_party_payload: { party: payload.party, party_id: payload.party_id },
       });
@@ -1350,7 +1350,7 @@ export default function App() {
       db_party: source.party,
     });
     logEditorPartyDebug('edit_hydrated_party', {
-      editor_allowed_parties: editorAssignableParties.map((p) => p.id),
+      editor_allowed_parties: formAssignableParties.map((p) => p.id),
       hydrated_party: partySel,
       db_party_id: source.party_id,
       db_party: source.party,
@@ -1439,7 +1439,7 @@ export default function App() {
         },
       });
       logEditorPartyDebug('edit_saved_party_payload', {
-        editor_allowed_parties: editorAssignableParties.map((p) => p.id),
+        editor_allowed_parties: formAssignableParties.map((p) => p.id),
         selected_party: newParty,
         hydrated_party: partyArr,
         saved_party_payload: {
@@ -1983,7 +1983,7 @@ export default function App() {
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
                   <MultiSelectDropdown
                     label="Party"
-                    options={eventCaps.editorForm ? editorAssignableParties : PARTIES_DATA}
+                    options={formAssignableParties}
                     selected={newParty}
                     onSelect={setNewParty}
                     getValue={(p) => p.id}
