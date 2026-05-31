@@ -47,6 +47,7 @@ import {
   logEditorPartyDebug,
   mergePartiesForEdit,
   partiesVisibleToEditor,
+  partySelectionWithoutAllOption,
 } from '@/lib/admin/editor-party-scope';
 import {
   buildEditorPartyTargetingFromForm,
@@ -1325,7 +1326,14 @@ export default function App() {
     });
 
     const source = dbRow ?? (listRow as Record<string, unknown>);
-    const partySel = resolvePartySelectionsFromEvent(source, PARTIES_DATA, { forEditor: eventCaps.editorForm });
+    const rawPartySel = resolvePartySelectionsFromEvent(source, PARTIES_DATA, {
+      forEditor: eventCaps.partyScopeRestricted,
+    });
+    const partySel = partySelectionWithoutAllOption(
+      rawPartySel,
+      formAssignableParties,
+      eventCaps.showAllPartyOption
+    );
     const stateIds = resolveStateSelectionsFromEvent(source, availableStates);
     const lokSel = resolveLoksabhaSelectionsFromEvent(source, { forEditor: eventCaps.editorForm });
     const asmSel = resolveAssemblySelectionsFromEvent(source, { forEditor: eventCaps.editorForm });
@@ -1758,7 +1766,7 @@ export default function App() {
                             getValue={(p) => p.id}
                             getLabel={(p) => p.shortName}
                             allLabel="All Parties"
-                            showAllOption
+                            showAllOption={eventCaps.showAllPartyOption}
                             searchable
                             optionLeading={(p) =>
                               isPartyOtherId(String(p.id)) ? (
@@ -1989,7 +1997,7 @@ export default function App() {
                     getValue={(p) => p.id}
                     getLabel={(p) => p.shortName}
                     allLabel="All Parties"
-                    showAllOption
+                    showAllOption={eventCaps.showAllPartyOption}
                     searchable
                     optionLeading={(p) =>
                       isPartyOtherId(String(p.id)) ? (

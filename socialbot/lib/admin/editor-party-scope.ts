@@ -20,6 +20,18 @@ export function partiesVisibleToEditor(allParties: PartyItem[], assignedPartyIds
   return allParties.filter((p) => set.has(String(p.id).trim().toLowerCase()));
 }
 
+/** Strip ALL from UI selection when non-admin roles cannot use global party targeting. */
+export function partySelectionWithoutAllOption(
+  selected: string[],
+  visibleParties: PartyItem[],
+  allowAllPartiesOption: boolean
+): string[] {
+  if (allowAllPartiesOption) return selected;
+  const withoutAll = selected.filter((x) => String(x).trim().toUpperCase() !== 'ALL');
+  if (withoutAll.length > 0) return withoutAll;
+  return visibleParties.map((p) => p.id);
+}
+
 export function mergePartiesForEdit(
   visibleParties: PartyItem[],
   allParties: PartyItem[],
